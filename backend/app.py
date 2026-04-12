@@ -401,7 +401,8 @@ def login():
         
         # Initialize client
         kalshi_client = KalshiAPI(api_key_id, key_path, demo=demo)
-        
+        kalshi_client._on_429 = track_rate_limit_hit
+
         # Test connection by getting balance
         balance = kalshi_client.get_balance()
 
@@ -445,6 +446,7 @@ def auto_login():
             return jsonify({'error': f'Private key file not found: {key_file}'}), 400
 
         kalshi_client = KalshiAPI(api_key_id, key_path, demo=demo)
+        kalshi_client._on_429 = track_rate_limit_hit
         balance = kalshi_client.get_balance()
 
         # Start WebSocket connection for real-time data

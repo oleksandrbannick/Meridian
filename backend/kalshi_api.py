@@ -114,13 +114,13 @@ class KalshiAPI:
             print(f"API Request failed: {e}")
             if hasattr(e.response, 'text'):
                 print(f"Response: {e.response.text}")
-            # Track 429s
+            # Track 429s via callback (set by app.py to avoid circular import)
             if hasattr(e, 'response') and e.response is not None and e.response.status_code == 429:
-                try:
-                    from app import track_rate_limit_hit
-                    track_rate_limit_hit()
-                except Exception:
-                    pass
+                if hasattr(self, '_on_429') and self._on_429:
+                    try:
+                        self._on_429()
+                    except Exception:
+                        pass
             raise
     
     # Market Data Endpoints

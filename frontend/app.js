@@ -3854,26 +3854,6 @@ function setTradeMode(mode) {
         if (typeof drawLegendBot === 'function') drawLegendBot(document.getElementById('apex-form-ghost'), 'apex');
         updateMMPreview();
     }
-    // Recolor market prices to match bot type
-    _recolorMarketPrices(mode === 'arb' ? ['#00d4ff','#ff7043'] : ['#00ff88','#ff4444']);
-}
-
-function _recolorMarketPrices(colors) {
-    const el = document.getElementById('bot-market-prices');
-    if (!el) return;
-    const boxes = el.querySelectorAll(':scope > div');
-    if (boxes.length < 2) return;
-    boxes.forEach((box, i) => {
-        const c = colors[i] || colors[0];
-        box.style.borderColor = c + '33';
-        box.querySelectorAll('span').forEach(s => {
-            if (s.querySelector('strong')) return;
-            if (s.style.color && s.style.color !== 'rgb(136, 146, 166)' && s.style.color !== '#555' && !s.style.color.includes('85')) {
-                s.style.color = c;
-            }
-        });
-        box.querySelectorAll('strong').forEach(s => { s.style.color = c; });
-    });
 }
 
 /** Set the selected side for straight bet */

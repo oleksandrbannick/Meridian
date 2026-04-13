@@ -6570,7 +6570,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                         <span style="color:#00d4ff;text-align:right;">${rt.entry_price}c</span>
                         <span style="color:#ff7043;text-align:right;">${rt.exit_price}c</span>
                         <span style="color:${combCol};font-weight:700;text-align:right;">${rt.combined}c</span>
-                        <span style="color:#556;text-align:right;">x${rt.qty}</span>
+                        <span style="color:#00e5ff;text-align:right;">x${rt.qty}</span>
                         <span style="color:${pCol};font-weight:700;text-align:right;">${rt.pnl >= 0 ? '+' : ''}${rt.pnl}c</span>
                     </div>`;
                 }).join('') : ''}
@@ -6589,7 +6589,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                             <span style="color:${heldCol};text-align:right;">${ex.held_avg}c</span>
                             <span style="color:${exitCol};text-align:right;">${sellPrice}c</span>
                             <span style="text-align:right;">${combPrice > 0 ? `<span style="color:${combCol};font-weight:700;">${combPrice}c</span>` : ''}</span>
-                            <span style="color:#556;text-align:right;">x${ex.qty}</span>
+                            <span style="color:#00e5ff;text-align:right;">x${ex.qty}</span>
                             <span style="color:${pCol};font-weight:700;text-align:right;">${ex.pnl >= 0 ? '+' : ''}${ex.pnl}c</span>
                         </div>`;
                     }).join('') + '</div>' : ''}

@@ -15559,6 +15559,7 @@ def _run_monitor():
                             continue
                         # If we already posted a TP limit sell, check if it filled
                         _existing_tp_oid = bot.get('tp_order_id')
+                        _tp_partial_filled = 0
                         if _existing_tp_oid:
                             try:
                                 api_read_limiter.wait()
@@ -15567,18 +15568,62 @@ def _run_monitor():
                                 _tp_filled = _parse_fill_count(_tp_obj) or 0
                                 _tp_status = _tp_obj.get('status', '')
                                 if _tp_filled >= qty:
-                                    # TP order filled on its own — record completion
+                                    # TP order fully filled — record completion
                                     _tp_oid = _existing_tp_oid
                                     _tp_price = entry + tp
                                     sold = True
                                     print(f'✅ SCOUT TP ORDER FILLED: {bot_id} — resting sell filled {_tp_filled}x @{_tp_price}¢')
+                                elif _tp_filled > 0 and _tp_filled < qty:
+                                    # Partial fill — record the filled portion, keep watching remainder
+                                    _tp_partial_filled = _tp_filled
+                                    _tp_price = entry + tp
+                                    _partial_profit = (_tp_price - entry) * _tp_partial_filled
+                                    remaining = qty - _tp_partial_filled
+                                    bot['quantity'] = remaining
+                                    bot['fill_qty'] = remaining
+                                    bot.pop('tp_order_id', None)  # order may still be resting for remainder
+                                    print(f'📊 SCOUT TP PARTIAL: {bot_id} — {_tp_partial_filled}/{qty} filled @{_tp_price}¢, {remaining} remaining')
+                                    _record_trade({
+                                        'bot_id': bot_id, 'ticker': ticker, 'type': 'watch',
+                                        'side': watch_side, 'entry_price': entry,
+                                        'exit_bid': _tp_price, 'quantity': _tp_partial_filled,
+                                        'profit_cents': _partial_profit, 'result': 'take_profit_watch',
+                                        'timestamp': now,
+                                        'placed_at': bot.get('created_at', now),
+                                        'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                                        'stop_loss_cents': sl,
+                                        'take_profit_cents': tp,
+                                        'game_context': _get_game_context(ticker),
+                                        'note': f'Partial TP: {_tp_partial_filled}/{qty} filled',
+                                    }, bot)
+                                    session_pnl['gross_profit_cents'] += _partial_profit
+                                    bot_log('WATCH_TP_PARTIAL', bot_id, {'filled': _tp_partial_filled, 'remaining': remaining, 'profit': _partial_profit})
+                                    actions.append({'bot_id': bot_id, 'action': 'watch_tp_partial',
+                                                   'filled': _tp_partial_filled, 'remaining': remaining})
+                                    save_state()
+                                    # Re-post TP for the remaining qty
+                                    try:
+                                        _repost_kwargs = {'ticker': ticker, 'side': watch_side, 'action': 'sell', 'count': remaining}
+                                        if watch_side == 'yes':
+                                            _repost_kwargs['yes_price'] = _tp_price
+                                        else:
+                                            _repost_kwargs['no_price'] = _tp_price
+                                        api_rate_limiter.wait()
+                                        _repost_resp = kalshi_client.create_order(**_repost_kwargs)
+                                        _repost_oid = _repost_resp.get('order', {}).get('order_id', '') if isinstance(_repost_resp, dict) else ''
+                                        if _repost_oid:
+                                            bot['tp_order_id'] = _repost_oid
+                                            print(f'✅ SCOUT TP REPOST: {bot_id} sell {remaining}x @{_tp_price}¢ oid={_repost_oid}')
+                                    except Exception as _rp_err:
+                                        print(f'⚠ SCOUT TP REPOST failed for {bot_id}: {_rp_err}')
+                                    continue
                                 elif _tp_status in ('canceled', 'cancelled'):
                                     # TP order was cancelled — fall through to execute_maker_sell
                                     bot.pop('tp_order_id', None)
                                     _tp_oid, _tp_price = execute_maker_sell(ticker, watch_side, qty, reason=f'watch_TP_{bot_id}')
                                     sold = bool(_tp_oid)
                                 else:
-                                    # TP order still resting but bid is above trigger — let it fill naturally
+                                    # TP order still resting, not yet filled — let it fill naturally
                                     continue
                             except Exception as _tp_chk_err:
                                 print(f'⚠ TP order check failed for {bot_id}: {_tp_chk_err}')

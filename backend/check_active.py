@@ -8,7 +8,7 @@ for k, v in d.get('active_bots', {}).items():
         continue
     count += 1
     print('=' * 60)
-    print('BOT:', k)
+    print('BOT:', k)or 
     print('  status:', s, 'cat:', v.get('bot_category'), 'ticker:', v.get('ticker'))
     print('  qty:', v.get('quantity'), 'scale:', v.get('scale_qty'), 'widths:', v.get('widths'))
     print('  consol:', v.get('_consolidated'), 'hedge_oid:', str(v.get('hedge_order_id') or '')[:12], 'hprice:', v.get('hedge_price'), 'hqty:', v.get('hedge_qty'))

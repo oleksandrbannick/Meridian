@@ -7009,113 +7009,167 @@ function _renderWatchBotCard(bot, botId, container, gameScores) {
     const entry = bot.entry_price || 50;
     const sl = bot.stop_loss_cents || 0;
     const tp = bot.take_profit_cents || 0;
-    const liveBid = bot.live_bid || '?';
     const watchQty = bot.quantity || 1;
     const fillQty = bot.fill_qty || 0;
     const orderFilled = bot.order_filled || false;
     const nowSec = Date.now() / 1000;
     const ageMin = bot.created_at ? Math.floor((nowSec - bot.created_at) / 60) : 0;
+    const ageStr = ageMin >= 60 ? Math.floor(ageMin/60)+'h '+ageMin%60+'m' : ageMin+'m';
     const watchDisplayName = formatBotDisplayName(bot.ticker, bot.spread_line);
     const ticker = bot.ticker || '';
     const parts = ticker.split('-');
     const gameKey = parts.length >= 2 ? parts[1] : parts[0];
     const watchScoreBadge = buildScoreBadgeHtml(gameScores[gameKey] || {}, 'compact');
 
+    // Live prices — bid and ask for the position's side
+    const liveBid = side === 'yes' ? (bot.live_yes_bid || bot.live_bid || 0) : (bot.live_no_bid || bot.live_bid || 0);
+    const liveAsk = side === 'yes' ? (bot.live_yes_ask || 0) : (bot.live_no_ask || 0);
     const curBidNum = typeof liveBid === 'number' ? liveBid : 0;
+
     const isStopped = bot.status === 'stopped' || bot.status === 'completed';
     const exitPrice = bot.exit_price || 0;
     const exitReason = bot.exit_reason || '';
     const exitPnl = bot.exit_pnl ?? (isStopped && exitPrice ? (exitPrice - entry) * watchQty : 0);
     const unrealizedPnl = isStopped ? exitPnl : (orderFilled && curBidNum > 0 ? (curBidNum - entry) * watchQty : 0);
     const unrealColor = unrealizedPnl >= 0 ? '#00ff88' : '#ff4444';
+    const costDollars = (entry * watchQty / 100).toFixed(2);
 
-    let fillStatusHtml = '';
+    // Status label + accent color
+    let statusLabel, accentCol;
     if (isStopped) {
-        if (exitReason === 'stop_loss') {
-            fillStatusHtml = `<span style="background:#ff444422;color:#ff4444;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">🛑 SL FIRED</span>`;
-        } else if (exitReason === 'take_profit') {
-            fillStatusHtml = `<span style="background:#00ff8822;color:#00ff88;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">✅ TP HIT</span>`;
-        } else {
-            fillStatusHtml = `<span style="background:#55555522;color:#888;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${bot.status === 'stopped' ? '🛑 STOPPED' : '✓ DONE'}</span>`;
-        }
+        if (exitReason === 'stop_loss') { statusLabel = 'SL EXIT'; accentCol = '#ff4444'; }
+        else if (exitReason === 'take_profit') { statusLabel = 'TP HIT'; accentCol = '#00ff88'; }
+        else { statusLabel = bot.status === 'stopped' ? 'STOPPED' : 'DONE'; accentCol = '#888'; }
     } else if (!orderFilled) {
-        fillStatusHtml = fillQty > 0
-            ? `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">FILLING ${fillQty}/${watchQty}</span>`
-            : `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">PENDING</span>`;
+        statusLabel = fillQty > 0 ? `FILLING ${fillQty}/${watchQty}` : 'PENDING';
+        accentCol = '#ffd740';
+    } else {
+        statusLabel = 'WATCHING';
+        accentCol = '#00ff88';
+    }
+
+    // Fill bar
+    const fillPct = watchQty > 0 ? Math.round((fillQty / watchQty) * 100) : 0;
+    const fillCol = orderFilled ? '#00ff88' : (fillQty > 0 ? '#ffaa00' : '#333');
+
+    // SL/TP zone bar calculations
+    let zoneBarHtml = '';
+    if (orderFilled && curBidNum > 0 && (sl > 0 || tp > 0)) {
+        const slPrice = sl > 0 ? entry - sl : 0;
+        const tpPrice = tp > 0 ? entry + tp : 99;
+        const rangeMin = sl > 0 ? slPrice : Math.max(1, entry - 15);
+        const rangeMax = tp > 0 ? tpPrice : Math.min(99, entry + 15);
+        const range = Math.max(rangeMax - rangeMin, 1);
+        const entryPct = Math.max(0, Math.min(100, ((entry - rangeMin) / range) * 100));
+        const bidPct = Math.max(0, Math.min(100, ((curBidNum - rangeMin) / range) * 100));
+        const bidInDanger = sl > 0 && curBidNum <= slPrice + 2;
+        const bidNearTP = tp > 0 && curBidNum >= tpPrice - 2;
+        const bidDotCol = bidInDanger ? '#ff4444' : bidNearTP ? '#00ff88' : '#ffd740';
+        const distSL = sl > 0 ? curBidNum - slPrice : null;
+        const distTP = tp > 0 ? tpPrice - curBidNum : null;
+
+        zoneBarHtml = `
+            <div style="margin-top:4px;">
+                <div style="position:relative;height:6px;background:#0a1018;border-radius:3px;overflow:visible;">
+                    ${sl > 0 ? `<div style="position:absolute;left:0;width:${entryPct}%;height:100%;background:#ff444412;border-radius:3px 0 0 3px;"></div>` : ''}
+                    ${tp > 0 ? `<div style="position:absolute;right:0;width:${100 - entryPct}%;height:100%;background:#00ff8812;border-radius:0 3px 3px 0;"></div>` : ''}
+                    <div style="position:absolute;left:${entryPct}%;width:1px;height:100%;background:#ffd74066;z-index:2;"></div>
+                    <div style="position:absolute;left:${bidPct}%;width:6px;height:6px;background:${bidDotCol};border-radius:50%;z-index:3;transform:translateX(-3px);box-shadow:0 0 6px ${bidDotCol}88;"></div>
+                </div>
+                <div style="display:flex;justify-content:space-between;margin-top:3px;font-size:8px;font-weight:700;">
+                    ${sl > 0 ? `<span style="color:#ff4444;">SL ${slPrice}¢</span>` : '<span></span>'}
+                    <span style="color:#ffd74088;">${entry}¢</span>
+                    ${tp > 0 ? `<span style="color:#00ff88;">TP ${tpPrice}¢</span>` : '<span></span>'}
+                </div>
+                ${distSL !== null || distTP !== null ? `<div style="display:flex;justify-content:center;gap:12px;margin-top:2px;font-size:9px;">
+                    ${distSL !== null ? `<span style="color:${distSL <= 2 ? '#ff4444' : distSL <= 5 ? '#ff8800' : '#ff666688'};font-weight:700;">${distSL <= 2 ? '⚠ ' : ''}${distSL}¢ to SL</span>` : ''}
+                    ${distTP !== null ? `<span style="color:${distTP <= 2 ? '#00ff88' : distTP <= 5 ? '#ffd740' : '#ffd74088'};font-weight:700;">${distTP <= 2 ? '✦ ' : ''}${distTP}¢ to TP</span>` : ''}
+                </div>` : ''}
+            </div>`;
     }
 
     const item = document.createElement('div');
     item.className = 'bot-item';
-    const _borderCol = isStopped ? (exitPnl >= 0 ? '#00ff88' : '#ff4444') : '#00ff88';
-    item.style.cssText = `flex-direction:column;gap:8px;border-left:3px solid ${_borderCol};cursor:pointer;${isStopped ? 'opacity:0.75;' : ''}`;
+    item.style.cssText = `background:#0c1018;border:1px solid #ffd74018;border-left:3px solid ${isStopped ? accentCol : '#00ff88'};border-radius:10px;padding:12px;margin-bottom:8px;cursor:pointer;box-shadow:0 0 12px rgba(255,215,64,0.04);${isStopped ? 'opacity:0.75;' : ''}`;
     item.onclick = (e) => { if (!e.target.closest('button') && !e.target.closest('a')) showBotDetail(botId); };
     item.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                <span style="color:#00ff88;font-size:11px;font-weight:700;">💰 BET</span>
-                <a href="#" onclick="navigateToMarket('${ticker.toUpperCase().split('-').slice(0,2).join('-')}');return false;" style="color:#fff;font-weight:700;font-size:13px;text-decoration:none;" title="View in Markets tab">${watchDisplayName}</a>
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;flex:1;min-width:0;">
+                ${getBotIconSVG('scout', '#00ff88', 18)}
+                <span style="color:#00ff88;font-weight:800;font-size:9px;letter-spacing:.1em;opacity:0.8;">SCOUT</span>
+                <a href="#" onclick="navigateToMarket('${ticker.toUpperCase().split('-').slice(0,2).join('-')}');return false;" style="color:#e8eaed;font-weight:700;font-size:13px;text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="View in Markets tab">${watchDisplayName}</a>
                 ${watchScoreBadge}
-                <span class="bot-status watching">${isStopped ? (exitReason === 'stop_loss' ? 'SL EXIT' : exitReason === 'take_profit' ? 'TP EXIT' : 'STOPPED') : (orderFilled ? 'WATCHING' : 'PENDING')}</span>
-                <span style="display:inline-block;padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;background:${side==='yes'?'#00ff8822':'#ff444422'};color:${side==='yes'?'#00ff88':'#ff4444'};">${side.toUpperCase()}</span>
-                ${fillStatusHtml}
-                <span style="color:#555;font-size:10px;">${ageMin >= 60 ? Math.floor(ageMin/60)+'h '+ageMin%60+'m' : ageMin+'m'} ago</span>
+                <span style="background:${accentCol}15;color:${accentCol};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;letter-spacing:.03em;">${statusLabel}</span>
+                <span style="padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;background:${side==='yes'?'#00ff8820':'#ff444420'};color:${side==='yes'?'#00ff88':'#ff4444'};">${side.toUpperCase()}</span>
             </div>
-            <div style="display:flex;align-items:center;gap:8px;">
-                ${orderFilled && unrealizedPnl !== 0 ? `<span style="color:${unrealColor};font-size:11px;font-weight:700;">${unrealizedPnl > 0 ? '+' : ''}${unrealizedPnl}¢</span>` : ''}
-                ${!isStopped ? `<button onclick="scoutModify('${botId}')" style="background:#ffd74022;color:#ffd740;border:1px solid #ffd74044;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Edit</button>` : ''}
-                ${!isStopped ? `<button onclick="stopBot('${botId}')" style="background:#ff880022;color:#ff8800;border:1px solid #ff880044;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
-                ${!isStopped ? `<button onclick="releaseBot('${botId}')" style="background:#4488ff22;color:#4488ff;border:1px solid #4488ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Release</button>` : ''}
-                <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
+            <div style="display:flex;align-items:center;gap:5px;flex-shrink:0;">
+                ${orderFilled && unrealizedPnl !== 0 ? `<span style="color:${unrealColor};font-weight:800;font-size:13px;">${unrealizedPnl > 0 ? '+' : ''}${unrealizedPnl}¢</span>` : ''}
+                <span style="color:#334;font-size:9px;">${ageStr}</span>
+                ${!isStopped ? `<button onclick="scoutModify('${botId}')" style="background:#ffd74015;color:#ffd740;border:1px solid #ffd74030;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Edit</button>` : ''}
+                ${!isStopped ? `<button onclick="stopBot('${botId}')" style="background:#ff880015;color:#ff8800;border:1px solid #ff880030;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
+                ${!isStopped ? `<button onclick="releaseBot('${botId}')" style="background:#4488ff15;color:#4488ff;border:1px solid #4488ff30;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Release</button>` : ''}
+                <button onclick="cancelBot('${botId}')" style="background:#ff444415;color:#ff4444;border:1px solid #ff444430;border-radius:5px;padding:3px 7px;font-size:10px;cursor:pointer;">x</button>
             </div>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(4, 1fr);gap:10px;font-size:11px;color:#8892a6;">
-            <div>Entry: <strong style="color:#fff;">${entry}¢</strong></div>
-            <div>Qty: <strong style="color:#fff;">×${watchQty}</strong></div>
-            ${isStopped && exitPrice
-                ? `<div>Sell at: <strong style="color:#ffaa00;">${exitPrice}¢</strong></div>
-                   <div>P&L: <strong style="color:${exitPnl >= 0 ? '#00ff88' : '#ff4444'};">${exitPnl >= 0 ? '+' : ''}${exitPnl}¢</strong> <span style="color:#666;font-size:9px;">(if filled)</span></div>`
-                : `<div>Bid: <strong style="color:${typeof liveBid === 'number' && sl > 0 && liveBid < entry - sl ? '#ff4444' : '#00ff88'};">${liveBid}¢</strong></div>
-                   <div>${sl > 0 ? `SL: <strong style="color:#ff6666;">${entry - sl}¢</strong>` : `SL: <strong style="color:#666;">off</strong>`}${tp > 0 ? ` · TP: <strong style="color:#00ff88;">${entry + tp}¢</strong>` : ''}</div>`}
-        </div>
-        <div style="display:flex;align-items:center;gap:8px;margin-top:2px;">
-            <div style="flex:1;height:6px;background:#1a2540;border-radius:3px;overflow:hidden;">
-                <div style="width:${watchQty > 0 ? Math.round((fillQty / watchQty) * 100) : 0}%;height:100%;background:${orderFilled?'#00ff88':(fillQty>0?'#ffaa00':'#333')};border-radius:3px;transition:width 0.3s;"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:4px;">
+            <!-- POSITION PANEL -->
+            <div style="background:#060a14;border:1px solid #00ff8820;border-radius:6px;padding:8px 10px;">
+                <div style="color:#00ff88;font-size:8px;font-weight:800;letter-spacing:.06em;margin-bottom:4px;">◎ POSITION · ${side.toUpperCase()}</div>
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                    <span style="color:#fff;font-weight:700;font-size:14px;">${entry}¢</span>
+                    <span style="color:#8892a6;font-size:10px;">×${watchQty}</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                    <span style="color:#556;font-size:9px;">cost</span>
+                    <span style="color:#8892a6;font-size:10px;font-weight:600;">$${costDollars}</span>
+                </div>
+                <div style="height:4px;background:#0a1018;border-radius:2px;overflow:hidden;">
+                    <div style="width:${fillPct}%;height:100%;background:${fillCol};border-radius:2px;transition:width 0.3s;"></div>
+                </div>
+                <div style="display:flex;justify-content:space-between;margin-top:2px;">
+                    <span style="color:${fillCol};font-size:9px;font-weight:700;">${fillQty}/${watchQty}${orderFilled ? ' ✓' : ''}</span>
+                    ${orderFilled ? '<span style="color:#00ff88;font-size:8px;">FILLED</span>' : fillQty > 0 ? '<span style="color:#ffaa00;font-size:8px;">FILLING</span>' : '<span style="color:#334;font-size:8px;">PENDING</span>'}
+                </div>
             </div>
-            <span style="color:${orderFilled?'#00ff88':(fillQty>0?'#ffaa00':'#8892a6')};font-weight:700;font-size:10px;">${fillQty}/${watchQty}${orderFilled?' ✓':''}</span>
+            <!-- MARKET PANEL -->
+            <div style="background:#060a14;border:1px solid #ffd74020;border-radius:6px;padding:8px 10px;">
+                <div style="color:#ffd740;font-size:8px;font-weight:800;letter-spacing:.06em;margin-bottom:4px;">📡 MARKET${isStopped ? ' · CLOSED' : ''}</div>
+                ${isStopped && exitPrice ? `
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                        <span style="color:#556;font-size:9px;">exit price</span>
+                        <span style="color:#ffaa00;font-weight:700;font-size:14px;">${exitPrice}¢</span>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                        <span style="color:#556;font-size:9px;">P&L</span>
+                        <span style="color:${exitPnl >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;font-size:11px;">${exitPnl >= 0 ? '+' : ''}${exitPnl}¢</span>
+                    </div>
+                    <div style="color:${accentCol};font-size:9px;font-weight:700;text-align:center;padding:2px;background:${accentCol}11;border-radius:3px;">${exitReason === 'stop_loss' ? '🛑 Stop-Loss' : exitReason === 'take_profit' ? '✅ Take-Profit' : '⏹ Manual'}</div>
+                ` : `
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                        <span style="color:#556;font-size:9px;">bid / ask</span>
+                        <span style="font-size:10px;"><span style="color:#00ff88;font-weight:700;">${liveBid || '?'}</span><span style="color:#334;"> / </span><span style="color:#ff4444;font-weight:700;">${liveAsk || '?'}</span></span>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;">
+                        <span style="color:#ff6666;font-size:9px;font-weight:600;">SL</span>
+                        <span style="color:${sl > 0 ? '#ff6666' : '#334'};font-size:10px;font-weight:700;">${sl > 0 ? (entry - sl) + '¢' : 'off'}</span>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <span style="color:#00ff88;font-size:9px;font-weight:600;">TP</span>
+                        <span style="color:${tp > 0 ? '#00ff88' : '#334'};font-size:10px;font-weight:700;">${tp > 0 ? (entry + tp) + '¢' : 'off'}</span>
+                    </div>
+                `}
+            </div>
         </div>
-        ${!isStopped && orderFilled && curBidNum > 0 && (sl > 0 || tp > 0) ? (() => {
-            const pills = [];
-            if (sl > 0) {
-                const distSL = curBidNum - (entry - sl);
-                const slUrgent = distSL <= 2;
-                const slWarn = distSL <= 5;
-                const slClr = slUrgent ? '#ff4444' : slWarn ? '#ff8800' : '#ff666688';
-                pills.push('<span style="color:' + slClr + ';font-weight:700;">' + (slUrgent ? '⚠ ' : '') + distSL + '¢ to SL</span>');
-            }
-            if (tp > 0) {
-                const distTP = (entry + tp) - curBidNum;
-                const tpClose = distTP <= 2;
-                const tpNear = distTP <= 5;
-                const tpClr = tpClose ? '#00ff88' : tpNear ? '#ffd740' : '#ffd74088';
-                pills.push('<span style="color:' + tpClr + ';font-weight:700;">' + (tpClose ? '✦ ' : '') + distTP + '¢ to TP</span>');
-            }
-            return '<div style="display:flex;align-items:center;justify-content:center;gap:12px;padding:3px 8px;background:#ffd74008;border:1px solid #ffd74015;border-radius:4px;font-size:10px;">' + pills.join('<span style="color:#1e2740;">│</span>') + '</div>';
-        })() : ''}
+        ${!isStopped ? zoneBarHtml : ''}
         ${bot.fair_value_cents ? (() => {
             const fv = bot.fair_value_cents;
             const edgeVal = fv - entry;
             const edgeClr = edgeVal > 0 ? '#00ff88' : edgeVal < 0 ? '#ff4444' : '#ffaa00';
-            const edgeIcn = edgeVal > 0 ? '✅' : edgeVal < 0 ? '❌' : '➖';
-            return '<div style="display:flex;align-items:center;justify-content:center;gap:10px;padding:4px 8px;background:' + edgeClr + '11;border:1px solid ' + edgeClr + '33;border-radius:4px;font-size:10px;">' +
-                '<span style="color:#ffaa00;font-weight:700;">📊 Fair: ' + fv + '¢</span>' +
-                '<span style="color:' + edgeClr + ';font-weight:700;">Edge: ' + (edgeVal > 0 ? '+' : '') + edgeVal + '¢ ' + edgeIcn + '</span>' +
+            return '<div style="display:flex;align-items:center;justify-content:center;gap:10px;padding:3px 8px;background:' + edgeClr + '11;border:1px solid ' + edgeClr + '22;border-radius:4px;font-size:9px;margin-top:4px;">' +
+                '<span style="color:#ffd740;font-weight:700;">📊 Fair: ' + fv + '¢</span>' +
+                '<span style="color:' + edgeClr + ';font-weight:700;">Edge: ' + (edgeVal > 0 ? '+' : '') + edgeVal + '¢</span>' +
                 '</div>';
         })() : ''}
-        <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:#555;border-top:1px solid #1e2740;padding-top:4px;">
-            <span>🎟 ${bot.ticker || '?'}</span>
-            <span>Cost: $${(entry * watchQty / 100).toFixed(2)}</span>
-            <span>${bot.created_at ? new Date(bot.created_at * 1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''} · ${ageMin}m</span>
-        </div>
     `;
     container.appendChild(item);
 }

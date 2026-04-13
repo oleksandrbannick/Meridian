@@ -4134,13 +4134,13 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
 
             if best_combined >= stop and best_combined < 999:
                 hard_stop = stop + APEX_MM_SL_HARD_MARGIN
-                _now = time.time()
+                _pc = time.perf_counter()  # monotonic, nanosecond res — immune to NTP drift
 
                 # ── HARD BREACH: circuit breaker — instant eject, no timer ──
                 if best_combined > hard_stop:
                     bot['status'] = 'mm_exiting'
-                    _breach_dur = _now - bot['_sl_breach_since'] if bot.get('_sl_breach_since') else 0
-                    print(f'🚨 APEX MM CIRCUIT BREAKER: {bot_id} combined={best_combined}c > {hard_stop}c — INSTANT EJECT (binary gap, breach_dur={_breach_dur:.2f}s)')
+                    _breach_dur = _pc - bot['_sl_breach_since'] if bot.get('_sl_breach_since') else 0
+                    print(f'🚨 APEX MM CIRCUIT BREAKER: {bot_id} combined={best_combined}c > {hard_stop}c — INSTANT EJECT (binary gap, breach_dur={_breach_dur:.3f}s)')
                     def _fire_exit(_bid=bot_id, _b=bot, _bc=best_combined, _hs=hard_stop, _w=width):
                         _apex_mm_begin_exit(_bid, _b, f'circuit_breaker (combined={_bc}c > {_hs}c, hard_margin={APEX_MM_SL_HARD_MARGIN}c)')
                     threading.Thread(target=_fire_exit, daemon=True).start()
@@ -4149,27 +4149,27 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 # ── SOFT BREACH: persistence gate — filter flash spikes ──
                 _persist_s, _phase = _apex_mm_sl_persist(ticker)
                 if not bot.get('_sl_breach_since'):
-                    bot['_sl_breach_since'] = _now
+                    bot['_sl_breach_since'] = _pc
                     bot['_sl_breach_peak'] = best_combined
                     bot['_sl_breach_phase'] = _phase
                     print(f'⏱ APEX MM SOFT BREACH: {bot_id} combined={best_combined}c >= {stop}c — gate {_persist_s}s ({_phase})')
                     continue
                 bot['_sl_breach_peak'] = max(bot.get('_sl_breach_peak', 0), best_combined)
-                _breach_age = _now - bot['_sl_breach_since']
+                _breach_age = _pc - bot['_sl_breach_since']
                 if _breach_age < _persist_s:
                     continue  # still within persistence window — let it breathe
                 # Persisted long enough — fire the exit
                 bot['status'] = 'mm_exiting'
-                print(f'🚨 APEX MM WS STOP-LOSS: {bot_id} combined={best_combined}c >= {stop}c — persisted {_breach_age:.1f}s/{_persist_s}s ({_phase}, peak={bot.get("_sl_breach_peak", 0)}c)')
+                print(f'🚨 APEX MM WS STOP-LOSS: {bot_id} combined={best_combined}c >= {stop}c — persisted {_breach_age:.3f}s/{_persist_s}s ({_phase}, peak={bot.get("_sl_breach_peak", 0)}c)')
                 def _fire_exit(_bid=bot_id, _b=bot, _bc=best_combined, _s=stop, _w=width, _age=_breach_age, _ph=_phase):
-                    _apex_mm_begin_exit(_bid, _b, f'ws_stop_loss (combined={_bc}c >= {_s}c, persisted={_age:.1f}s, phase={_ph})')
+                    _apex_mm_begin_exit(_bid, _b, f'ws_stop_loss (combined={_bc}c >= {_s}c, persisted={_age:.3f}s, phase={_ph})')
                 threading.Thread(target=_fire_exit, daemon=True).start()
                 return
             else:
                 # Combined back below stop — reset persistence gate instantly
                 if bot.get('_sl_breach_since'):
-                    _breach_dur = time.time() - bot['_sl_breach_since']
-                    print(f'✅ APEX MM SL RESET: {bot_id} combined={best_combined}c < {stop}c — filtered {_breach_dur:.2f}s spike (peak={bot.get("_sl_breach_peak", 0)}c, phase={bot.get("_sl_breach_phase", "?")})')
+                    _breach_dur = time.perf_counter() - bot['_sl_breach_since']
+                    print(f'✅ APEX MM SL RESET: {bot_id} combined={best_combined}c < {stop}c — filtered {_breach_dur:.3f}s spike (peak={bot.get("_sl_breach_peak", 0)}c, phase={bot.get("_sl_breach_phase", "?")})')
                     bot['_sl_breach_since'] = None
                     bot['_sl_breach_peak'] = None
                     bot['_sl_breach_phase'] = None
@@ -13318,33 +13318,34 @@ def _handle_apex(bot_id, bot, actions):
         # Drift stop: dual-threshold matrix (soft breach = timer, hard breach = instant)
         if _best_combined > _stop and _best_combined < 999:
             _hard_stop = _stop + APEX_MM_SL_HARD_MARGIN
+            _pc = time.perf_counter()  # monotonic clock for sub-second precision
 
             # ── HARD BREACH: circuit breaker — instant eject ──
             if _best_combined > _hard_stop:
-                _breach_dur = now - bot['_sl_breach_since'] if bot.get('_sl_breach_since') else 0
-                print(f'🚨 APEX MM CIRCUIT BREAKER: {bot_id} combined={_best_combined}c > {_hard_stop}c — INSTANT EJECT (breach_dur={_breach_dur:.2f}s)')
+                _breach_dur = _pc - bot['_sl_breach_since'] if bot.get('_sl_breach_since') else 0
+                print(f'🚨 APEX MM CIRCUIT BREAKER: {bot_id} combined={_best_combined}c > {_hard_stop}c — INSTANT EJECT (breach_dur={_breach_dur:.3f}s)')
                 _apex_mm_begin_exit(bot_id, bot, f'circuit_breaker (combined={_best_combined}c > {_hard_stop}c, hard_margin={APEX_MM_SL_HARD_MARGIN}c)')
                 return
 
             # ── SOFT BREACH: persistence gate ──
             _persist_s, _phase = _apex_mm_sl_persist(ticker)
             if not bot.get('_sl_breach_since'):
-                bot['_sl_breach_since'] = now
+                bot['_sl_breach_since'] = _pc
                 bot['_sl_breach_peak'] = _best_combined
                 bot['_sl_breach_phase'] = _phase
                 print(f'⏱ APEX MM SOFT BREACH: {bot_id} combined={_best_combined}c > {_stop}c — gate {_persist_s}s ({_phase})')
                 return
             bot['_sl_breach_peak'] = max(bot.get('_sl_breach_peak', 0), _best_combined)
-            _breach_age = now - bot['_sl_breach_since']
+            _breach_age = _pc - bot['_sl_breach_since']
             if _breach_age < _persist_s:
                 return  # still within persistence window
-            _apex_mm_begin_exit(bot_id, bot, f'drift_stop (combined={_best_combined}c > {_stop}c, persisted={_breach_age:.1f}s/{_persist_s}s, phase={_phase})')
+            _apex_mm_begin_exit(bot_id, bot, f'drift_stop (combined={_best_combined}c > {_stop}c, persisted={_breach_age:.3f}s/{_persist_s}s, phase={_phase})')
             return
         else:
             # Below threshold — reset persistence gate instantly
             if bot.get('_sl_breach_since'):
-                _breach_dur = now - bot['_sl_breach_since']
-                print(f'✅ APEX MM SL RESET: {bot_id} combined={_best_combined}c <= {_stop}c — filtered {_breach_dur:.2f}s spike (peak={bot.get("_sl_breach_peak", 0)}c, phase={bot.get("_sl_breach_phase", "?")})')
+                _breach_dur = time.perf_counter() - bot['_sl_breach_since']
+                print(f'✅ APEX MM SL RESET: {bot_id} combined={_best_combined}c <= {_stop}c — filtered {_breach_dur:.3f}s spike (peak={bot.get("_sl_breach_peak", 0)}c, phase={bot.get("_sl_breach_phase", "?")})')
                 bot['_sl_breach_since'] = None
                 bot['_sl_breach_peak'] = None
                 bot['_sl_breach_phase'] = None

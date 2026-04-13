@@ -13720,6 +13720,37 @@ def _run_monitor():
         if _cross_fixed > 0:
             save_state()
 
+        # ── Global settlement check: mark completed bots missing _market_settled_at ──
+        # Catches Scout, Meridian, Apex, and any bot that completed before settlement flag was added
+        _settle_check_now = time.time()
+        for _sc_id, _sc_bot in list(active_bots.items()):
+            if _sc_bot.get('status') not in ('completed', 'stopped'):
+                continue
+            if _sc_bot.get('_market_settled_at'):
+                continue
+            if _sc_bot.get('_smart_stop_reason') == 'manual':
+                continue  # manually stopped — don't auto-mark as settled
+            if _settle_check_now - _sc_bot.get('_last_settle_check_global', 0) < 60:
+                continue
+            _sc_bot['_last_settle_check_global'] = _settle_check_now
+            _sc_ticker = _sc_bot.get('ticker', '') or _sc_bot.get('ticker_a', '')
+            if not _sc_ticker:
+                continue
+            try:
+                api_read_limiter.wait()
+                _sc_mkt = kalshi_client.get_market(_sc_ticker)
+                _sc_mkt_data = _sc_mkt.get('market', _sc_mkt) if isinstance(_sc_mkt, dict) else {}
+                _sc_mkt_status = _sc_mkt_data.get('status', '').lower()
+                if _sc_mkt_status in ('settled', 'finalized') or (
+                    _sc_mkt_status == 'closed' and _sc_mkt_data.get('result', '') in ('yes', 'no')
+                ):
+                    _sc_bot['_market_settled_at'] = _settle_check_now
+                    _sc_bot['_smart_stop_reason'] = 'final'
+                    print(f'🏁 SETTLED: {_sc_id} ({_sc_bot.get("type","?")}) market {_sc_mkt_status} → 5 min purge')
+                    save_state()
+            except Exception:
+                pass
+
         # ── Purge settled bots from active_bots ──
         # Bots stay until market settles. Only purge 5 min after _market_settled_at timestamp.
         # Cancelled bots (user hit X) purge after 5 min regardless.
@@ -14493,8 +14524,10 @@ def _run_monitor():
                                         kalshi_client.cancel_order(bot['order_id'])
                                     except Exception:
                                         pass
-                                bot['status'] = 'stopped'
-                                bot['stopped_at'] = now
+                                bot['status'] = 'completed'
+                                bot['completed_at'] = now
+                                bot['_market_settled_at'] = now
+                                bot['_smart_stop_reason'] = 'final'
                                 bot_log('WATCH_SETTLED_UNFILLED', bot_id, {'market_status': mkt_status_w})
                                 print(f'🏁 WATCH SETTLED (unfilled): {bot_id} — market {mkt_status_w}, order never filled')
                                 actions.append({'bot_id': bot_id, 'action': 'watch_settled_unfilled'})
@@ -14538,6 +14571,8 @@ def _run_monitor():
                                     }, bot)
                                 bot['status'] = 'completed'
                                 bot['completed_at'] = now
+                                bot['_market_settled_at'] = now
+                                bot['_smart_stop_reason'] = 'final'
                                 bot_log('WATCH_SETTLED_FILLED', bot_id, {'market_status': mkt_status_w, 'result': mkt_result_w, 'won': won})
                                 print(f'🏁 WATCH SETTLED (filled): {bot_id} — {mkt_result_w} won, {"profit" if won else "loss"} recorded')
                                 actions.append({'bot_id': bot_id, 'action': 'watch_settled_filled'})

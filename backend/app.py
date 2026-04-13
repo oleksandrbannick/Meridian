@@ -8334,6 +8334,13 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
         _apex_mm_cycle_reset(bot_id, bot)
         return
 
+    # Clear consumed rungs (fill_qty >= qty) BEFORE any refill/pull decisions
+    # so FILLED labels don't stick around on the card
+    for _sk in ('yes_orders', 'no_orders'):
+        for _prc, _lv in bot.get(_sk, {}).items():
+            if _lv.get('fill_qty', 0) >= _lv.get('qty', 1) and _lv.get('fill_qty', 0) > 0:
+                _lv['fill_qty'] = 0
+
     # ── Smart mode check ──
     _cycle_pnl = bot.get('realized_pnl_cents', 0) - bot.get('_cycle_start_pnl', 0)
     _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, _cycle_pnl)

@@ -6436,7 +6436,33 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             else walkLabel = `<span style="color:#00ff88;font-size:8px;font-weight:700;">TARGET +${100 - combined}c</span>`;
         }
         // Walk bar — full range from target to stop-loss
-        // Walk bar removed — exit panel (Section 3) already shows zone bar with full detail
+        let walkBarHtml = '';
+        if (exitPrice > 0) {
+            const barMin = origTargetCombined;
+            const barMax = stopLoss;
+            const barRange = barMax - barMin;
+            const combPct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((combined - barMin) / barRange * 100))) : 0;
+            const bePct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((100 - barMin) / barRange * 100))) : 50;
+            const markerCol = combined <= origTargetCombined + 1 ? '#00ff88' : combined < 100 ? '#ffaa00' : '#ff4444';
+            walkBarHtml = `<div style="margin-top:8px;padding:8px 10px;background:#060a12;border:1px solid #1e274030;border-radius:8px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                    <span style="color:#8892a6;font-size:8px;font-weight:700;letter-spacing:.06em;">WALK</span>
+                    <span style="font-size:8px;">${walkLabel}</span>
+                    <span style="color:#556;font-size:8px;">${origTargetCombined}c → ${stopLoss}c</span>
+                </div>
+                <div style="position:relative;height:8px;background:#0a1018;border-radius:4px;overflow:hidden;">
+                    <div style="position:absolute;left:0;width:${bePct}%;height:100%;background:linear-gradient(90deg,#00ff8818,#00ff8808);"></div>
+                    <div style="position:absolute;left:${bePct}%;width:${100-bePct}%;height:100%;background:linear-gradient(90deg,#ff444410,#ff444420);"></div>
+                    <div style="position:absolute;left:${bePct}%;width:2px;height:100%;background:#ffaa00;z-index:2;"></div>
+                    <div style="position:absolute;left:${combPct}%;width:8px;height:100%;background:${markerCol};border-radius:4px;z-index:3;transform:translateX(-4px);box-shadow:0 0 6px ${markerCol}80;"></div>
+                </div>
+                <div style="display:flex;justify-content:space-between;margin-top:3px;font-size:7px;font-weight:700;">
+                    <span style="color:#00ff88;">${origTargetCombined}c</span>
+                    <span style="color:#ffaa00;">100c</span>
+                    <span style="color:#ff4444;">${stopLoss}c</span>
+                </div>
+            </div>`;
+        }
         positionBarHtml = `<div style="margin-bottom:8px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
                 <span style="color:${profitCol};font-weight:800;font-size:16px;">${profit >= 0 ? '+' : ''}${profit}c</span>
@@ -6473,6 +6499,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     <div style="color:#334;font-size:7px;margin-top:1px;text-align:right;">${longSide === 'NO' ? anchorTotalFills + '/' + anchorTotalQty : exitFillQty + '/' + exitTotalQty}</div>
                 </div>
             </div>
+            ${walkBarHtml}
         </div>`;
     }
 

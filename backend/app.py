@@ -15410,6 +15410,23 @@ def _run_monitor():
                                 })
                                 bot_log('WATCH_ORDER_FILLED', bot_id, {'side': watch_side, 'qty': qty, 'entry': entry})
                                 print(f'💰 STRAIGHT BET FILLED: {bot_id} — {watch_side.upper()} {qty}× at {entry}¢')
+                                # Post TP limit sell immediately on fill
+                                if tp > 0 and not bot.get('tp_order_id'):
+                                    tp_price = entry + tp
+                                    try:
+                                        _tp_kwargs = {'ticker': ticker, 'side': watch_side, 'action': 'sell', 'count': bot.get('quantity', qty)}
+                                        if watch_side == 'yes':
+                                            _tp_kwargs['yes_price'] = tp_price
+                                        else:
+                                            _tp_kwargs['no_price'] = tp_price
+                                        api_rate_limiter.wait()
+                                        _tp_resp = kalshi_client.create_order(**_tp_kwargs)
+                                        _tp_oid = _tp_resp.get('order', {}).get('order_id', '') if isinstance(_tp_resp, dict) else ''
+                                        if _tp_oid:
+                                            bot['tp_order_id'] = _tp_oid
+                                            print(f'✅ SCOUT TP ORDER on fill: {bot_id} sell {watch_side} @{tp_price}¢ oid={_tp_oid}')
+                                    except Exception as _tp_err:
+                                        print(f'⚠ SCOUT TP ORDER failed on fill for {bot_id}: {_tp_err}')
                                 save_state()
                             elif order_status in ('canceled', 'cancelled', 'expired', 'declined'):
                                 # Order was cancelled/expired — remove tracker
@@ -15495,6 +15512,14 @@ def _run_monitor():
                         if bot['status'] in ('stopped', 'completed'):
                             print(f'⛔ SKIPPING duplicate watch SL for {bot_id} — already {bot["status"]}')
                             continue
+                        # Cancel resting TP order before SL sell
+                        if bot.get('tp_order_id'):
+                            try:
+                                _safe_cancel(bot['tp_order_id'], f'watch_SL_cancel_TP_{bot_id}')
+                                print(f'🗑 Cancelled TP order {bot["tp_order_id"]} before SL sell for {bot_id}')
+                            except Exception:
+                                pass
+                            bot.pop('tp_order_id', None)
                         _sl_oid, _sl_price = execute_maker_sell(ticker, watch_side, qty, reason=f'watch_SL_{bot_id}')
                         sold = bool(_sl_oid)
                         if sold:
@@ -15526,14 +15551,41 @@ def _run_monitor():
                             print(f'⚠ Watch SL sell FAILED for {bot_id} — will retry next cycle')
                             actions.append({'bot_id': bot_id, 'action': 'stop_loss_watch_FAILED',
                                            'info': str(sell_info)})
-                    # Take-profit
+                    # Take-profit — check resting TP order first
                     elif tp > 0 and cur_bid >= entry + tp:
                         # SAFETY: re-check bot hasn't already been stopped
                         if bot['status'] in ('stopped', 'completed'):
                             print(f'⛔ SKIPPING duplicate watch TP for {bot_id} — already {bot["status"]}')
                             continue
-                        _tp_oid, _tp_price = execute_maker_sell(ticker, watch_side, qty, reason=f'watch_TP_{bot_id}')
-                        sold = bool(_tp_oid)
+                        # If we already posted a TP limit sell, check if it filled
+                        _existing_tp_oid = bot.get('tp_order_id')
+                        if _existing_tp_oid:
+                            try:
+                                api_read_limiter.wait()
+                                _tp_check = kalshi_client.get_order(_existing_tp_oid)
+                                _tp_obj = _tp_check.get('order', _tp_check)
+                                _tp_filled = _parse_fill_count(_tp_obj) or 0
+                                _tp_status = _tp_obj.get('status', '')
+                                if _tp_filled >= qty:
+                                    # TP order filled on its own — record completion
+                                    _tp_oid = _existing_tp_oid
+                                    _tp_price = entry + tp
+                                    sold = True
+                                    print(f'✅ SCOUT TP ORDER FILLED: {bot_id} — resting sell filled {_tp_filled}x @{_tp_price}¢')
+                                elif _tp_status in ('canceled', 'cancelled'):
+                                    # TP order was cancelled — fall through to execute_maker_sell
+                                    bot.pop('tp_order_id', None)
+                                    _tp_oid, _tp_price = execute_maker_sell(ticker, watch_side, qty, reason=f'watch_TP_{bot_id}')
+                                    sold = bool(_tp_oid)
+                                else:
+                                    # TP order still resting but bid is above trigger — let it fill naturally
+                                    continue
+                            except Exception as _tp_chk_err:
+                                print(f'⚠ TP order check failed for {bot_id}: {_tp_chk_err}')
+                                continue
+                        else:
+                            _tp_oid, _tp_price = execute_maker_sell(ticker, watch_side, qty, reason=f'watch_TP_{bot_id}')
+                            sold = bool(_tp_oid)
                         if sold:
                             actual_sell = _tp_price or cur_bid
                             profit = (actual_sell - entry) * qty
@@ -21238,13 +21290,44 @@ def watch_position():
             'created_at':        time.time(),
             'posted_at':         time.time(),
         }
+
+        # Post TP limit sell immediately if TP is set
+        tp_info = ''
+        if take_profit_cents > 0:
+            tp_price = entry_price + take_profit_cents
+            try:
+                sell_kwargs = {
+                    'ticker': ticker,
+                    'side': side,
+                    'action': 'sell',
+                    'count': quantity,
+                }
+                if side == 'yes':
+                    sell_kwargs['yes_price'] = tp_price
+                else:
+                    sell_kwargs['no_price'] = tp_price
+                api_rate_limiter.wait()
+                tp_resp = kalshi_client.create_order(**sell_kwargs)
+                tp_oid = tp_resp.get('order', {}).get('order_id', '') if isinstance(tp_resp, dict) else ''
+                if tp_oid:
+                    active_bots[bot_id]['tp_order_id'] = tp_oid
+                    tp_info = f' · TP sell posted at {tp_price}¢'
+                    print(f'✅ SCOUT TP ORDER: {bot_id} sell {side} {quantity}x @{tp_price}¢ oid={tp_oid}')
+                else:
+                    tp_info = ' · TP sell post failed (no oid)'
+                    print(f'⚠ SCOUT TP ORDER failed for {bot_id}: no order_id in response')
+            except Exception as tp_err:
+                tp_info = f' · TP sell post failed: {tp_err}'
+                print(f'⚠ SCOUT TP ORDER error for {bot_id}: {tp_err}')
+
         save_state()
 
         return jsonify({
             'success': True,
             'bot_id':  bot_id,
             'message': f'Watching {side.upper()} on {ticker} — SL: -{stop_loss_cents}¢'
-                       + (f', TP: +{take_profit_cents}¢' if take_profit_cents else ''),
+                       + (f', TP: +{take_profit_cents}¢' if take_profit_cents else '')
+                       + tp_info,
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500

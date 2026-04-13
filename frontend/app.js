@@ -12237,7 +12237,7 @@ async function loadTradeHistoryList() {
     if (!el) return;
     try {
         const dateParam = selectedHistoryDays.length ? `&dates=${selectedHistoryDays.join(',')}` : '';
-        const resp = await fetch(`${API_BASE}/bot/history?limit=200${dateParam}`);
+        const resp = await fetch(`${API_BASE}/bot/history?limit=999999${dateParam}`);
         const data = await resp.json();
         let trades = (data.trades || []).filter(t => t.type !== 'watch' && t.type !== 'middle' && !['anchor_dog','anchor_ladder'].includes(t.bot_category) && !['anchor_sellback','ladder_sellback'].includes(t.result));
 
@@ -12780,14 +12780,14 @@ async function loadBetsHistory() {
     if (!listEl) return;
     try {
         const dateParam = selectedHistoryDays.length ? `&dates=${selectedHistoryDays.join(',')}` : '';
-        const resp = await fetch(`${API_BASE}/bot/history?limit=500&category=watch${dateParam}`);
+        const resp = await fetch(`${API_BASE}/bot/history?limit=999999&category=watch${dateParam}`);
         const data = await resp.json();
         const trades = (data.trades || []).filter(t => t.type === 'watch');
 
         // ── Calendar (all bets, ignore date filter) ──
         if (calPanel) {
             try {
-                const calResp = await fetch(`${API_BASE}/bot/history?limit=5000&category=watch`);
+                const calResp = await fetch(`${API_BASE}/bot/history?limit=999999&category=watch`);
                 const calData = await calResp.json();
                 const allBets = (calData.trades || []).filter(t => t.type === 'watch');
                 const dayMap = {};
@@ -12969,14 +12969,14 @@ async function loadMiddleHistory() {
     if (!listEl) return;
     try {
         const dateParam = selectedHistoryDays.length ? `&dates=${selectedHistoryDays.join(',')}` : '';
-        const resp = await fetch(`${API_BASE}/bot/history?limit=500&category=middle${dateParam}`);
+        const resp = await fetch(`${API_BASE}/bot/history?limit=999999&category=middle${dateParam}`);
         const data = await resp.json();
         const trades = (data.trades || []).filter(t => t.type === 'middle');
 
         // ── Calendar (all middles, ignore date filter) ──
         if (calPanel) {
             try {
-                const calResp = await fetch(`${API_BASE}/bot/history?limit=5000&category=middle`);
+                const calResp = await fetch(`${API_BASE}/bot/history?limit=999999&category=middle`);
                 const calData = await calResp.json();
                 const allMiddle = (calData.trades || []).filter(t => t.type === 'middle');
                 const dayMap = {};
@@ -13290,39 +13290,45 @@ function renderDogStatsAndDepth(trades, pnl) {
 
     // ── Stats panel ──
     if (statsPanel) {
+        // Always compute ALL stats from the trades array (respects all active filters)
+        const netPnl = trades.reduce((s,t) => s + (t.profit_cents||0) - (t.loss_cents||0), 0);
+        const wins = trades.filter(t => (t.profit_cents||0) - (t.loss_cents||0) > 0).length;
+        const losses = trades.filter(t => (t.profit_cents||0) - (t.loss_cents||0) < 0).length;
+        const totalTrades = wins + losses;
+        const winRate = totalTrades > 0 ? Math.round(wins / totalTrades * 100) : 0;
+        const avgProfit = totalTrades > 0 ? (netPnl / totalTrades).toFixed(1) : '—';
+        const totalContracts = trades.reduce((s, t) => s + (t.quantity || 1), 0);
         const hedgeTrades = trades.filter(t => t.raw_hedge_ms != null);
         const avgHedgeMs = hedgeTrades.length > 0 ? (hedgeTrades.reduce((s,t) => s + t.raw_hedge_ms, 0) / hedgeTrades.length).toFixed(1) : '—';
-        const avgDepth = trades.length > 0 ? (trades.reduce((s,t) => s + (t.anchor_depth||0), 0) / trades.length).toFixed(1) : '—';
-        const sellbacks = trades.filter(t => t.result === 'anchor_sellback' || t.result === 'ladder_sellback').length;
+        const hfTrades = trades.filter(t => t.hedge_fill_latency_ms != null && t.hedge_fill_latency_ms < 300000);
+        const avgHedgeFillS = hfTrades.length > 0 ? (hfTrades.reduce((s,t) => s + t.hedge_fill_latency_ms, 0) / hfTrades.length / 1000) : null;
+        const fmtFillTime = (s) => { if (s === null) return '—'; if (s < 60) return `${s.toFixed(0)}s`; return `${Math.floor(s/60)}m ${Math.round(s%60)}s`; };
 
-        const isFiltered = _phantomActiveSport !== 'all' || _phantomActiveDepth !== 'all';
-        let dLtNet, dDNet, ltWins, ltLosses, dDWins, dDLosses;
+        const pnlCol = netPnl >= 0 ? '#ffaa00' : '#ff4444';
+        const avgCol = parseFloat(avgProfit) >= 0 ? '#ffaa00' : '#ff4444';
 
-        if (isFiltered) {
-            dLtNet = trades.reduce((s,t) => s + (t.profit_cents||0) - (t.loss_cents||0), 0);
-            dDNet = dLtNet;
-            ltWins = trades.filter(t => (t.profit_cents||0) - (t.loss_cents||0) > 0).length;
-            ltLosses = trades.filter(t => (t.profit_cents||0) - (t.loss_cents||0) < 0).length;
-            dDWins = ltWins;
-            dDLosses = ltLosses;
-        } else {
-            dLtNet = pnl.lifetime_dog_net_cents || 0;
-            dDNet = pnl.dog_net_cents || 0;
-            ltWins = pnl.lifetime_dog_wins || 0;
-            ltLosses = pnl.lifetime_dog_losses || 0;
-            dDWins = pnl.dog_wins || 0;
-            dDLosses = pnl.dog_losses || 0;
+        // Build smart label from active filters
+        const hasDateFilter = selectedHistoryDays.length > 0;
+        const hasSportFilter = _phantomActiveSport !== 'all';
+        const hasDepthFilter = _phantomActiveDepth !== 'all';
+        const hasAnyFilter = hasDateFilter || hasSportFilter || hasDepthFilter;
+        let filterLabel = 'Lifetime';
+        if (hasAnyFilter) {
+            const parts = [];
+            if (hasDateFilter) {
+                const uniqueMonths = [...new Set(selectedHistoryDays.map(d => d.substring(0, 7)))];
+                parts.push(uniqueMonths.length === 1 ? new Date(uniqueMonths[0] + '-01').toLocaleDateString('en', {month:'short',year:'numeric'}) : `${selectedHistoryDays.length} days`);
+            }
+            if (hasSportFilter) parts.push(_phantomActiveSport);
+            if (hasDepthFilter) parts.push(_phantomActiveDepth + '¢');
+            filterLabel = parts.join(' · ');
         }
 
-        const dLtCol = dLtNet >= 0 ? '#00ff88' : '#ff4444';
-        const dDCol = dDNet >= 0 ? '#00ff88' : '#ff4444';
-        const ltTotal = ltWins + ltLosses;
-        const ltWinRate = ltTotal > 0 ? Math.round(ltWins / ltTotal * 100) : 0;
-        const ltAvgProfit = ltTotal > 0 ? (dLtNet / ltTotal).toFixed(1) : '—';
-        const ltAvgCol = dLtNet >= 0 ? '#00ff88' : '#ff4444';
-        const pnlLabel = isFiltered
-            ? (_phantomActiveSport !== 'all' ? _phantomActiveSport : 'All') + (_phantomActiveDepth !== 'all' ? ' · ' + _phantomActiveDepth + '¢' : '')
-            : 'Lifetime';
+        // Today P&L from /api/pnl (only when no date filter)
+        const dDNet = !hasDateFilter ? (pnl.dog_net_cents || 0) : null;
+        const dDWins = !hasDateFilter ? (pnl.dog_wins || 0) : 0;
+        const dDLosses = !hasDateFilter ? (pnl.dog_losses || 0) : 0;
+        const dDCol = dDNet !== null ? (dDNet >= 0 ? '#ffaa00' : '#ff4444') : null;
 
         // Depth capture ratio
         let captureRatio = 0, avgCapture = '—', avgFloorDisp = '—';
@@ -13347,30 +13353,21 @@ function renderDogStatsAndDepth(trades, pnl) {
             captureRatio = totFloor > 0 ? Math.round((totCap / totFloor) * 100) : 0;
         }
 
-        // Total contracts
-        const totalContracts = trades.reduce((s, t) => s + (t.quantity || 1), 0);
-
-        // Hedge fill time (post to fill, not post latency)
-        const hfTrades = trades.filter(t => t.hedge_fill_latency_ms != null && t.hedge_fill_latency_ms < 300000);
-        const avgHedgeFillS = hfTrades.length > 0 ? (hfTrades.reduce((s,t) => s + t.hedge_fill_latency_ms, 0) / hfTrades.length / 1000) : null;
-        const fmtFillTime = (s) => { if (s === null) return '—'; if (s < 60) return `${s.toFixed(0)}s`; return `${Math.floor(s/60)}m ${Math.round(s%60)}s`; };
-
         const _bub = (label, value, sub, color) => `<div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #ffaa0018;">
             <div style="color:#ffaa00;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${label}</div>
             <div style="color:${color};font-size:22px;font-weight:800;">${value}</div>
             ${sub ? `<div style="color:#555;font-size:10px;margin-top:2px;">${sub}</div>` : ''}
         </div>`;
 
-        statsPanel.innerHTML = ltTotal === 0 && !isFiltered
+        statsPanel.innerHTML = totalTrades === 0 && !hasAnyFilter
             ? '<p style="color:#555;text-align:center;font-size:12px;">No Phantom trades yet.</p>'
             : `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;">
-                ${_bub(`${pnlLabel} P&L`, `${dLtNet>=0?'+':''}$${(dLtNet/100).toFixed(2)}`, `${ltWins}W / ${ltLosses}L`, dLtCol)}
-                ${!isFiltered ? _bub('Daily P&L', `${dDNet>=0?'+':''}$${(dDNet/100).toFixed(2)}`, `${dDWins}W / ${dDLosses}L today`, dDCol) : ''}
-                ${_bub('Win Rate', `${ltWinRate}%`, `${ltWins}W / ${ltLosses}L`, '#ffaa00')}
-                ${_bub('Avg Profit', ltAvgProfit === '—' ? '—' : `${parseFloat(ltAvgProfit)>=0?'+':''}${ltAvgProfit}¢`, `${ltTotal} trades`, ltAvgCol)}
-                ${_bub('Sellbacks', sellbacks, `${ltTotal > 0 ? Math.round(sellbacks / ltTotal * 100) : 0}% of trades`, '#ff4444')}
-                ${_bub('Trades', ltTotal, `${ltWins}W / ${ltLosses}L`, '#ffaa00')}
-                ${_bub('Contracts', totalContracts, 'total pushed', '#ff66aa')}
+                ${_bub(`${filterLabel} P&L`, `${netPnl>=0?'+':''}$${(netPnl/100).toFixed(2)}`, `${wins}W / ${losses}L`, pnlCol)}
+                ${dDNet !== null ? _bub('Today P&L', `${dDNet>=0?'+':''}$${(dDNet/100).toFixed(2)}`, `${dDWins}W / ${dDLosses}L today`, dDCol) : ''}
+                ${_bub('Win Rate', `${winRate}%`, `${wins}W / ${losses}L`, '#ffaa00')}
+                ${_bub('Avg Profit', avgProfit === '—' ? '—' : `${parseFloat(avgProfit)>=0?'+':''}${avgProfit}¢`, `${totalTrades} trades`, avgCol)}
+                ${_bub('Trades', totalTrades, `${wins}W / ${losses}L`, '#ffaa00')}
+                ${_bub('Contracts', totalContracts.toLocaleString(), filterLabel, '#ff66aa')}
                 ${_bub('Hedge Speed', avgHedgeMs === '—' ? '—' : `${avgHedgeMs}ms`, `${hedgeTrades.length} samples`, '#ffaa00')}
                 ${_bub('Hedge Fill', fmtFillTime(avgHedgeFillS), `${hfTrades.length} samples`, '#ff66aa')}
             </div>`;
@@ -13811,7 +13808,7 @@ async function loadDogHistory() {
     if (!listEl) return;
     try {
         const dateParam = selectedHistoryDays.length ? `&dates=${selectedHistoryDays.join(',')}` : '';
-        const resp = await fetch(`${API_BASE}/bot/history?limit=500&category=anchor_dog,anchor_ladder,anchor_sellback${dateParam}`);
+        const resp = await fetch(`${API_BASE}/bot/history?limit=999999&category=anchor_dog,anchor_ladder,anchor_sellback${dateParam}`);
         const data = await resp.json();
         const trades = data.trades || [];
 

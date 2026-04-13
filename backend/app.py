@@ -21444,6 +21444,41 @@ def watch_position():
             print(f'⚠ Scout cleanup error for {ticker}: {cleanup_err}')
             cleanup_errors.append(str(cleanup_err))
 
+        # ── Auto-stop phantom bots on this ticker — Scout takes over ──
+        _stopped_phantoms = []
+        for _bid, _b in active_bots.items():
+            if _b.get('bot_category') != 'anchor_dog':
+                continue
+            if _b.get('status') in ('completed', 'stopped', 'cancelled'):
+                continue
+            _b_ticker = _b.get('ticker', '')
+            _b_hedge = _b.get('hedge_ticker', _b_ticker)
+            if _b_ticker == ticker or _b_hedge == ticker:
+                # Cancel any live dog order
+                _dog_oid = _b.get('dog_order_id')
+                if _dog_oid:
+                    try:
+                        _safe_cancel(_dog_oid, f'scout_stops_phantom_{_bid}')
+                    except Exception:
+                        pass
+                # Cancel any live fav order
+                _fav_oid = _b.get('fav_order_id')
+                if _fav_oid:
+                    try:
+                        _safe_cancel(_fav_oid, f'scout_stops_phantom_{_bid}')
+                    except Exception:
+                        pass
+                _b['status'] = 'stopped'
+                _b['stopped_at'] = time.time()
+                _b['_stop_reason'] = 'scout_orphan_cleanup'
+                _b['_smart_stopped'] = True
+                _b['_smart_stop_reason'] = 'scout_orphan_cleanup'
+                _stopped_phantoms.append(_bid)
+                print(f'🛑 SCOUT STOPS PHANTOM: {_bid} — Scout assigned to {ticker}, phantom auto-stopped')
+                bot_log('PHANTOM_STOPPED_BY_SCOUT', _bid, {'ticker': ticker, 'scout_ticker': ticker})
+        if _stopped_phantoms:
+            save_state()
+
         bot_id = f"watch_{ticker}_{int(time.time())}"
         active_bots[bot_id] = {
             'type':              'watch',

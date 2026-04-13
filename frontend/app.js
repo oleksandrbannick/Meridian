@@ -9034,6 +9034,14 @@ async function addRuns(botId) {
 // Cancel bot
 // Restart a smart-mode bot (no prompt, just restart)
 async function restartSmart(botId) {
+    const bots = window._lastBotsData || {};
+    const bot = bots[botId];
+    // Phantom bots: open edit modal with restart button so user can adjust settings
+    if (bot && (bot.bot_category === 'anchor_dog' || bot.bot_category === 'anchor_ladder')) {
+        phantomModify(botId, true);  // true = restart mode
+        return;
+    }
+    // Non-phantom: direct restart
     try {
         const resp = await fetch(`${API_BASE}/bot/add-runs/${botId}`, {
             method: 'POST',
@@ -9250,15 +9258,19 @@ async function scoutModifySave(botId) {
     }
 }
 
-async function phantomModify(botId) {
+async function phantomModify(botId, restartMode = false) {
     const bots = window._lastBotsData || {};
     const bot = bots[botId];
     if (!bot) return;
     const curQty = bot.quantity || 1;
     const curDepth = bot.anchor_depth || 5;
     const status = bot.status || '';
+    const isStopped = status === 'stopped' || status === 'completed';
+    const isRestart = restartMode || isStopped;
     const isMidHedge = status === 'fav_hedge_posted';
-    const statusNote = isMidHedge
+    const statusNote = isRestart
+        ? `<div style="color:#ffaa00;font-size:10px;margin-bottom:8px;">⚡ Review settings before restarting</div>`
+        : isMidHedge
         ? '<div style="color:#ff8800;font-size:10px;margin-bottom:8px;">⚠ Mid-hedge — changes apply on next run</div>'
         : status === 'waiting_repeat'
         ? '<div style="color:#00e5ff;font-size:10px;margin-bottom:8px;">Waiting for next run — changes apply immediately</div>'
@@ -9271,7 +9283,7 @@ async function phantomModify(botId) {
     const html = `
         <div style="background:#0f1419;border:1px solid #ff66aa30;border-radius:14px;padding:20px;max-width:320px;position:relative;overflow:hidden;">
             <div style="position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,#ffaa00,#ff66aa);opacity:0.6;"></div>
-            <div style="color:#ff66aa;font-weight:800;font-size:13px;margin-bottom:4px;letter-spacing:.03em;">Edit Phantom</div>
+            <div style="color:#ff66aa;font-weight:800;font-size:13px;margin-bottom:4px;letter-spacing:.03em;">${isRestart ? '⚡ Restart Phantom' : 'Edit Phantom'}</div>
             <div style="color:#8892a6;font-size:11px;margin-bottom:8px;">${formatBotDisplayName(bot.ticker || '', bot.spread_line || '', bot.market_title || '')} · ${(bot.dog_side || '?').toUpperCase()}</div>
             ${statusNote}
             <div style="margin-bottom:14px;">
@@ -9301,7 +9313,7 @@ async function phantomModify(botId) {
                 <div id="phantom-edit-depth-hint" style="color:#ff66aa;font-size:9px;margin-top:6px;text-align:center;">${autoDepth ? 'PPI auto-adjusts depth each run' : 'Dog posts at bid - ' + curDepth + 'c'}</div>
             </div>
             <div style="display:flex;gap:8px;">
-                <button onclick="phantomModifySave('${botId}')" style="flex:1;background:linear-gradient(135deg,#ffaa00,#ff66aa);color:#000;border:none;border-radius:50px;padding:10px;font-size:12px;font-weight:800;cursor:pointer;letter-spacing:.03em;box-shadow:0 4px 15px #ff66aa25;transition:all .2s;">Save</button>
+                <button onclick="phantomModifySave('${botId}', ${isRestart})" style="flex:1;background:linear-gradient(135deg,#ffaa00,#ff66aa);color:#000;border:none;border-radius:50px;padding:10px;font-size:12px;font-weight:800;cursor:pointer;letter-spacing:.03em;box-shadow:0 4px 15px #ff66aa25;transition:all .2s;">${isRestart ? '⚡ Restart' : 'Save'}</button>
                 <button onclick="document.getElementById('phantom-modify-modal').remove()" style="flex:1;background:#1a1f2a;color:#556;border:1px solid #1e2740;border-radius:50px;padding:10px;font-size:12px;cursor:pointer;transition:all .2s;">Cancel</button>
             </div>
         </div>`;
@@ -9348,25 +9360,44 @@ function togglePhantomAutoDepth() {
     }
 }
 
-async function phantomModifySave(botId) {
+async function phantomModifySave(botId, doRestart = false) {
     const modal = document.getElementById('phantom-modify-modal');
     const qty = parseInt(document.getElementById('phantom-edit-qty')?.value) || 1;
     const depth = Math.max(3, parseInt(document.getElementById('phantom-edit-depth')?.value) || 5);
     const autoDepth = modal?._autoDepth || false;
     try {
+        // Step 1: Save settings
         const resp = await fetch(`${API_BASE}/bot/phantom/edit/${botId}`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ quantity: qty, anchor_depth: depth, auto_depth: autoDepth })
         });
         const data = await resp.json();
-        if (data.ok) {
+        if (!data.ok) {
+            showNotification('Failed: ' + (data.error || 'unknown'));
+            return;
+        }
+
+        // Step 2: Restart if in restart mode
+        if (doRestart) {
+            const restartResp = await fetch(`${API_BASE}/bot/add-runs/${botId}`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ count: 0 }),
+            });
+            const restartData = await restartResp.json();
+            if (restartData.success) {
+                const depthLabel = autoDepth ? 'PPI auto' : `depth ${depth}¢`;
+                showNotification(`⚡ Phantom restarted: ${qty}x · ${depthLabel}`);
+                modal?.remove();
+            } else {
+                showNotification(restartData.error || 'Failed to restart', 'error');
+            }
+        } else {
             const applied = data.applied_now ? 'Applied now' : 'Queued for next run';
             const depthLabel = autoDepth ? 'PPI auto' : `depth ${depth}¢`;
             showNotification(`Phantom updated: ${qty}x · ${depthLabel} — ${applied}`);
             modal?.remove();
-        } else {
-            showNotification('Failed: ' + (data.error || 'unknown'));
         }
     } catch (e) {
         showNotification('Error: ' + e.message);

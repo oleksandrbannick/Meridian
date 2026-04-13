@@ -3400,26 +3400,34 @@ function displayOrderbookLadder(orderbook) {
 
     // Fav concentration for display
     const _favConc = favDepth > 0 ? favAnalysis.top1Qty / favDepth : 0;
-    // ── 3-Tier Participation Rate Sizing (fav L1 TOB) ──
-    // TOB = fav best bid qty (Level 1 only — the price your hedge sits at)
-    // Never size off top3 — you'd be programming in slippage acceptance
-    const _favTOB = favAnalysis.bestBidQty || 0;
+    // ── Double-Gate Participation Rate Sizing ──
+    // Gate 1: Camouflage Limit — fav bid L1 × 20% (don't look like a whale)
+    // Gate 2: Exit Capacity — fav ask L1 × 75% (can taker out if spread snaps to 1c)
+    // Ghost Liquidity Check: fav top-3 must be >= 3x order size (structural support)
+    const _favBidTOB = favAnalysis.bestBidQty || 0;
+    const _favAskTOB = dogAnalysis.bestBidQty || 0; // dog bid = fav ask in binary market
     const _favTop3 = favAnalysis.top3Qty || 0;
-    // Spoof shield: if L1 is >80% of L2+L3 combined, no structural support behind it
-    // Treat as THIN regardless of how big the L1 number looks
-    const _spoofed = _favTop3 > 0 && _favTOB > _favTop3 * 0.80;
-    // Tier 1: THIN (<500 TOB or spoofed) → 15% — spoofer bots pull liq on contact
-    // Tier 2: STANDARD (500-5000 TOB) → 25% — genuine volume, blend in
-    // Tier 3: DEEP (>5000 TOB) → 40% — fast replenishment, can push harder
-    const _effectiveTier = _spoofed ? 1 : _favTOB < 500 ? 1 : _favTOB < 5000 ? 2 : 3;
-    const _participationRate = _effectiveTier === 1 ? 0.15 : _effectiveTier === 2 ? 0.25 : 0.40;
-    const suggestedQty = Math.min(99, Math.max(1, Math.floor(_favTOB * _participationRate)));
-    // Max safe = next tier's rate (aggressive ceiling)
-    const _maxRate = _effectiveTier === 1 ? 0.25 : _effectiveTier === 2 ? 0.40 : 0.50;
-    const maxSafeQty = Math.min(99, Math.max(1, Math.floor(_favTOB * _maxRate)));
-    // Tier labels
-    const qtyTier = _effectiveTier === 3 ? 'DEEP' : _effectiveTier === 2 ? 'STANDARD' : (_spoofed ? 'SPOOFED' : 'THIN');
-    const qtyTierCol = _effectiveTier === 3 ? '#00ff88' : _effectiveTier === 2 ? '#00ccff' : '#ff8800';
+    // Spoof shield: if L1 is >80% of top-3, no structural support — force conservative
+    const _spoofed = _favTop3 > 0 && _favBidTOB > _favTop3 * 0.80;
+    // Gate 1: Camouflage — 20% of fav bid L1
+    const _camoQty = Math.floor(_favBidTOB * 0.20);
+    // Gate 2: Exit capacity — 75% of fav ask L1 (taker exit if spread = 1c)
+    const _exitQty = _favAskTOB > 0 ? Math.floor(_favAskTOB * 0.75) : 99;
+    // Suggested = min of both gates
+    let suggestedQty = Math.min(99, Math.max(1, Math.min(_camoQty, _exitQty)));
+    // Ghost liquidity check: need 3x structural support behind you
+    if (_favTop3 > 0 && suggestedQty > Math.floor(_favTop3 / 3)) {
+        suggestedQty = Math.max(1, Math.floor(_favTop3 / 3));
+    }
+    // Spoof override: force conservative if L1 looks fake
+    if (_spoofed) suggestedQty = Math.min(suggestedQty, Math.max(1, Math.floor(_favBidTOB * 0.10)));
+    // Max safe = slightly more aggressive gates (30% camo, 90% exit)
+    let maxSafeQty = Math.min(99, Math.max(suggestedQty, Math.min(Math.floor(_favBidTOB * 0.30), _favAskTOB > 0 ? Math.floor(_favAskTOB * 0.90) : 99)));
+    if (_spoofed) maxSafeQty = Math.min(maxSafeQty, Math.max(1, Math.floor(_favBidTOB * 0.15)));
+    // Tier labels for display
+    const _effectiveTier = _spoofed ? 0 : _favBidTOB >= 5000 ? 3 : _favBidTOB >= 500 ? 2 : 1;
+    const qtyTier = _spoofed ? 'SPOOFED' : _effectiveTier === 3 ? 'DEEP' : _effectiveTier === 2 ? 'STANDARD' : _favBidTOB >= 50 ? 'THIN' : 'DRY';
+    const qtyTierCol = _spoofed ? '#ff4444' : _effectiveTier === 3 ? '#00ff88' : _effectiveTier === 2 ? '#00ccff' : _favBidTOB >= 50 ? '#ff8800' : '#ff4444';
 
     // Fill difficulty — how likely your anchor actually fills (separate from catch quality)
     const fillDiff = dogDepth < 100 ? 'easy fill' : dogDepth < 500 ? 'moderate' : dogDepth < 2000 ? 'busy' : dogDepth < 10000 ? 'crowded' : 'packed';
@@ -3562,7 +3570,7 @@ function displayOrderbookLadder(orderbook) {
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;padding-top:6px;border-top:1px solid #1e274033;">
             <span style="color:#8892a6;font-size:9px;">Room: <span style="color:${roomCol};font-weight:700;">${hedgeRoom}¢</span> <span style="color:${roomCol};">${roomLabel}</span></span>
-            <span style="color:#8892a6;font-size:9px;">Qty: <span style="color:#00ff88;font-weight:700;">${suggestedQty}</span> <span style="color:#555;">rec</span> · <span style="color:#ffaa00;font-weight:700;">${maxSafeQty}</span> <span style="color:#555;">max</span> · <span style="color:${qtyTierCol};font-weight:600;">${qtyTier}</span> <span style="color:#555;">(TOB:${_favTOB >= 1000 ? (_favTOB/1000).toFixed(1) + 'K' : _favTOB})</span></span>
+            <span style="color:#8892a6;font-size:9px;">Qty: <span style="color:#00ff88;font-weight:700;">${suggestedQty}</span> <span style="color:#555;">rec</span> · <span style="color:#ffaa00;font-weight:700;">${maxSafeQty}</span> <span style="color:#555;">max</span> · <span style="color:${qtyTierCol};font-weight:600;">${qtyTier}</span> <span style="color:#555;">(bid:${_favBidTOB >= 1000 ? (_favBidTOB/1000).toFixed(1) + 'K' : _favBidTOB} ask:${_favAskTOB >= 1000 ? (_favAskTOB/1000).toFixed(1) + 'K' : _favAskTOB})</span></span>
         </div>
     </div>`;
     const ladderEl = document.getElementById('orderbook-ladder');

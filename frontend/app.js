@@ -1517,7 +1517,6 @@ function displayMarkets(markets) {
     const phantomDetails = {};  // ticker → [{side, cross}] for phantom pills
     const pnlMap = {};  // ticker → total net P&L in cents (all bots, including completed)
     if (window._lastBotsData) {
-        const deadSt = new Set(['completed','stopped','cancelled']);
         const catLabel = { anchor_dog: 'phantom', anchor_ladder: 'phantom', ladder_arb: 'apex' };
         for (const bid in window._lastBotsData) {
             const b = window._lastBotsData[bid];
@@ -1527,7 +1526,8 @@ function displayMarkets(markets) {
                 const pnl = (b.net_pnl_cents || 0);
                 pnlMap[t] = (pnlMap[t] || 0) + pnl;
             }
-            if (deadSt.has(b.status)) continue;
+            // Show pill for ALL bots that exist — stopped/completed included
+            // so user always knows a bot is on this market before trying to place a new one
             if (!t) continue;
             let label = catLabel[b.bot_category] || (b.type === 'middle' ? 'meridian' : (b.type === 'watch' ? 'scout' : null));
             if (!label) continue;
@@ -1536,7 +1536,8 @@ function displayMarkets(markets) {
             // Track phantom details for side+cross display
             if (label === 'phantom') {
                 if (!phantomDetails[t]) phantomDetails[t] = [];
-                phantomDetails[t].push({ side: b.dog_side || '?', cross: !!b.cross_market });
+                const _isDead = b.status === 'completed' || b.status === 'stopped' || b.status === 'cancelled';
+                phantomDetails[t].push({ side: b.dog_side || '?', cross: !!b.cross_market, dead: _isDead });
                 // Cross-market: also tag the hedge ticker
                 if (b.cross_market && b.hedge_ticker && b.hedge_ticker !== t) {
                     const ht = b.hedge_ticker;
@@ -2434,10 +2435,11 @@ function createMarketRow(market, label) {
                 const crossMkt = phDetails.filter(p => p.cross);
                 if (sameMkt.length > 0) {
                     const c = BOT_COLORS['phantom'] || '#ffaa00';
+                    const allDead = sameMkt.every(p => p.dead);
                     const pill = document.createElement('span');
-                    pill.style.cssText = `display:inline-flex;align-items:center;gap:2px;padding:2px 6px;background:${c}22;border:1px solid ${c}55;border-radius:4px;font-size:9px;font-weight:700;color:${c};`;
-                    pill.innerHTML = `${botIconImg('phantom', 14)} <span style="font-size:8px;">=</span>`;
-                    pill.title = 'Phantom active (same market)';
+                    pill.style.cssText = `display:inline-flex;align-items:center;gap:2px;padding:2px 6px;background:${c}${allDead ? '11' : '22'};border:1px solid ${c}${allDead ? '33' : '55'};border-radius:4px;font-size:9px;font-weight:700;color:${c};${allDead ? 'opacity:0.5;' : ''}`;
+                    pill.innerHTML = `${botIconImg('phantom', 14)} <span style="font-size:8px;">${allDead ? '⏹' : '='}</span>`;
+                    pill.title = allDead ? 'Phantom stopped (restart from Bots tab)' : 'Phantom active (same market)';
                     iconRow.appendChild(pill);
                 }
                 for (const ph of crossMkt) {

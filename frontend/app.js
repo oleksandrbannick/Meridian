@@ -5869,7 +5869,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const statusMap = {
         'dog_anchor_posted': '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
         'dog_filled': '👻 FILLED — HEDGING', 'ladder_filled_no_fav': '👻 FILLED — HEDGING',
-        'fav_hedge_posted': bot._taker_fired ? '⚡ BID+1' : '⭐ HEDGE POSTED', 'waiting_repeat': bot._just_completed ? '✅ COMPLETED' : bot._flip_pending ? '⚡ FLIPPING' : '🔄 REPEATING',
+        'fav_hedge_posted': bot._game_over_holding ? '⏳ HOLDING — SETTLEMENT' : bot._taker_fired ? '⚡ BID+1' : '⭐ HEDGE POSTED', 'waiting_repeat': bot._just_completed ? '✅ COMPLETED' : bot._flip_pending ? '⚡ FLIPPING' : '🔄 REPEATING',
         'completed': _isSettled ? '🏁 SETTLED' : _isAwaitingSettlement ? '⏳ AWAITING SETTLEMENT' : _isDeathZone ? '🛑 END OF GAME' : _isSmartStopped ? '⏹ SMART STOP' : _isCompletedRuns ? '✅ COMPLETED RUNS' : '✅ COMPLETE',
         'stopped': _isDeathZone ? '🛑 END OF GAME' : _isSmartStopped ? '⏹ SMART STOP' : (bot._pending_sells?.length ? '📤 SELLING' : '🛑 STOPPED'),
         'awaiting_settlement': '⏳ AWAITING SETTLEMENT',
@@ -5877,7 +5877,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const borderMap = {
         'dog_anchor_posted': '#ffaa00', 'ladder_posted': '#ffaa00',
         'dog_filled': '#ff8800', 'ladder_filled_no_fav': '#ff8800',
-        'fav_hedge_posted': bot._taker_fired ? '#ff66aa' : '#00aaff', 'waiting_repeat': bot._just_completed ? '#00ff88' : bot._flip_pending ? '#ffaa00' : '#aa66ff',
+        'fav_hedge_posted': bot._game_over_holding ? '#818cf8' : bot._taker_fired ? '#ff66aa' : '#00aaff', 'waiting_repeat': bot._just_completed ? '#00ff88' : bot._flip_pending ? '#ffaa00' : '#aa66ff',
         'completed': _isSettled ? '#ffaa00' : _isAwaitingSettlement ? '#818cf8' : _isDeathZone ? '#ff4444' : _isSmartStopped ? '#00e5ff' : '#00ff88',
         'stopped': _isDeathZone ? '#ff4444' : _isSmartStopped ? '#00e5ff' : (bot._pending_sells?.length ? '#ffaa00' : '#ff4444'),
         'awaiting_settlement': '#818cf8',
@@ -7991,6 +7991,29 @@ async function loadBots() {
                         <span style="color:#555;">${repostCount > 0 ? `repost #${repostCount} · ` : ''}${repostLeft > 0 ? `repost in ${repostLeft.toFixed(0)}m` : 'repost ready'} · ${ageMin}m</span>
                     </div>
                 </div>`;
+            } else if (isAnchorDog && bot._game_over_holding && bot.status === 'fav_hedge_posted') {
+                // Game over — holding positions till settlement
+                const dogSide = (bot.dog_side || '?').toUpperCase();
+                const favSide = (bot.fav_side || '?').toUpperCase();
+                const dogPrice = bot.dog_price || '?';
+                const favPrice = bot.fav_price || '?';
+                const favFillQty = bot.fav_fill_qty || 0;
+                const qty = bot.quantity || 1;
+                const hedgedQty = favFillQty;
+                const unhedgedQty = qty - hedgedQty;
+                const holdDesc = hedgedQty > 0
+                    ? `${dogSide} ×${qty} @ ${dogPrice}¢ · ${hedgedQty}/${qty} hedged @ ${favPrice}¢`
+                    : `${dogSide} ×${qty} @ ${dogPrice}¢ · unhedged`;
+                const settleLine = unhedgedQty > 0
+                    ? `${unhedgedQty} contract${unhedgedQty > 1 ? 's' : ''} riding to settlement`
+                    : `Fully hedged — waiting for market to settle`;
+                stopLossInfo = `<div style="background:#818cf811;border:1px solid #818cf844;border-radius:5px;padding:6px 10px;font-size:10px;color:#818cf8;margin-top:6px;">
+                    <div style="margin-bottom:4px;">
+                        ⏳ <strong>HOLDING TILL SETTLEMENT</strong> — game over
+                    </div>
+                    <div style="color:#aaa;margin-bottom:2px;">${holdDesc}</div>
+                    <div style="color:#555;font-size:9px;">${settleLine} · will auto-resolve when Kalshi settles</div>
+                </div>`;
             } else if (isAnchorDog && (bot.status === 'dog_filled' || bot.status === 'fav_hedge_posted')) {
                 const dogSide = (bot.dog_side || '?').toUpperCase();
                 const favSide = (bot.fav_side || '?').toUpperCase();
@@ -8130,6 +8153,10 @@ async function loadBots() {
                 healthColor = '#ffaa00';
                 healthLabel = '🎯 ANCHORED';
                 anchoredHealthKey = 'waiting';
+            } else if (bot._game_over_holding && bot.status === 'fav_hedge_posted') {
+                healthColor = '#818cf8';
+                healthLabel = '⏳ SETTLING';
+                anchoredHealthKey = 'holding';
             } else if (bot.status === 'dog_filled' || (bot.status === 'fav_hedge_posted' && !isAnchorLadder)) {
                 // Anchor-dog: dog filled, fav hedge in progress — time-based health
                 const hedgeTimeout = bot.hedge_timeout_s || 120;

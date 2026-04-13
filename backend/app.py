@@ -12372,6 +12372,9 @@ def _handle_phantom(bot_id, bot, actions):
 
         # Fav not filled yet — throttled settlement check (30s, 10s if death zone/game over)
         _game_over = _is_game_over_cached(ticker)
+        if _game_over and not bot.get('_game_over_holding'):
+            bot['_game_over_holding'] = True
+            save_state()
         _settle_interval = 10 if (bot.get('_death_zone_stopped') or _game_over) else 30
         if now - bot.get('_last_settle_check', 0) >= _settle_interval:
             bot['_last_settle_check'] = now

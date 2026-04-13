@@ -13383,10 +13383,10 @@ function renderDogStatsAndDepth(trades, pnl) {
                 ${_bub('Win Rate', `${winRate}%`, `${hasAnyFilter ? filterLabel : 'lifetime'}`, '#ffaa00')}
                 ${_bub('Avg Profit', avgProfit === '—' ? '—' : `${parseFloat(avgProfit)>=0?'+':''}${avgProfit}¢`, `${totalTrades} trades`, avgCol)}
                 ${_bub('Trades', totalTrades, `${wins}W / ${losses}L`, '#ffaa00')}
-                ${hasAnyFilter ? _bub(`${filterLabel}`, filteredContracts.toLocaleString(), 'contracts', '#ff66aa') : _bub('Hedge Speed', avgHedgeMs === '—' ? '—' : `${avgHedgeMs}ms`, `${hedgeTrades.length} samples`, '#ffaa00')}
                 ${_bub(`${monthlyLabel}`, monthlyContracts.toLocaleString(), `${monthlyPct}% of 300k goal`, monthlyPct >= 100 ? '#00ff88' : '#ff66aa')}
                 ${_bub('Lifetime', lifetimeContracts.toLocaleString(), 'contracts', '#ff66aa')}
-                ${hasAnyFilter ? _bub('Hedge Speed', avgHedgeMs === '—' ? '—' : `${avgHedgeMs}ms`, `${hedgeTrades.length} samples`, '#ffaa00') : ''}
+                ${hasAnyFilter ? _bub(`${filterLabel}`, filteredContracts.toLocaleString(), 'contracts', '#ff66aa') : _bub('Total Qty', (totalTrades > 0 ? Math.round(filteredContracts / totalTrades) : 0) + 'x avg', `${filteredContracts.toLocaleString()} contracts`, '#ff66aa')}
+                ${_bub('Hedge Speed', avgHedgeMs === '—' ? '—' : `${avgHedgeMs}ms`, `${hedgeTrades.length} samples`, '#ffaa00')}
                 ${_bub('Hedge Fill', fmtFillTime(avgHedgeFillS), `${hfTrades.length} samples`, '#ff66aa')}
             </div>`;
     }

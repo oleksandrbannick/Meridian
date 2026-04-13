@@ -6729,13 +6729,12 @@ def place_straight_order():
         if quantity < 1:
             return jsonify({'error': 'Quantity must be at least 1'}), 400
 
-        # Place limit order
+        # Place limit order (no post_only — Scout orders can cross the spread)
         order_kwargs = {
             'ticker': ticker,
             'side': side,
             'action': 'buy',
             'count': quantity,
-            'post_only': True,
         }
         if side == 'yes':
             order_kwargs['yes_price'] = price

@@ -2404,8 +2404,12 @@ def kalshi_fee_cents(yes_price: int, no_price: int, qty: int) -> int:
 
 def _smart_mode_should_repeat(bot, cycle_pnl, exit_type=None):
     """Smart mode repeat decision. Returns (should_repeat: bool, reason: str).
-    Smart mode: repeat on wins, stop after 2 consecutive losses.
-    Losing dual exits count toward loss streak — repeated DE losses = bad market."""
+
+    Apex MM: uses cumulative loss limit — stop when total realized P&L drops
+    below negative threshold (loss_limit_cents). MMs naturally have small losses
+    from wall fills and stop-loss exits; consecutive-loss counting kills them.
+
+    Other bots: stop after 2 consecutive losses (legacy behavior)."""
     # General stop flag (from /api/bot/stop) — prevents next repeat for ANY bot type
     if bot.get('_stop_pending'):
         return False, 'manual_stop'
@@ -2413,6 +2417,26 @@ def _smart_mode_should_repeat(bot, cycle_pnl, exit_type=None):
         return None, ''  # not smart mode, use normal repeat logic
     if bot.get('_smart_stopped'):
         return False, 'manual_stop'
+
+    # ── Apex MM: cumulative loss limit ──
+    if bot.get('type') == 'apex_mm':
+        total_pnl = bot.get('realized_pnl_cents', 0)
+        loss_limit = bot.get('loss_limit_cents', 0)
+        # loss_limit_cents is stored as positive (e.g., 50 = stop after losing 50c)
+        if loss_limit > 0 and total_pnl <= -loss_limit:
+            bot['_smart_stopped'] = True
+            bot['_smart_stop_reason'] = 'loss_limit'
+            return False, f'loss_limit (pnl={total_pnl}c <= -{loss_limit}c)'
+        # Track wins/losses for stats display (but don't stop on consecutive losses)
+        if cycle_pnl < 0:
+            bot['consecutive_losses'] = bot.get('consecutive_losses', 0) + 1
+            bot['_smart_losses'] = bot.get('_smart_losses', 0) + 1
+        elif cycle_pnl > 0:
+            bot['consecutive_losses'] = 0
+            bot['_smart_wins'] = bot.get('_smart_wins', 0) + 1
+        return True, f'mm_continue (pnl={total_pnl}c, limit=-{loss_limit}c)'
+
+    # ── Other bots: consecutive loss stop ──
     losses = bot.get('consecutive_losses', 0)
     if cycle_pnl < 0:
         losses += 1
@@ -8861,12 +8885,14 @@ def _apex_mm_record_round_trip(bot_id, bot, fill_side, fill_price, close_qty):
     bot['realized_pnl_cents'] = bot.get('realized_pnl_cents', 0) + net_pnl
     bot['round_trips_completed'] = bot.get('round_trips_completed', 0) + 1
 
-    # Smart mode tracking — only wins reset the counter, breakeven (0c) doesn't
-    if net_pnl < 0:
-        bot['consecutive_losses'] = bot.get('consecutive_losses', 0) + 1
-    elif net_pnl > 0:
-        bot['consecutive_losses'] = 0
-    # net_pnl == 0: breakeven — don't reset, don't increment
+    # Smart mode tracking — for non-MM bots, track consecutive losses per round trip.
+    # Apex MM uses cumulative loss limit instead (tracked in _smart_mode_should_repeat).
+    if bot.get('type') != 'apex_mm':
+        if net_pnl < 0:
+            bot['consecutive_losses'] = bot.get('consecutive_losses', 0) + 1
+        elif net_pnl > 0:
+            bot['consecutive_losses'] = 0
+        # net_pnl == 0: breakeven — don't reset, don't increment
 
     # Deduct from opposite inventory
     opp_net = bot.get(f'net_{opposite}', 0)

@@ -4058,8 +4058,15 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
             })
             save_state()
         except Exception as e:
-            if '404' not in str(e):
-                print(f'⚠ WS PHANTOM SNAP UP FAIL: {bot_id}: {e}')
+            if '404' in str(e):
+                # Order is dead — clear it so monitor recovery can repost
+                bot['fav_order_id'] = None
+                bot['status'] = 'dog_filled'
+                bot['_hedge_fired'] = False
+                print(f'⚠ WS SNAP 404: {bot_id} order dead, clearing for repost')
+                save_state()
+            else:
+                print(f'⚠ WS PHANTOM SNAP FAIL: {bot_id}: {e}')
         finally:
             _phantom_drop_lock.release()
         return  # one snap per tick max

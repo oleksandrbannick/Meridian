@@ -7122,9 +7122,11 @@ function _renderWatchBotCard(bot, botId, container, gameScores) {
             </div>
             ` : `
             <div style="background:#060a14;border:1px solid #ffd74033;border-radius:8px;padding:10px;">
-                <div style="color:#ffd740;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">📡 MARKET · ${hasTPOrder ? 'TP ORDER LIVE' : 'WATCHING'}</div>
-                <div style="color:#fff;font-weight:700;font-size:14px;margin-bottom:4px;"><span style="color:#00ff88;">${liveBid || '?'}</span><span style="color:#334;font-size:11px;"> / </span><span style="color:#ff4444;">${liveAsk || '?'}</span></div>
-                <div style="color:#555;font-size:10px;margin-bottom:6px;">bid <strong style="color:#ffd740;">${liveBid || '?'}¢</strong> · ask <strong style="color:#ffd740;">${liveAsk || '?'}¢</strong></div>
+                <div style="color:#ffd740;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">📡 MARKET${hasTPOrder ? ' · TP LIVE' : ''}</div>
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                    <div><span style="color:#556;font-size:9px;">BID </span><span style="color:#00ff88;font-weight:700;font-size:14px;">${liveBid || '?'}¢</span></div>
+                    <div><span style="color:#556;font-size:9px;">ASK </span><span style="color:#ff4444;font-weight:700;font-size:14px;">${liveAsk || '?'}¢</span></div>
+                </div>
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
                     <span style="color:#ff6666;font-size:10px;font-weight:700;">🛑 SL ${sl > 0 ? (entry - sl) + '¢' : 'off'}</span>
                     <span style="color:#00ff88;font-size:10px;font-weight:700;">✅ TP ${tp > 0 ? (entry + tp) + '¢' : 'off'}${hasTPOrder ? ' 📤' : ''}</span>
@@ -7133,7 +7135,7 @@ function _renderWatchBotCard(bot, botId, container, gameScores) {
                     <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
                         <div style="width:100%;height:100%;background:#00ff8844;border-radius:2px;"></div>
                     </div>
-                    <span style="color:#00ff88;font-size:9px;font-weight:700;">TP resting @ ${entry + tp}¢</span>
+                    <span style="color:#00ff88;font-size:9px;font-weight:700;">sell @ ${entry + tp}¢</span>
                 </div>` : ''}
             </div>
             `}

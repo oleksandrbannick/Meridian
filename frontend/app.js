@@ -5861,7 +5861,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const statusMap = {
         'dog_anchor_posted': '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
         'dog_filled': '👻 FILLED — HEDGING', 'ladder_filled_no_fav': '👻 FILLED — HEDGING',
-        'fav_hedge_posted': bot._taker_fired ? '⚡ TAKER' : '⭐ HEDGE POSTED', 'waiting_repeat': bot._just_completed ? '✅ COMPLETED' : bot._flip_pending ? '⚡ FLIPPING' : '🔄 REPEATING',
+        'fav_hedge_posted': bot._taker_fired ? '⚡ BID+1' : '⭐ HEDGE POSTED', 'waiting_repeat': bot._just_completed ? '✅ COMPLETED' : bot._flip_pending ? '⚡ FLIPPING' : '🔄 REPEATING',
         'completed': _isSettled ? '🏁 SETTLED' : _isAwaitingSettlement ? '⏳ AWAITING SETTLEMENT' : _isDeathZone ? '🛑 END OF GAME' : _isSmartStopped ? '⏹ SMART STOP' : _isCompletedRuns ? '✅ COMPLETED RUNS' : '✅ COMPLETE',
         'stopped': _isDeathZone ? '🛑 END OF GAME' : _isSmartStopped ? '⏹ SMART STOP' : (bot._pending_sells?.length ? '📤 SELLING' : '🛑 STOPPED'),
         'awaiting_settlement': '⏳ AWAITING SETTLEMENT',
@@ -5869,7 +5869,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const borderMap = {
         'dog_anchor_posted': '#ffaa00', 'ladder_posted': '#ffaa00',
         'dog_filled': '#ff8800', 'ladder_filled_no_fav': '#ff8800',
-        'fav_hedge_posted': bot._taker_fired ? '#ff7043' : '#00aaff', 'waiting_repeat': bot._just_completed ? '#00ff88' : bot._flip_pending ? '#ffaa00' : '#aa66ff',
+        'fav_hedge_posted': bot._taker_fired ? '#ff66aa' : '#00aaff', 'waiting_repeat': bot._just_completed ? '#00ff88' : bot._flip_pending ? '#ffaa00' : '#aa66ff',
         'completed': _isSettled ? '#ffaa00' : _isAwaitingSettlement ? '#818cf8' : _isDeathZone ? '#ff4444' : _isSmartStopped ? '#00e5ff' : '#00ff88',
         'stopped': _isDeathZone ? '#ff4444' : _isSmartStopped ? '#00e5ff' : (bot._pending_sells?.length ? '#ffaa00' : '#ff4444'),
         'awaiting_settlement': '#818cf8',
@@ -6059,13 +6059,12 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     const bidPlus1 = (favBid || 0) + 1;
                     const spread = (favAsk || 0) - (favBid || 0);
                     if (left > 0) {
-                        return `<div style="color:${tierCol};font-size:9px;font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:6px;">
-                            <span style="background:${tierCol}18;padding:1px 5px;border-radius:3px;">${tier} · ${fdLabel}</span>
+                        return `<div style="color:#ff66aa;font-size:9px;font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:6px;">
+                            <span style="background:#ff66aa18;padding:1px 5px;border-radius:3px;">${tier} · ${fdLabel}</span>
                             <span>bid+1 in ${Math.ceil(left)}s</span>
                         </div>`;
                     } else {
-                        const mode = spread <= 1 ? 'CROSS' : `BID+1→${bidPlus1}¢`;
-                        return `<div style="color:#ff8800;font-size:9px;font-weight:700;margin-bottom:4px;">⚡ ${mode} · ${tier} · spread ${spread}¢</div>`;
+                        return `<div style="color:#ff66aa;font-size:9px;font-weight:700;margin-bottom:4px;">⚡ BID+1 → ${bidPlus1}¢ · ${tier}</div>`;
                     }
                 })() : ''}
                 ${favPrice > 0 ? `
@@ -6269,7 +6268,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     + (!_isExit && _comb2 > 0 ? '<span style="color:#3a4560;">=</span><span style="color:' + _combCol2 + ';font-weight:700;">' + _comb2 + '</span>' : '')
                     + '</span>'
                     + (_depCombo ? '<span>' + _depCombo + '</span>' : '<span></span>')
-                    + '<span style="display:flex;align-items:center;gap:2px;">' + (_hmsStr || '') + (r.taker ? '<span style="color:#ffaa00;font-size:8px;font-weight:700;">T</span>' : '') + '</span>'
+                    + '<span style="display:flex;align-items:center;gap:2px;">' + (_hmsStr || '') + (r.taker ? '<span style="color:#ff66aa;font-size:8px;font-weight:700;">+1</span>' : '') + '</span>'
                     + '<span style="color:#00e5ff;font-weight:700;text-align:center;">x' + (r.qty || 1) + '</span>'
                     + '<span style="color:' + (r.pnl >= 0 ? '#00ff88' : '#ff4444') + ';font-weight:800;text-align:right;">' + (r.pnl >= 0 ? '+' : '') + r.pnl + '¢</span>'
                     + '</div>'
@@ -13912,8 +13911,8 @@ function filterPhantomLog() {
         const favPrice = t.fav_price || (favSide === 'yes' ? t.yes_price : t.no_price) || '?';
         const combined = (typeof dogPrice === 'number' && typeof favPrice === 'number') ? dogPrice + favPrice : null;
         const qty = t.quantity || 1;
-        const taker = t.taker ? 'TKR' : 'MKR';
-        const takerCol = t.taker ? '#ff8800' : '#00ff88';
+        const taker = t.taker ? '+1' : 'MKR';
+        const takerCol = t.taker ? '#ff66aa' : '#00ff88';
 
         // Speed badges
         const rawMs = t.raw_hedge_ms;

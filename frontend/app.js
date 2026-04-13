@@ -6561,29 +6561,35 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 <span class="arr" style="color:#445;font-size:8px;">&#9660;</span>
             </div>
             <div id="${historyId}" style="display:block;margin-top:4px;">
-                ${rtLog.length > 0 ? rtLog.map((rt, i) => {
+                ${rtLog.length > 0 ? `<div style="color:#00d4ff;font-size:8px;font-weight:800;letter-spacing:1px;margin-bottom:2px;">RUNS</div>` +
+                    rtLog.map((rt, i) => {
                     const combCol = rt.combined < 99 ? '#00ff88' : rt.combined <= 100 ? '#ffaa00' : '#ff4444';
                     const pCol = rt.pnl >= 0 ? '#00ff88' : '#ff4444';
-                    return `<div style="display:grid;grid-template-columns:28px 1fr 36px 42px;align-items:center;padding:2px 0;font-size:10px;${i > 0 ? 'border-top:1px solid #0f1520;' : ''}">
+                    return `<div style="display:grid;grid-template-columns:28px 36px 36px 38px 30px 1fr;align-items:center;padding:2px 0;font-size:10px;${i > 0 ? 'border-top:1px solid #0f1520;' : ''}">
                         <span style="color:#00d4ff;">#${i+1}</span>
-                        <span><span style="color:#00d4ff;">${rt.entry_price}</span> <span style="color:#ff7043;">${rt.exit_price}</span> <span style="color:${combCol};font-weight:700;">${rt.combined}c</span></span>
-                        <span style="color:#ff7043;text-align:right;">x${rt.qty}</span>
+                        <span style="color:#00d4ff;text-align:right;">${rt.entry_price}c</span>
+                        <span style="color:#ff7043;text-align:right;">${rt.exit_price}c</span>
+                        <span style="color:${combCol};font-weight:700;text-align:right;">${rt.combined}c</span>
+                        <span style="color:#556;text-align:right;">x${rt.qty}</span>
                         <span style="color:${pCol};font-weight:700;text-align:right;">${rt.pnl >= 0 ? '+' : ''}${rt.pnl}c</span>
                     </div>`;
                 }).join('') : ''}
-                ${exitLog.length > 0 ? `<div style="margin-top:4px;padding-top:4px;border-top:1px solid #1a0a0a;">` +
+                ${exitLog.length > 0 ? `<div style="margin-top:6px;padding-top:4px;border-top:1px solid #1a0a0a;"><div style="color:#ff7043;font-size:8px;font-weight:800;letter-spacing:1px;margin-bottom:2px;">EXITS</div>` +
                     exitLog.map((ex, i) => {
                         const pCol = ex.pnl >= 0 ? '#00ff88' : '#ff4444';
-                        const sideLabel = ex.type === 'arb_complete' ? 'ARB EXIT' : `${(ex.held_side || '').toUpperCase()} EXIT`;
+                        const sideLabel = ex.type === 'arb_complete' ? 'ARB' : (ex.held_side === 'yes') ? 'YES' : 'NO';
                         const sideCol = ex.type === 'arb_complete' ? '#b388ff' : ((ex.held_side === 'yes') ? '#00d4ff' : '#ff7043');
                         const heldCol = (ex.held_side === 'yes') ? '#00d4ff' : '#ff7043';
                         const exitCol = (ex.held_side === 'yes') ? '#ff7043' : '#00d4ff';
                         const combPrice = ex.type === 'arb_complete' ? ex.held_avg + ex.exit_price : 0;
                         const combCol = combPrice > 0 ? (combPrice < 99 ? '#00ff88' : combPrice <= 100 ? '#ffaa00' : '#ff4444') : '';
-                        return `<div style="display:grid;grid-template-columns:62px 1fr 36px 42px;align-items:center;padding:2px 0;font-size:10px;${i > 0 ? 'border-top:1px solid #0f1520;' : ''}">
+                        const sellPrice = ex.type === 'arb_complete' ? ex.exit_price : ex.sell_price;
+                        return `<div style="display:grid;grid-template-columns:28px 36px 36px 38px 30px 1fr;align-items:center;padding:2px 0;font-size:10px;${i > 0 ? 'border-top:1px solid #0f1520;' : ''}">
                             <span style="color:${sideCol};font-weight:700;">${sideLabel}</span>
-                            <span><span style="color:${heldCol};">${ex.held_avg}c</span><span style="color:#334;">${ex.type === 'arb_complete' ? '·' : '>'}</span><span style="color:${exitCol};">${ex.type === 'arb_complete' ? ex.exit_price : ex.sell_price}c</span>${combPrice > 0 ? `<span style="color:#334;">·</span><span style="color:${combCol};font-weight:700;">${combPrice}c</span>` : ''}</span>
-                            <span style="color:#ff7043;text-align:right;">x${ex.qty}</span>
+                            <span style="color:${heldCol};text-align:right;">${ex.held_avg}c</span>
+                            <span style="color:${exitCol};text-align:right;">${sellPrice}c</span>
+                            <span style="text-align:right;">${combPrice > 0 ? `<span style="color:${combCol};font-weight:700;">${combPrice}c</span>` : ''}</span>
+                            <span style="color:#556;text-align:right;">x${ex.qty}</span>
                             <span style="color:${pCol};font-weight:700;text-align:right;">${ex.pnl >= 0 ? '+' : ''}${ex.pnl}c</span>
                         </div>`;
                     }).join('') + '</div>' : ''}

@@ -17610,6 +17610,13 @@ def list_bots():
                 bot['_dog_depth_top3'] = round(_lob.get_total_depth(_dog_side, 3))
                 bot['_fav_depth_top3'] = round(_lob.get_total_depth(_fav_side, 3))
                 bot['_obi_age_ms'] = round((time.time() - _lob.last_update_ts) * 1000)
+                # Double-gate qty recommendation from live book
+                _fav_ba = _lob.get_book_analysis(_fav_side)
+                _dog_ba = _lob.get_book_analysis(_dog_side)
+                bot['_fav_bid_l1'] = _fav_ba.get('top1Qty', 0)
+                bot['_fav_ask_l1'] = _dog_ba.get('top1Qty', 0)  # dog bid = fav ask
+                bot['_rec_qty'] = _qty_rec(_fav_ba)
+                bot['_max_qty'] = _qty_max(_fav_ba)
                 # Live PPI score + depth rec from book structure
                 # Use _live_ppi for display — do NOT overwrite _last_ppi (monitor hysteresis baseline)
                 _ppi, _ppi_rec, _ppi_det = _calculate_ppi(bot.get('ticker', ''), _fav_side, _dog_side)

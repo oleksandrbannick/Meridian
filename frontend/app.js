@@ -7084,7 +7084,7 @@ function _renderWatchBotCard(bot, botId, container, gameScores) {
                 ${!isStopped && !isSLSelling ? `<button onclick="scoutModify('${botId}')" style="background:#ffd74022;color:#ffd740;border:1px solid #ffd74044;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Edit</button>` : ''}
                 ${!isStopped ? `<button onclick="stopBot('${botId}')" style="background:#ff880022;color:#ff8800;border:1px solid #ff880044;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
                 ${!isStopped ? `<button onclick="releaseBot('${botId}')" style="background:#4488ff22;color:#4488ff;border:1px solid #4488ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Release</button>` : ''}
-                ${!isStopped ? `<button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>` : ''}
+                <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
             </div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">

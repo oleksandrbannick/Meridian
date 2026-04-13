@@ -12311,6 +12311,7 @@ def _handle_phantom(bot_id, bot, actions):
             # Verify ACTUAL fills on Kalshi — check every order this bot placed
             try:
                 _ph_oids = [bot.get('dog_order_id'), bot.get('fav_order_id')]
+                _ph_oids += [bot.get('yes_order_id'), bot.get('no_order_id')]  # Fallback: trade-level order IDs
                 _ph_oids += bot.get('_all_dog_order_ids', [])
                 _ph_oids += bot.get('_all_hedge_order_ids', [])  # Include replaced fav orders (amend/BID+1 creates new IDs)
                 _ph_oids = [o for o in _ph_oids if o]
@@ -12333,7 +12334,19 @@ def _handle_phantom(bot_id, bot, actions):
                     except Exception:
                         pass
                 _ph_unhedged = abs(_ph_yes - _ph_no)
-                if _ph_yes != _ph_no:
+                _has_both_sides = _ph_yes > 0 and _ph_no > 0
+                if _ph_yes != _ph_no and not _has_both_sides:
+                    # Only found fills on ONE side — fav order IDs are missing from the check list.
+                    # This is a data gap, NOT a real imbalance. Skip rehedge to avoid ghost hedges.
+                    print(f'⚠ PHANTOM VERIFY SKIP: {bot_id} one-sided data (YES={_ph_yes} NO={_ph_no}, checked={_ph_checked}) — fav orders missing, NOT rehedging')
+                    bot_log('PHANTOM_ORDER_VERIFY', bot_id, {
+                        'verified_yes': _ph_yes, 'verified_no': _ph_no,
+                        'unhedged': _ph_unhedged, 'orders_checked': _ph_checked,
+                        'local_dog_fill': bot.get('dog_fill_qty', 0), 'local_fav_fill': fav_filled,
+                        'skipped': 'one_sided_data',
+                    })
+                elif _ph_yes != _ph_no:
+                    # Both sides have fills but counts don't match — genuine imbalance
                     _ph_heavy = 'yes' if _ph_yes > _ph_no else 'no'
                     print(f'⚠ PHANTOM ORDER VERIFY: {bot_id} Kalshi fills YES={_ph_yes} NO={_ph_no} → {_ph_unhedged} unhedged {_ph_heavy}')
                     _push_notification('orphan_detected', f'⚠ Phantom {bot_id}: {_ph_unhedged} unhedged {_ph_heavy} on {ticker}', {

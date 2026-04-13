@@ -7692,6 +7692,12 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
                         pass
             return
 
+        # Re-read cost basis — concurrent WS fills may have shifted avg since top of function
+        avg_held = bot.get(f'avg_{held_side}_cost', 0)
+        net_held = abs(bot.get('net_yes', 0) - bot.get('net_no', 0))
+        if net_held <= 0:
+            return  # went flat during processing
+
         # Calculate exit price: breakeven with profit target (half width)
         # Post at the actual target — don't cap at bid. Being best bid is fine when exiting.
         # Snap-to-profit in walk_exit handles snapping down if market improves.
@@ -8329,6 +8335,36 @@ def _apex_mm_fresh_ladder(bot_id, bot):
         save_state()
         return False
 
+    # SAFETY: verify Kalshi is flat before posting fresh orders
+    # Catches late fills that arrived between caller's Kalshi check and this function
+    try:
+        api_read_limiter.wait()
+        _fl_pos = kalshi_client.get_positions(ticker=ticker)
+        _fl_pos_list = _fl_pos.get('market_positions', _fl_pos.get('positions', []))
+        _fl_kalshi_net = 0
+        for _fp in _fl_pos_list:
+            if _fp.get('ticker') == ticker:
+                _fl_kalshi_net = _parse_position_qty(_fp)
+                break
+        if _fl_kalshi_net != 0:
+            _fl_side = 'yes' if _fl_kalshi_net > 0 else 'no'
+            _fl_qty = abs(_fl_kalshi_net)
+            bot[f'net_{_fl_side}'] = _fl_qty
+            if bot.get(f'avg_{_fl_side}_cost', 0) == 0:
+                _fl_est = bot.get(f'live_{_fl_side}_ask', 0) or bot.get(f'live_{_fl_side}_bid', 50) or 50
+                bot[f'avg_{_fl_side}_cost'] = _fl_est
+                bot[f'total_{_fl_side}_cost'] = _fl_est * _fl_qty
+            print(f'🚨 FRESH LADDER KALSHI BLOCK: {bot_id} kalshi has {_fl_qty}x {_fl_side.upper()} — routing to exit instead')
+            bot_log('APEX_MM_FRESH_KALSHI_BLOCK', bot_id, {'side': _fl_side, 'qty': _fl_qty})
+            bot['status'] = 'market_making_active'
+            bot['_skew_active'] = True
+            bot['_skew_direction'] = f'exit_{("no" if _fl_side == "yes" else "yes")}'
+            threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _fl_side), daemon=True).start()
+            save_state()
+            return False
+    except Exception as _fle:
+        print(f'⚠ Fresh ladder Kalshi check failed: {_fle}')
+
     # Apply any deferred edits now that we're flat
     _pending = bot.pop('_pending_edit', None)
     if _pending:
@@ -8410,6 +8446,31 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
         print(f'⚠ APEX MM CYCLE REFILL: {bot_id} not flat (Y={net_yes} N={net_no}) — falling back to cycle_reset')
         _apex_mm_cycle_reset(bot_id, bot)
         return
+
+    # SAFETY: verify Kalshi agrees we're flat before refilling
+    try:
+        if api_read_limiter.try_wait():
+            _rf_pos = kalshi_client.get_positions(ticker=ticker)
+            _rf_pos_list = _rf_pos.get('market_positions', _rf_pos.get('positions', []))
+            _rf_kalshi_net = 0
+            for _rp in _rf_pos_list:
+                if _rp.get('ticker') == ticker:
+                    _rf_kalshi_net = _parse_position_qty(_rp)
+                    break
+            if _rf_kalshi_net != 0:
+                _rf_side = 'yes' if _rf_kalshi_net > 0 else 'no'
+                _rf_qty = abs(_rf_kalshi_net)
+                bot[f'net_{_rf_side}'] = _rf_qty
+                if bot.get(f'avg_{_rf_side}_cost', 0) == 0:
+                    _rf_est = bot.get(f'live_{_rf_side}_ask', 0) or bot.get(f'live_{_rf_side}_bid', 50) or 50
+                    bot[f'avg_{_rf_side}_cost'] = _rf_est
+                    bot[f'total_{_rf_side}_cost'] = _rf_est * _rf_qty
+                print(f'🚨 CYCLE REFILL KALSHI BLOCK: {bot_id} bot flat but kalshi has {_rf_qty}x {_rf_side.upper()} — aborting refill')
+                bot_log('APEX_MM_REFILL_KALSHI_BLOCK', bot_id, {'side': _rf_side, 'qty': _rf_qty})
+                _apex_mm_cycle_reset(bot_id, bot)
+                return
+    except Exception as _rfe:
+        print(f'⚠ Cycle refill Kalshi check failed: {_rfe}')
 
     # Clear consumed rungs (fill_qty >= qty) BEFORE any refill/pull decisions
     # so FILLED labels don't stick around on the card
@@ -8672,10 +8733,10 @@ def _apex_mm_begin_exit_inner(bot_id, bot, reason):
                     print(f'🚨 APEX MM BEGIN EXIT LATE FILL: {bot_id} {_side.upper()} +{_new_fills}x @{_price}c (kalshi={_kalshi_fills} ws_had={_ws_already})')
             level['oid'] = None
 
-    # Prune _all_placed_order_ids — prevent WS late fills from adding phantom inventory during exit
-    # All orders cancelled above; any fills during cancel were caught and counted
-    bot['_all_placed_order_ids'] = []
-    bot['_counted_order_fills'] = {}
+    # KEEP _all_placed_order_ids alive until after Kalshi position check —
+    # WS fills for old orders can still arrive between cancel and Kalshi verify.
+    # If we clear now, the WS handler can't match them and they become orphans.
+    # Clear happens after Kalshi check below.
     bot['_velocity_gated'] = False
     bot['_velocity_fills'] = []
 
@@ -8757,6 +8818,10 @@ def _apex_mm_begin_exit_inner(bot_id, bot, reason):
                 'side': _be_side, 'qty': _be_qty, 'reason': reason,
             }, level='ERROR')
             # Fall through to the else branch below to post exit sell
+
+        # NOW safe to clear tracking — Kalshi check has caught any in-flight fills
+        bot['_all_placed_order_ids'] = []
+        bot['_counted_order_fills'] = {}
 
         if net_yes == 0 and net_no == 0:
             # Confirmed flat — check smart mode before completing
@@ -14152,10 +14217,11 @@ def _handle_apex(bot_id, bot, actions):
             bot_log('APEX_MM_PULL_ENTRY', bot_id, {'reason': pull_reason, 'cancelled': cancelled, 'entry_side': entry_side_key[:3]})
             print(f'📊 APEX MM PULL ENTRY: {bot_id} cancelled {cancelled} {entry_side_key[:3]} orders — {pull_reason} (keeping exit side)')
             save_state()
+            # DON'T return — fall through to walk_up so exit order follows market
         else:
             # Flat: pull everything
             _apex_mm_pull_all(bot_id, bot, pull_reason)
-        return
+            return
 
     # 2. Settlement/game-end check (throttled every 30s)
     if now - bot.get('_last_settle_check', 0) >= 30:

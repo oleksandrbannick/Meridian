@@ -5863,7 +5863,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
         'dog_filled': '👻 FILLED — HEDGING', 'ladder_filled_no_fav': '👻 FILLED — HEDGING',
         'fav_hedge_posted': bot._taker_fired ? '⚡ TAKER' : '⭐ HEDGE POSTED', 'waiting_repeat': bot._just_completed ? '✅ COMPLETED' : bot._flip_pending ? '⚡ FLIPPING' : '🔄 REPEATING',
         'completed': _isSettled ? '🏁 SETTLED' : _isAwaitingSettlement ? '⏳ AWAITING SETTLEMENT' : _isDeathZone ? '🛑 END OF GAME' : _isSmartStopped ? '⏹ SMART STOP' : _isCompletedRuns ? '✅ COMPLETED RUNS' : '✅ COMPLETE',
-        'stopped': _isDeathZone ? '🛑 END OF GAME' : _isSmartStopped ? '⏹ SMART STOP' : '🛑 STOPPED',
+        'stopped': _isDeathZone ? '🛑 END OF GAME' : _isSmartStopped ? '⏹ SMART STOP' : (bot._pending_sells?.length ? '📤 SELLING' : '🛑 STOPPED'),
         'awaiting_settlement': '⏳ AWAITING SETTLEMENT',
     };
     const borderMap = {
@@ -5871,7 +5871,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
         'dog_filled': '#ff8800', 'ladder_filled_no_fav': '#ff8800',
         'fav_hedge_posted': bot._taker_fired ? '#ff7043' : '#00aaff', 'waiting_repeat': bot._just_completed ? '#00ff88' : bot._flip_pending ? '#ffaa00' : '#aa66ff',
         'completed': _isSettled ? '#ffaa00' : _isAwaitingSettlement ? '#818cf8' : _isDeathZone ? '#ff4444' : _isSmartStopped ? '#00e5ff' : '#00ff88',
-        'stopped': _isDeathZone ? '#ff4444' : _isSmartStopped ? '#00e5ff' : '#ff4444',
+        'stopped': _isDeathZone ? '#ff4444' : _isSmartStopped ? '#00e5ff' : (bot._pending_sells?.length ? '#ffaa00' : '#ff4444'),
         'awaiting_settlement': '#818cf8',
     };
     const borderCol = borderMap[status] || '#ffaa00';
@@ -6001,12 +6001,13 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 ${bot.cross_market ? '<span style="background:#00ddff22;color:#00ddff;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:800;">✕ CROSS</span>' : ''}
                 ${!_isCompletedSummary && dogFilled && favPrice > 0 ? '<span style="background:#33445522;color:#8892a6;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;">● snap bid</span>' : ''}
                 ${!_isCompletedSummary && dogFilled ? `<span style="color:#8892a6;font-size:10px;">${fillAgeStr}</span>` : ''}
-                ${bot.smart_mode ? `<span style="background:#00e5ff22;color:${bot._smart_stop_pending ? '#ff8800' : '#00e5ff'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${bot._smart_stopped ? `Smart · ${bot.repeats_done || 0} runs` : bot._smart_stop_pending ? `Stopping · ${bot.repeats_done || 0} runs` : `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L`}</span>` : repeatCount > 0 ? `<span style="background:#6366f122;color:#818cf8;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">Run ${repeatsDone + 1}/${repeatCount + 1}</span>` : ''}
+                ${bot.smart_mode ? `<span style="background:#00e5ff22;color:${bot._smart_stop_pending || bot._stop_pending ? '#ff8800' : '#00e5ff'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${bot._smart_stopped ? `Smart · ${bot.repeats_done || 0} runs` : (bot._smart_stop_pending || bot._stop_pending) ? `⏸ Stopping · ${bot.repeats_done || 0} runs` : `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L`}</span>` : repeatCount > 0 ? `<span style="background:${bot._stop_pending ? '#ff880022' : '#6366f122'};color:${bot._stop_pending ? '#ff8800' : '#818cf8'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${bot._stop_pending ? `⏸ Stopping · Run ${repeatsDone + 1}` : `Run ${repeatsDone + 1}/${repeatCount + 1}`}</span>` : (bot._stop_pending ? `<span style="background:#ff880022;color:#ff8800;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">⏸ Stopping</span>` : '')}
                 ${(() => { const _r = bot.raw_hedge_ms ?? bot._last_raw_hedge_ms; const _l = bot.hedge_latency_ms ?? bot._last_hedge_latency_ms; return _isCompletedSummary ? ((_r != null ? `<span style="color:${_r < 5 ? '#00ffcc' : _r < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;font-size:10px;">⚡${_r.toFixed(1)}ms</span>` : '') + (_l != null ? `<span style="color:#666;font-size:10px;"> rt ${Math.round(_l)}ms</span>` : '')) : ''; })()}
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 ${!_isCompletedSummary && !dogFilled ? `<button onclick="phantomModify('${botId}')" style="background:#ff66aa22;color:#ff66aa;border:1px solid #ff66aa44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Edit</button>` : ''}
-                ${!_isCompletedSummary && bot.smart_mode && !bot._smart_stopped && !bot._smart_stop_pending ? `<button onclick="stopSmart('${botId}')" style="background:#ff880022;color:#ff8800;border:1px solid #ff880044;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
+                ${!_isCompletedSummary && !bot._smart_stopped && !bot._stop_pending && !bot._smart_stop_pending ? `<button onclick="stopBot('${botId}')" style="background:#ff880022;color:#ff8800;border:1px solid #ff880044;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">${bot._stop_pending ? '⏸' : 'Stop'}</button>` : ''}
+                ${!_isCompletedSummary ? `<button onclick="releaseBot('${botId}')" style="background:#4488ff22;color:#4488ff;border:1px solid #4488ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Release</button>` : ''}
                 ${_isCompletedSummary && !_isDeathZone && !_isAwaitingSettlement && bot.smart_mode ? `<button onclick="restartSmart('${botId}')" style="background:#00e5ff22;color:#00e5ff;border:1px solid #00e5ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
                 ${_isCompletedSummary && !_isDeathZone && !_isAwaitingSettlement && !bot.smart_mode ? `<button onclick="addRuns('${botId}')" style="background:#6366f122;color:#818cf8;border:1px solid #6366f144;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
                 ${!_isCompletedSummary && !bot.smart_mode ? `<button onclick="addRuns('${botId}')" style="background:#6366f122;color:#818cf8;border:1px solid #6366f144;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">+Runs</button>` : ''}
@@ -6014,6 +6015,13 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 ${!_isAwaitingSettlement ? `<button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>` : ''}
             </div>
         </div>
+        ${bot._pending_sells?.length ? `<div style="background:#ffaa0012;border:1px solid #ffaa0033;border-radius:6px;padding:6px 10px;margin-bottom:6px;display:flex;align-items:center;gap:8px;">
+            <span style="color:#ffaa00;font-size:10px;font-weight:700;">📤 SELLING</span>
+            ${bot._pending_sells.map(s => `<span style="color:#e8eaed;font-size:10px;">${s.side.toUpperCase()} ${s.qty}x @ ${s.price}¢ · ${s.age_s}s</span>`).join('')}
+        </div>` : ''}
+        ${bot._stop_pending ? `<div style="background:#ff880012;border:1px solid #ff880033;border-radius:6px;padding:4px 10px;margin-bottom:6px;">
+            <span style="color:#ff8800;font-size:10px;font-weight:700;">⏸ Stopping after current cycle completes</span>
+        </div>` : ''}
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <!-- ANCHOR SIDE -->
             ${(() => {
@@ -6671,7 +6679,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 <span style="color:${pnlColor};font-weight:800;font-size:13px;">${pnlSign}${totalPnl}c</span>
                 <span style="color:#334;font-size:9px;">${ageStr}</span>
                 ${!isCompleted ? `<button onclick="apexMmModify('${botId}')" style="background:#ff704315;color:#ff7043;border:1px solid #ff704330;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Edit</button>` : ''}
-                ${smartMode > 0 && !bot._smart_stopped && !bot._smart_stop_pending && !isCompleted ? `<button onclick="stopSmart('${botId}')" style="background:#ff880015;color:#ff8800;border:1px solid #ff880030;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
+                ${!bot._smart_stopped && !bot._stop_pending && !bot._smart_stop_pending && !isCompleted ? `<button onclick="stopBot('${botId}')" style="background:#ff880015;color:#ff8800;border:1px solid #ff880030;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
+                ${!isCompleted ? `<button onclick="releaseBot('${botId}')" style="background:#4488ff15;color:#4488ff;border:1px solid #4488ff30;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Release</button>` : ''}
                 ${smartMode > 0 && (bot._smart_stopped || isCompleted) ? `<button onclick="restartSmart('${botId}')" style="background:#00d4ff15;color:#00d4ff;border:1px solid #00d4ff30;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
                 <button onclick="cancelBot('${botId}')" style="background:#ff444415;color:#ff4444;border:1px solid #ff444430;border-radius:5px;padding:3px 7px;font-size:10px;cursor:pointer;">x</button>
             </div>
@@ -6679,6 +6688,10 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
 
         ${statusSubHtml}
         ${positionBarHtml}
+        ${bot._pending_sells?.length ? `<div style="background:#ffaa0012;border:1px solid #ffaa0033;border-radius:6px;padding:4px 8px;margin-bottom:4px;display:flex;align-items:center;gap:6px;">
+            <span style="color:#ffaa00;font-size:9px;font-weight:700;">📤 SELLING</span>
+            ${bot._pending_sells.map(s => `<span style="color:#e8eaed;font-size:9px;">${s.side.toUpperCase()} ${s.qty}x @ ${s.price}¢ · ${s.age_s}s</span>`).join('')}
+        </div>` : ''}
 
         ${!isCompleted ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:4px;">
             <div style="background:#060a12;border:1px solid ${yesIsExit ? '#00ff8820' : '#ff704315'};border-radius:6px;padding:6px 8px;">
@@ -6716,8 +6729,8 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
     const nowSec = Date.now() / 1000;
     const ageMin = bot.created_at ? Math.floor((nowSec - bot.created_at) / 60) : 0;
     const status = bot.status || 'waiting';
-    const borderCol = { waiting:'#aa66ff', one_filled:'#ffaa00', both_filled:'#00ff88', stopped:'#ff4444', completed:'#00ff88', one_leg_timeout:'#ff8800' }[status] || '#aa66ff';
-    const statusLabel = { waiting:'⏳ WAITING', one_filled:'✅ ONE LEG IN', both_filled:'🔒 BOTH FILLED', stopped:'🛑 STOPPED', completed:'✓ COMPLETE', one_leg_timeout:'⌛ SETTLING' }[status] || status;
+    const borderCol = { waiting:'#aa66ff', one_filled:'#ffaa00', both_filled:'#00ff88', stopped: bot._pending_sells?.length ? '#ffaa00' : '#ff4444', completed:'#00ff88', one_leg_timeout:'#ff8800', awaiting_settlement:'#818cf8' }[status] || '#aa66ff';
+    const statusLabel = { waiting:'⏳ WAITING', one_filled:'✅ ONE LEG IN', both_filled:'🔒 BOTH FILLED', stopped: bot._pending_sells?.length ? '📤 SELLING' : '🛑 STOPPED', completed:'✓ COMPLETE', one_leg_timeout:'⌛ SETTLING', awaiting_settlement:'⏳ SETTLING' }[status] || status;
     const targetA = bot.target_price_a || bot.target_price || 0;
     // Don't fall back to target_price for leg B — it stores leg A's price (legacy), which caused both to show same value
     const targetB = bot.target_price_b || 0;
@@ -6906,9 +6919,15 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 ${(status === 'one_filled' || status === 'both_filled' || status === 'waiting') ? `<button onclick="toggleMiddleRebalancer('${botId}')" style="background:${rebalOn ? '#aa66ff22' : '#ff444422'};color:${rebalOn ? '#aa66ff' : '#ff4444'};border:1px solid ${rebalOn ? '#aa66ff44' : '#ff444444'};border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">${rebalOn ? 'Rebal ON' : 'Rebal OFF'}</button>` : ''}
+                ${status !== 'stopped' && status !== 'completed' && !bot._stop_pending ? `<button onclick="stopBot('${botId}')" style="background:#ff880022;color:#ff8800;border:1px solid #ff880044;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
+                ${status !== 'stopped' && status !== 'completed' ? `<button onclick="releaseBot('${botId}')" style="background:#4488ff22;color:#4488ff;border:1px solid #4488ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Release</button>` : ''}
                 <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px;" onclick="cancelBot('${botId}')">✕</button>
             </div>
         </div>
+        ${bot._pending_sells?.length ? `<div style="background:#ffaa0012;border:1px solid #ffaa0033;border-radius:6px;padding:4px 10px;margin-bottom:4px;display:flex;align-items:center;gap:8px;">
+            <span style="color:#ffaa00;font-size:10px;font-weight:700;">📤 SELLING</span>
+            ${bot._pending_sells.map(s => `<span style="color:#e8eaed;font-size:10px;">${s.side.toUpperCase()} ${s.qty}x @ ${s.price}¢ · ${s.age_s}s</span>`).join('')}
+        </div>` : ''}
         ${(() => {
             // Swap legs to match scoreboard order: away team on left, home team on right
             // Ticker game segment: MINBOS → first code = away (MIN), second = home (BOS)
@@ -7044,6 +7063,8 @@ function _renderWatchBotCard(bot, botId, container, gameScores) {
             <div style="display:flex;align-items:center;gap:8px;">
                 ${orderFilled && unrealizedPnl !== 0 ? `<span style="color:${unrealColor};font-size:11px;font-weight:700;">${unrealizedPnl > 0 ? '+' : ''}${unrealizedPnl}¢</span>` : ''}
                 ${!isStopped ? `<button onclick="scoutModify('${botId}')" style="background:#6366f122;color:#818cf8;border:1px solid #6366f144;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Modify</button>` : ''}
+                ${!isStopped ? `<button onclick="stopBot('${botId}')" style="background:#ff880022;color:#ff8800;border:1px solid #ff880044;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
+                ${!isStopped ? `<button onclick="releaseBot('${botId}')" style="background:#4488ff22;color:#4488ff;border:1px solid #4488ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Release</button>` : ''}
                 <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
             </div>
         </div>
@@ -8154,6 +8175,8 @@ async function loadBots() {
                         ${netPnlInfo}
                         ${timeoutInfo}
                         ${repostCount > 0 ? `<span style="color:#555;font-size:10px;">${repostCount}↻</span>` : ''}
+                        ${bot.status !== 'stopped' && bot.status !== 'completed' && !bot._stop_pending ? `<button onclick="stopBot('${botId}')" style="background:#ff880022;color:#ff8800;border:1px solid #ff880044;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
+                        ${bot.status !== 'stopped' && bot.status !== 'completed' ? `<button onclick="releaseBot('${botId}')" style="background:#4488ff22;color:#4488ff;border:1px solid #4488ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Release</button>` : ''}
                         <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px;"
                                 onclick="cancelBot('${botId}')">✕</button>
                     </div>
@@ -9266,6 +9289,52 @@ async function toggleMiddleRebalancer(botId) {
         }
     } catch (e) {
         showNotification('Error: ' + e.message);
+    }
+}
+
+async function stopBot(botId) {
+    try {
+        const btn = document.querySelector(`button[onclick*="stopBot('${botId}')"]`);
+        if (btn) { btn.disabled = true; btn.textContent = '⏸'; btn.style.opacity = '0.5'; }
+        const resp = await fetch(`${API_BASE}/bot/stop/${botId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+        });
+        const data = await resp.json();
+        if (data.success) {
+            showNotification(data.message || 'Bot stopping', 'success');
+        } else {
+            showNotification(data.error || 'Failed to stop', 'error');
+        }
+        loadBots();
+    } catch (e) {
+        showNotification('Failed to stop: ' + e.message, 'error');
+        loadBots();
+    }
+}
+
+async function releaseBot(botId) {
+    if (!confirm('Release positions? They will become unmanaged orphans.\nYou can assign Scout from the Positions view.')) return;
+    try {
+        const btn = document.querySelector(`button[onclick*="releaseBot('${botId}')"]`);
+        if (btn) { btn.disabled = true; btn.textContent = '⏳'; btn.style.opacity = '0.5'; }
+        const resp = await fetch(`${API_BASE}/bot/release/${botId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+        });
+        const data = await resp.json();
+        if (data.success) {
+            const parts = [];
+            if (data.released_positions?.length) parts.push(`Released: ${data.released_positions.join(', ')}`);
+            if (data.cancelled_orders?.length) parts.push(`Cancelled ${data.cancelled_orders.length} orders`);
+            showNotification(parts.join(' | ') || data.message || 'Bot released', 'success');
+        } else {
+            showNotification(data.error || 'Failed to release', 'error');
+        }
+        loadBots();
+    } catch (e) {
+        showNotification('Failed to release: ' + e.message, 'error');
+        loadBots();
     }
 }
 

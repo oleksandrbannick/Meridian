@@ -2406,6 +2406,9 @@ def _smart_mode_should_repeat(bot, cycle_pnl, exit_type=None):
     """Smart mode repeat decision. Returns (should_repeat: bool, reason: str).
     Smart mode: repeat on wins, stop after 2 consecutive losses.
     Losing dual exits count toward loss streak — repeated DE losses = bad market."""
+    # General stop flag (from /api/bot/stop) — prevents next repeat for ANY bot type
+    if bot.get('_stop_pending'):
+        return False, 'manual_stop'
     if not bot.get('smart_mode'):
         return None, ''  # not smart mode, use normal repeat logic
     if bot.get('_smart_stopped'):
@@ -16436,6 +16439,37 @@ def list_bots():
                         game_scores[gk] = score_info
                 except Exception as _gs_err:
                     print(f'⚠ game_scores lookup failed for {ticker}: {_gs_err}')
+    # ── Enrich stopped bots with pending maker sell data ──
+    now_ts = time.time()
+    for bid, bot in list(active_bots.items()):
+        if bot.get('status') != 'stopped':
+            continue
+        ticker = bot.get('ticker', '')
+        _bot_sells = []
+        for _sk, _sv in list(_pending_maker_sells.items()):
+            if _sv.get('ticker') == ticker or _sv.get('reason', '').endswith(bid):
+                _bot_sells.append({
+                    'side': _sv.get('side', ''),
+                    'qty': _sv.get('qty', 0),
+                    'price': _sv.get('posted_price', 0),
+                    'age_s': round(now_ts - _sv.get('posted_at', now_ts)),
+                })
+        # Also check middle bot leg tickers
+        if bot.get('type') == 'middle':
+            for leg_tk_key in ('ticker_a', 'ticker_b'):
+                leg_tk = bot.get(leg_tk_key, '')
+                if leg_tk and leg_tk != ticker:
+                    for _sk, _sv in list(_pending_maker_sells.items()):
+                        if _sv.get('ticker') == leg_tk:
+                            _bot_sells.append({
+                                'side': _sv.get('side', ''),
+                                'qty': _sv.get('qty', 0),
+                                'price': _sv.get('posted_price', 0),
+                                'age_s': round(now_ts - _sv.get('posted_at', now_ts)),
+                            })
+        if _bot_sells:
+            bot['_pending_sells'] = _bot_sells
+
     return jsonify({'bots': active_bots, 'game_scores': game_scores})
 
 
@@ -17151,6 +17185,332 @@ def add_runs(bot_id):
     save_state()
     bot_log('ADD_RUNS', bot_id, {'added': count, 'new_total': bot['repeat_count'], 'repeats_done': bot.get('repeats_done', 0)})
     return jsonify({'success': True, 'new_repeat_count': bot['repeat_count'], 'repeats_done': bot.get('repeats_done', 0)})
+
+
+@app.route('/api/bot/stop/<bot_id>', methods=['POST'])
+def stop_bot(bot_id):
+    """Generalized stop for ANY bot type. Finishes current cycle, then stops.
+    - Flat/no fills: cancel orders, stop immediately
+    - Mid-cycle: set _stop_pending flag, stop when cycle completes
+    - Meridian with filled legs: cancel unfilled, hold filled to settlement
+    """
+    bot = active_bots.get(bot_id)
+    if not bot:
+        return jsonify({'error': 'Bot not found'}), 404
+    if bot.get('_stop_pending') or bot.get('status') in ('stopped', 'completed'):
+        return jsonify({'error': 'Already stopped or stopping'}), 400
+
+    status = bot.get('status', '')
+    bot_type = bot.get('type', 'arb')
+    bot_cat = bot.get('bot_category', '')
+
+    # ── Smart mode bots: delegate to existing smart_stop logic ──
+    if bot.get('smart_mode'):
+        bot['_smart_stopped'] = True
+        bot['_smart_stop_reason'] = 'manual'
+        # Apex MM: pull ladder + exit
+        if status in ('market_making_active', 'mm_depth_pulled') and bot_type == 'apex_mm':
+            net_yes = bot.get('net_yes', 0)
+            net_no = bot.get('net_no', 0)
+            if status == 'market_making_active':
+                _apex_mm_pull_all(bot_id, bot, 'stop_manual')
+            if net_yes > 0 or net_no > 0:
+                _apex_mm_begin_exit(bot_id, bot, 'stop (manual, holding inventory)')
+                bot_log('STOP_MM_EXIT', bot_id, {'net_yes': net_yes, 'net_no': net_no})
+                print(f'⏹ STOP MM → EXITING: {bot_id} holding YES={net_yes} NO={net_no}')
+            else:
+                bot['status'] = 'completed'
+                bot['completed_at'] = time.time()
+                bot_log('STOP_MM_IMMEDIATE', bot_id, {'prev_status': status})
+                print(f'⏹ STOP MM → COMPLETED: {bot_id} flat')
+            save_state()
+            return jsonify({'success': True, 'mode': 'immediate', 'message': 'Apex MM stopped'})
+
+    # ── Scout / Watch bots: stop immediately ──
+    if bot_type == 'watch':
+        bot['status'] = 'stopped'
+        bot['stopped_at'] = time.time()
+        bot_log('STOP_WATCH', bot_id, {'prev_status': status})
+        print(f'⏹ STOP WATCH: {bot_id}')
+        save_state()
+        return jsonify({'success': True, 'mode': 'immediate', 'message': 'Scout stopped'})
+
+    # ── Meridian / Middle bots ──
+    if bot_type == 'middle':
+        leg_a_filled = bot.get('leg_a_filled', False)
+        leg_b_filled = bot.get('leg_b_filled', False)
+        cancelled_orders = []
+        # Cancel unfilled leg orders
+        for leg, order_key, filled in [('a', 'order_a_id', leg_a_filled), ('b', 'order_b_id', leg_b_filled)]:
+            if not filled and bot.get(order_key):
+                try:
+                    api_rate_limiter.wait()
+                    kalshi_client.cancel_order(bot[order_key])
+                    cancelled_orders.append(order_key)
+                except Exception as e:
+                    print(f'⚠ stop_bot({bot_id}): cancel {order_key} failed: {e}')
+        if leg_a_filled or leg_b_filled:
+            # Holding filled leg(s) → await settlement
+            bot['status'] = 'awaiting_settlement'
+            bot['awaiting_since'] = time.time()
+            bot_log('STOP_MIDDLE_AWAITING', bot_id, {'leg_a': leg_a_filled, 'leg_b': leg_b_filled, 'cancelled': cancelled_orders})
+            print(f'⏹ STOP MIDDLE → AWAITING: {bot_id} leg_a={leg_a_filled} leg_b={leg_b_filled}')
+        else:
+            bot['status'] = 'stopped'
+            bot['stopped_at'] = time.time()
+            bot_log('STOP_MIDDLE_IMMEDIATE', bot_id, {'cancelled': cancelled_orders})
+            print(f'⏹ STOP MIDDLE: {bot_id} no fills')
+        save_state()
+        return jsonify({'success': True, 'mode': 'immediate', 'cancelled': cancelled_orders,
+                        'message': 'Meridian stopped' + (' — holding filled legs to settlement' if (leg_a_filled or leg_b_filled) else '')})
+
+    # ── Phantom / Apex: check if flat or mid-cycle ──
+    flat_statuses = ('dog_anchor_posted', 'ladder_posted', 'waiting_repeat', 'both_posted')
+    mid_cycle_statuses = ('dog_filled', 'ladder_filled_no_fav', 'fav_hedge_posted',
+                          'yes_filled', 'no_filled', 'pending_profit', 'snapped',
+                          'amending_yes', 'amending_no')
+
+    if status in flat_statuses:
+        # No fills — cancel orders and stop immediately
+        cancelled_orders = []
+        for oid_key in ('dog_order_id', 'fav_order_id', 'yes_order_id', 'no_order_id'):
+            oid = bot.get(oid_key)
+            if oid:
+                try:
+                    api_rate_limiter.wait()
+                    kalshi_client.cancel_order(oid)
+                    cancelled_orders.append(oid_key)
+                except Exception:
+                    pass
+        # Cancel ladder rung orders
+        for rung in bot.get('rungs', []):
+            for oid_key in ('order_id', 'yes_order_id', 'no_order_id'):
+                oid = rung.get(oid_key)
+                if oid:
+                    try:
+                        api_rate_limiter.wait()
+                        kalshi_client.cancel_order(oid)
+                        cancelled_orders.append(f'rung_{oid_key}')
+                    except Exception:
+                        pass
+        # Cross-market with held positions → awaiting_settlement
+        _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != bot.get('ticker')
+        _has_positions = bot.get('_cross_settled_qty', 0) > 0
+        if _is_cross and _has_positions:
+            bot['status'] = 'awaiting_settlement'
+            bot['awaiting_since'] = time.time()
+            bot_log('STOP_AWAITING', bot_id, {'prev_status': status, 'cancelled': cancelled_orders})
+            print(f'⏹ STOP → AWAITING: {bot_id} cross-market positions held')
+        else:
+            bot['status'] = 'stopped'
+            bot['stopped_at'] = time.time()
+            bot_log('STOP_IMMEDIATE', bot_id, {'prev_status': status, 'cancelled': cancelled_orders})
+            print(f'⏹ STOP: {bot_id} flat, cancelled {len(cancelled_orders)} orders')
+        save_state()
+        return jsonify({'success': True, 'mode': 'immediate', 'cancelled': cancelled_orders,
+                        'message': 'Stopped — no fills, orders cancelled'})
+
+    elif status in mid_cycle_statuses:
+        # Mid-cycle — set pending flag, stop when cycle completes
+        bot['_stop_pending'] = True
+        # Also set smart flags for smart mode bots
+        if bot.get('smart_mode'):
+            bot['_smart_stop_pending'] = True
+        bot_log('STOP_PENDING', bot_id, {'prev_status': status})
+        print(f'⏹ STOP PENDING: {bot_id} mid-cycle ({status}), will stop when flat')
+        save_state()
+        return jsonify({'success': True, 'mode': 'pending',
+                        'message': f'Will stop after current cycle completes (currently: {status})'})
+
+    else:
+        # Unknown/other status — just set flag and let monitor handle it
+        bot['_stop_pending'] = True
+        bot_log('STOP_PENDING_UNKNOWN', bot_id, {'prev_status': status})
+        save_state()
+        return jsonify({'success': True, 'mode': 'pending',
+                        'message': f'Stop pending (status: {status})'})
+
+
+@app.route('/api/bot/release/<bot_id>', methods=['POST'])
+def release_bot(bot_id):
+    """Release a bot's positions — cancel all orders, orphan filled positions.
+    Bot config stays intact for restart. Positions become orphaned for Scout takeover."""
+    bot = active_bots.get(bot_id)
+    if not bot:
+        return jsonify({'error': 'Bot not found'}), 404
+    if bot.get('status') in ('completed', 'stopped') and not any([
+        bot.get('dog_fill_qty', 0), bot.get('fav_fill_qty', 0),
+        bot.get('yes_fill_qty', 0), bot.get('no_fill_qty', 0),
+        bot.get('leg_a_filled'), bot.get('leg_b_filled'),
+        bot.get('net_yes', 0), bot.get('net_no', 0),
+    ]):
+        return jsonify({'error': 'Bot already stopped with no positions to release'}), 400
+
+    # Safety: warn if mid-hedge (dog filled but hedge not posted)
+    status = bot.get('status', '')
+    if status in ('dog_filled', 'ladder_filled_no_fav'):
+        return jsonify({'error': f'Cannot release mid-hedge (status: {status}). Wait for hedge to post or use Cancel.'}), 400
+
+    lock_acquired = monitor_lock.acquire(blocking=True, timeout=30)
+    if not lock_acquired:
+        return jsonify({'error': 'Server busy — monitor cycle in progress. Try again.'}), 503
+
+    try:
+        if bot_id not in active_bots:
+            return jsonify({'error': 'Bot was already removed'}), 404
+        bot = active_bots[bot_id]
+        bot_type = bot.get('type', 'arb')
+        cancelled_orders = []
+        released_positions = []
+
+        if kalshi_client:
+            # ── Cancel all resting orders per bot type ──
+            if bot_type == 'middle':
+                for order_key in ('order_a_id', 'order_b_id'):
+                    if bot.get(order_key):
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(bot[order_key])
+                            cancelled_orders.append(order_key)
+                        except Exception as e:
+                            print(f'⚠ release({bot_id}): cancel {order_key} failed: {e}')
+                        bot[order_key] = None
+
+            elif bot_type == 'watch':
+                # Scout: cancel any pending sell order
+                if bot.get('order_id'):
+                    try:
+                        api_rate_limiter.wait()
+                        kalshi_client.cancel_order(bot['order_id'])
+                        cancelled_orders.append('order_id')
+                    except Exception:
+                        pass
+                    bot['order_id'] = None
+
+            elif bot_type == 'apex_mm':
+                # Cancel order groups and all ladder orders
+                for gid in bot.get('_all_order_group_ids', []):
+                    try:
+                        api_rate_limiter.wait()
+                        kalshi_client.cancel_order_group(gid)
+                        cancelled_orders.append(f'group_{gid}')
+                    except Exception:
+                        pass
+                if bot.get('_order_group_id'):
+                    try:
+                        api_rate_limiter.wait()
+                        kalshi_client.cancel_order_group(bot['_order_group_id'])
+                        cancelled_orders.append('current_group')
+                    except Exception:
+                        pass
+                # Cancel individual orders
+                for side_dict in (bot.get('yes_orders', {}), bot.get('no_orders', {})):
+                    for price_key, odata in list(side_dict.items()):
+                        oid = odata.get('oid') if isinstance(odata, dict) else odata
+                        if oid:
+                            try:
+                                api_rate_limiter.wait()
+                                kalshi_client.cancel_order(oid)
+                                cancelled_orders.append(f'ladder_{price_key}')
+                            except Exception:
+                                pass
+                # Cancel exit sell orders
+                for side, sell_data in bot.get('_exit_sell_oids', {}).items():
+                    if sell_data.get('oid'):
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(sell_data['oid'])
+                            cancelled_orders.append(f'exit_{side}')
+                        except Exception:
+                            pass
+
+            else:
+                # Phantom / Apex: cancel dog, fav, yes, no orders
+                for oid_key in ('dog_order_id', 'fav_order_id', 'yes_order_id', 'no_order_id'):
+                    oid = bot.get(oid_key)
+                    if oid:
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(oid)
+                            cancelled_orders.append(oid_key)
+                        except Exception:
+                            pass
+                        bot[oid_key] = None
+                # Cancel all tracked dog order IDs
+                for oid in bot.get('_all_dog_order_ids', []):
+                    if oid:
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(oid)
+                        except Exception:
+                            pass
+                # Cancel rung orders (Apex)
+                for rung in bot.get('rungs', []):
+                    for oid_key in ('order_id', 'yes_order_id', 'no_order_id', 'hedge_order_id'):
+                        oid = rung.get(oid_key)
+                        if oid:
+                            try:
+                                api_rate_limiter.wait()
+                                kalshi_client.cancel_order(oid)
+                                cancelled_orders.append(f'rung_{oid_key}')
+                            except Exception:
+                                pass
+
+        # ── Track what positions are being released ──
+        ticker = bot.get('ticker', '')
+        if bot.get('dog_fill_qty', 0) > 0:
+            released_positions.append(f'{bot.get("dog_side","no").upper()} {bot["dog_fill_qty"]}x on {ticker}')
+        if bot.get('fav_fill_qty', 0) > 0:
+            ht = bot.get('hedge_ticker', ticker)
+            released_positions.append(f'{bot.get("fav_side","yes").upper()} {bot["fav_fill_qty"]}x on {ht}')
+        if bot_type == 'middle':
+            for leg, tk in [('a', 'ticker_a'), ('b', 'ticker_b')]:
+                if bot.get(f'leg_{leg}_filled'):
+                    released_positions.append(f'NO {bot.get("qty",1)}x on {bot.get(tk, "")}')
+        if bot_type == 'apex_mm':
+            if bot.get('net_yes', 0) > 0:
+                released_positions.append(f'YES {bot["net_yes"]}x on {ticker}')
+            if bot.get('net_no', 0) > 0:
+                released_positions.append(f'NO {bot["net_no"]}x on {ticker}')
+        if bot.get('yes_fill_qty', 0) > 0:
+            released_positions.append(f'YES {bot["yes_fill_qty"]}x on {ticker}')
+        if bot.get('no_fill_qty', 0) > 0:
+            released_positions.append(f'NO {bot["no_fill_qty"]}x on {ticker}')
+
+        # ── Clear position references so orphan detection picks them up ──
+        bot['dog_fill_qty'] = 0
+        bot['fav_fill_qty'] = 0
+        bot['yes_fill_qty'] = 0
+        bot['no_fill_qty'] = 0
+        bot['_hedge_fired'] = False
+        bot['_trade_recorded'] = False
+        bot['leg_a_filled'] = False
+        bot['leg_b_filled'] = False
+        bot['net_yes'] = 0
+        bot['net_no'] = 0
+        bot['total_dog_fill_qty'] = 0
+        bot['_cross_settled_qty'] = 0
+        bot['_cross_settled_qty_dog'] = 0
+        bot['_cross_settled_qty_fav'] = 0
+
+        bot['status'] = 'stopped'
+        bot['stopped_at'] = time.time()
+        bot['_released'] = True
+        bot['_released_at'] = time.time()
+        bot['_released_positions'] = released_positions
+
+        save_state()
+        bot_log('BOT_RELEASED', bot_id, {'cancelled': cancelled_orders, 'released': released_positions})
+        print(f'🔓 RELEASED: {bot_id} — {len(cancelled_orders)} orders cancelled, {len(released_positions)} positions orphaned')
+
+        return jsonify({
+            'success': True,
+            'cancelled_orders': cancelled_orders,
+            'released_positions': released_positions,
+            'message': f'Released {len(released_positions)} positions as orphans' if released_positions else 'Released — no positions were held',
+        })
+    finally:
+        monitor_lock.release()
 
 
 @app.route('/api/bot/stop-smart/<bot_id>', methods=['POST'])

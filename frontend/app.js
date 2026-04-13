@@ -6377,9 +6377,9 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const obi = bot._obi;
         const absObi = Math.abs(obi);
         if (absObi < 0.15) obiLabel = '<span style="color:#556;">Balanced</span>';
-        else if (absObi < 0.3) obiLabel = `<span style="color:${obi > 0 ? '#00ff88' : '#ff4444'};">${obi > 0 ? 'YES' : 'NO'} building</span>`;
-        else if (absObi < 0.6) obiLabel = `<span style="color:${obi > 0 ? '#00ff88' : '#ff4444'};">${obi > 0 ? 'YES' : 'NO'} pressure</span>`;
-        else obiLabel = `<span style="color:#ff4444;">${obi > 0 ? 'YES' : 'NO'} sweep!</span>`;
+        else if (absObi < 0.3) obiLabel = `<span style="color:${obi > 0 ? '#00d4ff' : '#ff7043'};">${obi > 0 ? 'YES' : 'NO'} building</span>`;
+        else if (absObi < 0.6) obiLabel = `<span style="color:${obi > 0 ? '#00d4ff' : '#ff7043'};">${obi > 0 ? 'YES' : 'NO'} pressure</span>`;
+        else obiLabel = `<span style="color:${obi > 0 ? '#00d4ff' : '#ff7043'};">${obi > 0 ? 'YES' : 'NO'} sweep!</span>`;
     }
 
     // ── SECTION 2: Position bar (only when holding) ──
@@ -6642,16 +6642,16 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         </div>` : ''}
 
         ${!isCompleted ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:4px;">
-            <div style="background:#060a12;border:1px solid ${yesIsExit ? '#00ff8820' : '#ff704315'};border-radius:6px;padding:6px 8px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                    <span style="color:${yesIsExit ? '#00ff88' : '#ff7043'};font-size:8px;font-weight:800;letter-spacing:.06em;">${yesLabel}${yesPaused ? ' <span style="color:#ffaa00;">PAUSED</span>' : ''}</span>
+            <div style="background:#060a12;border:1px solid #00d4ff15;border-radius:6px;padding:6px 8px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:4px;margin-bottom:4px;border-bottom:1px solid #00d4ff20;">
+                    <span style="color:#00d4ff;font-size:8px;font-weight:800;letter-spacing:.06em;">${yesLabel}${yesPaused ? ' <span style="color:#ffaa00;">PAUSED</span>' : ''}</span>
                     <span style="font-size:8px;"><span style="color:#00ff88;font-weight:700;">${liveYesBid || '?'}</span><span style="color:#334;"> / </span><span style="color:#ff4444;font-weight:700;">${liveYesAsk || '?'}</span></span>
                 </div>
                 ${yesLadder || '<div style="color:#1a2530;font-size:9px;padding:4px 0;">No orders</div>'}
             </div>
-            <div style="background:#060a12;border:1px solid ${noIsExit ? '#ff444420' : '#ff704315'};border-radius:6px;padding:6px 8px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                    <span style="color:${noIsExit ? '#ff4444' : '#ff7043'};font-size:8px;font-weight:800;letter-spacing:.06em;">${noLabel}${noPaused ? ' <span style="color:#ffaa00;">PAUSED</span>' : ''}</span>
+            <div style="background:#060a12;border:1px solid #ff704315;border-radius:6px;padding:6px 8px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:4px;margin-bottom:4px;border-bottom:1px solid #ff704320;">
+                    <span style="color:#ff7043;font-size:8px;font-weight:800;letter-spacing:.06em;">${noLabel}${noPaused ? ' <span style="color:#ffaa00;">PAUSED</span>' : ''}</span>
                     <span style="font-size:8px;"><span style="color:#00ff88;font-weight:700;">${liveNoBid || '?'}</span><span style="color:#334;"> / </span><span style="color:#ff4444;font-weight:700;">${liveNoAsk || '?'}</span></span>
                 </div>
                 ${noLadder || '<div style="color:#1a2530;font-size:9px;padding:4px 0;">No orders</div>'}

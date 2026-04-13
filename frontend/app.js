@@ -4280,7 +4280,7 @@ function renderAnchorRungs(force) {
                 const _warn = _rq && rung.qty > _rq && rung.qty <= _mq;
                 const _over = _mq && rung.qty > _mq;
                 const _qtyBorder = _over ? '#ff4444' : _warn ? '#ffaa00' : _ok && _rq ? '#00ff8844' : '#1e2740';
-                const _qtyCol = _over ? '#ff4444' : '#fff';
+                const _qtyCol = _over ? '#ff4444' : '#b2ff59';
                 return `<div style="display:flex;align-items:center;gap:0;background:#0a0e1a;border:1px solid ${_qtyBorder};border-radius:5px;overflow:hidden;">
                     <span style="color:#8892a6;font-size:8px;padding:4px 5px;border-right:1px solid #1e2740;">QTY</span>
                     <input type="number" min="1" max="9999" value="${rung.qty}" onchange="updateRungQty(0, this.value)"

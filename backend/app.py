@@ -8717,33 +8717,61 @@ def _apex_mm_begin_exit_inner(bot_id, bot, reason):
         })
 
     if net_yes == 0 and net_no == 0:
-        # Flat — check smart mode before completing
-        # Cycle P&L: total realized since last cycle_reset (includes round trips + sellbacks)
-        _cycle_pnl = bot.get('realized_pnl_cents', 0) - bot.get('_cycle_start_pnl', 0)
-        _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, _cycle_pnl)
-        if _smart_repeat:
-            print(f'🔄 APEX MM RESTART (begin_exit flat): {bot_id} reason={_smart_reason} cycle_pnl={_cycle_pnl}c losses={bot.get("consecutive_losses",0)} — cycling')
-            bot_log('APEX_MM_SMART_RESTART', bot_id, {
-                'reason': reason, 'smart_reason': _smart_reason,
-                'consecutive_losses': bot.get('consecutive_losses', 0),
-                'realized_pnl': bot.get('realized_pnl_cents', 0),
-                'cycle_pnl': _cycle_pnl,
+        # SAFETY: verify against Kalshi before completing — catch late fills during cancel
+        _be_kalshi_net = 0
+        try:
+            if api_read_limiter.try_wait():
+                _be_pos = kalshi_client.get_positions(ticker=bot['ticker'])
+                _be_pos_list = _be_pos.get('market_positions', _be_pos.get('positions', []))
+                for _bp in _be_pos_list:
+                    if _bp.get('ticker') == bot['ticker']:
+                        _be_kalshi_net = _parse_position_qty(_bp)
+                        break
+        except Exception:
+            pass
+        if _be_kalshi_net != 0:
+            # Late fill during cancel — treat as inventory
+            _be_side = 'yes' if _be_kalshi_net > 0 else 'no'
+            _be_qty = abs(_be_kalshi_net)
+            net_yes = _be_qty if _be_side == 'yes' else 0
+            net_no = _be_qty if _be_side == 'no' else 0
+            bot['net_yes'] = net_yes
+            bot['net_no'] = net_no
+            print(f'🚨 APEX MM BEGIN_EXIT ORPHAN CATCH: {bot_id} thought flat but kalshi has {_be_qty}x {_be_side.upper()} — routing to mm_exiting')
+            bot_log('APEX_MM_BEGIN_EXIT_ORPHAN', bot_id, {
+                'side': _be_side, 'qty': _be_qty, 'reason': reason,
+            }, level='ERROR')
+            # Fall through to the else branch below to post exit sell
+
+        if net_yes == 0 and net_no == 0:
+            # Confirmed flat — check smart mode before completing
+            # Cycle P&L: total realized since last cycle_reset (includes round trips + sellbacks)
+            _cycle_pnl = bot.get('realized_pnl_cents', 0) - bot.get('_cycle_start_pnl', 0)
+            _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, _cycle_pnl)
+            if _smart_repeat:
+                print(f'🔄 APEX MM RESTART (begin_exit flat): {bot_id} reason={_smart_reason} cycle_pnl={_cycle_pnl}c losses={bot.get("consecutive_losses",0)} — cycling')
+                bot_log('APEX_MM_SMART_RESTART', bot_id, {
+                    'reason': reason, 'smart_reason': _smart_reason,
+                    'consecutive_losses': bot.get('consecutive_losses', 0),
+                    'realized_pnl': bot.get('realized_pnl_cents', 0),
+                    'cycle_pnl': _cycle_pnl,
+                })
+                bot['status'] = 'market_making_active'
+                bot['_exit_reason'] = None
+                bot['_exit_started_at'] = None
+                bot['_exit_sell_oids'] = {}
+                _apex_mm_fresh_ladder(bot_id, bot)
+                return
+            bot['status'] = 'completed'
+            bot['completed_at'] = time.time()
+            bot['_smart_stop_reason'] = reason
+            bot_log('APEX_MM_COMPLETE', bot_id, {
+                'reason': reason, 'realized_pnl': bot.get('realized_pnl_cents', 0),
+                'round_trips': bot.get('round_trips_completed', 0),
             })
-            bot['status'] = 'market_making_active'
-            bot['_exit_reason'] = None
-            bot['_exit_started_at'] = None
-            bot['_exit_sell_oids'] = {}
-            _apex_mm_fresh_ladder(bot_id, bot)
+            print(f'✅ APEX MM COMPLETE: {bot_id} — {reason}, pnl={bot.get("realized_pnl_cents", 0)}c')
             return
-        bot['status'] = 'completed'
-        bot['completed_at'] = time.time()
-        bot['_smart_stop_reason'] = reason
-        bot_log('APEX_MM_COMPLETE', bot_id, {
-            'reason': reason, 'realized_pnl': bot.get('realized_pnl_cents', 0),
-            'round_trips': bot.get('round_trips_completed', 0),
-        })
-        print(f'✅ APEX MM COMPLETE: {bot_id} — {reason}, pnl={bot.get("realized_pnl_cents", 0)}c')
-    else:
+    if net_yes > 0 or net_no > 0:
         # Only one side has leftover — sell it
         bot['status'] = 'mm_exiting'
         bot['_exit_reason'] = reason
@@ -8996,6 +9024,44 @@ def _apex_mm_exit_tick(bot_id, bot):
     yes_done = not bot.get('_exit_sell_oids', {}).get('yes', {}).get('oid')
     no_done = not bot.get('_exit_sell_oids', {}).get('no', {}).get('oid')
     if yes_done and no_done and bot.get('net_yes', 0) <= 0 and bot.get('net_no', 0) <= 0:
+        # SAFETY: verify against Kalshi before completing — catch orphaned positions
+        _exit_kalshi_net = 0
+        try:
+            if api_read_limiter.try_wait():
+                _exit_pos = kalshi_client.get_positions(ticker=ticker)
+                _exit_pos_list = _exit_pos.get('market_positions', _exit_pos.get('positions', []))
+                for _ep in _exit_pos_list:
+                    if _ep.get('ticker') == ticker:
+                        _exit_kalshi_net = _parse_position_qty(_ep)
+                        break
+        except Exception as _epe:
+            print(f'⚠ APEX MM EXIT VERIFY: {bot_id} position check failed: {_epe}')
+
+        if _exit_kalshi_net != 0:
+            # Kalshi still holds contracts — DON'T complete, repost exit sell
+            _orphan_side = 'yes' if _exit_kalshi_net > 0 else 'no'
+            _orphan_qty = abs(_exit_kalshi_net)
+            bot[f'net_{_orphan_side}'] = _orphan_qty
+            print(f'🚨 APEX MM ORPHAN CATCH: {bot_id} bot thought flat but kalshi has {_orphan_qty}x {_orphan_side.upper()} — reposting exit sell')
+            bot_log('APEX_MM_ORPHAN_CATCH', bot_id, {
+                'side': _orphan_side, 'qty': _orphan_qty, 'kalshi_net': _exit_kalshi_net,
+            }, level='ERROR')
+            try:
+                _orph_resp, _orph_price = create_order_maker(ticker, _orphan_side, 'sell', _orphan_qty,
+                    bot.get(f'live_{_orphan_side}_ask', 0) or (bot.get(f'avg_{_orphan_side}_cost', 50)))
+                _orph_oid = _orph_resp.get('order', {}).get('order_id', '') if isinstance(_orph_resp, dict) else ''
+                if _orph_oid:
+                    bot['_exit_sell_oids'][_orphan_side] = {
+                        'oid': _orph_oid, 'qty': _orphan_qty, 'price': _orph_price,
+                        'posted_at': now, 'action': 'sell', 'shadow_mode': True,
+                    }
+                    bot.setdefault('_all_placed_order_ids', []).append(_orph_oid)
+                    print(f'🚪 APEX MM ORPHAN SELL: {bot_id} {_orphan_side.upper()} {_orphan_qty}x @{_orph_price}c')
+            except Exception as _oe:
+                print(f'⚠ APEX MM ORPHAN SELL FAILED: {bot_id}: {_oe}')
+            save_state()
+            return
+
         # Cycle P&L: total realized since last cycle_reset (includes round trips + sellbacks)
         _cycle_pnl = bot.get('realized_pnl_cents', 0) - bot.get('_cycle_start_pnl', 0)
         # Smart mode: use standard 2-consecutive-loss logic
@@ -18900,9 +18966,32 @@ def cancel_bot(bot_id):
                             kalshi_client.cancel_order(oid)
                         except Exception:
                             pass
-                # Sell back held inventory
-                for side in ('yes', 'no'):
-                    net_held = bot.get(f'net_{side}', 0)
+                # Sell back held inventory — VERIFY against Kalshi, don't trust bot tracking
+                _cancel_kalshi_yes = 0
+                _cancel_kalshi_no = 0
+                try:
+                    api_read_limiter.wait()
+                    _cancel_pos = kalshi_client.get_positions(ticker=ticker)
+                    _cancel_pos_list = _cancel_pos.get('market_positions', _cancel_pos.get('positions', []))
+                    for _cp in _cancel_pos_list:
+                        if _cp.get('ticker') == ticker:
+                            _cancel_net = _parse_position_qty(_cp)
+                            _cancel_kalshi_yes = max(0, _cancel_net)
+                            _cancel_kalshi_no = max(0, -_cancel_net)
+                            break
+                except Exception as _cpe:
+                    print(f'⚠ cancel_bot({bot_id}): position verify failed: {_cpe}')
+                    # Fall back to bot tracking
+                    _cancel_kalshi_yes = bot.get('net_yes', 0)
+                    _cancel_kalshi_no = bot.get('net_no', 0)
+
+                # Use the LARGER of bot tracking vs Kalshi (catch orphans)
+                _sell_yes = max(bot.get('net_yes', 0), _cancel_kalshi_yes)
+                _sell_no = max(bot.get('net_no', 0), _cancel_kalshi_no)
+                if _sell_yes != bot.get('net_yes', 0) or _sell_no != bot.get('net_no', 0):
+                    print(f'🚨 APEX MM CANCEL ORPHAN CATCH: {bot_id} bot=Y{bot.get("net_yes",0)}/N{bot.get("net_no",0)} kalshi=Y{_cancel_kalshi_yes}/N{_cancel_kalshi_no} — using kalshi')
+
+                for side, net_held in [('yes', _sell_yes), ('no', _sell_no)]:
                     if net_held > 0 and side not in already_cleared_sides:
                         _mm_oid, _mm_price = execute_maker_sell(ticker, side, net_held,
                                                        reason=f'cancel_mm_{side}_{bot_id}')
@@ -18910,7 +18999,6 @@ def cancel_bot(bot_id):
                             sold_positions.append(f'{side.upper()} {net_held}x @{_mm_price}¢ (maker)')
                             sp = _mm_price
                             sell_prices[side] = sp
-                            # Clear net — sell is tracked by maker sell follow-through
                             bot[f'net_{side}'] = 0
                         else:
                             warnings.append(f'FAILED to sell {side.upper()} {net_held}x')

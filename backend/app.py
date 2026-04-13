@@ -11165,120 +11165,6 @@ def _handle_phantom(bot_id, bot, actions):
             })
 
         fav_filled = bot.get('fav_fill_qty', 0)  # ensure fav_filled is always set
-
-        # ── Dog Fill Reconciliation ──
-        # If partial fill happened, the WS handler may have only caught a subset of fills.
-        # Check actual Kalshi dog fills and amend/supplement the fav hedge if needed.
-        _partial_q = bot.get('_partial_hedge_qty', 0)
-        if _partial_q > 0 and not bot.get('_dog_reconciled') and now - bot.get('_last_dog_reconcile', 0) > 5:
-            bot['_last_dog_reconcile'] = now
-            try:
-                _recon_total = 0
-                _recon_oids = set()
-                if bot.get('dog_order_id'):
-                    _recon_oids.add(bot['dog_order_id'])
-                for _roid in (bot.get('_all_dog_order_ids') or []):
-                    if _roid:
-                        _recon_oids.add(_roid)
-                for _roid in _recon_oids:
-                    try:
-                        api_read_limiter.wait()
-                        _r_resp = kalshi_client.get_order(_roid)
-                        _r_ord = _r_resp.get('order', _r_resp) if isinstance(_r_resp, dict) else {}
-                        _recon_total += _parse_fill_count(_r_ord)
-                    except Exception:
-                        pass
-                if _recon_total > _partial_q:
-                    _extra = _recon_total - _partial_q
-                    print(f'🔍 PHANTOM RECONCILE: {bot_id} actual dog fills={_recon_total} > hedge qty={_partial_q} → {_extra} extra fills')
-                    bot_log('PHANTOM_DOG_RECONCILE', bot_id, {
-                        'actual_dog_fills': _recon_total, 'hedge_qty': _partial_q,
-                        'extra': _extra, 'fav_filled': fav_filled,
-                    })
-                    # Update quantities to reflect actual fills
-                    bot['_partial_hedge_qty'] = _recon_total
-                    bot['dog_fill_qty'] = _recon_total
-                    qty = _recon_total
-                    if dog_side == 'yes':
-                        bot['yes_fill_qty'] = max(bot.get('yes_fill_qty', 0), _recon_total)
-                    else:
-                        bot['no_fill_qty'] = max(bot.get('no_fill_qty', 0), _recon_total)
-                    if fav_filled < _partial_q:
-                        # Fav hasn't even filled the original qty yet — amend qty up
-                        if fav_order_id:
-                            try:
-                                _amend_kwargs = {'yes_price': bot.get('fav_price')} if fav_side == 'yes' else {'no_price': bot.get('fav_price')}
-                                api_rate_limiter.wait()
-                                _recon_resp = kalshi_client.amend_order(
-                                    fav_order_id, ticker=hedge_ticker, side=fav_side,
-                                    count=_recon_total, **_amend_kwargs
-                                )
-                                _recon_ord = _recon_resp.get('order', _recon_resp) if isinstance(_recon_resp, dict) else {}
-                                _recon_new_oid = _recon_ord.get('order_id', '')
-                                if _recon_new_oid and _recon_new_oid != fav_order_id:
-                                    bot['fav_order_id'] = _recon_new_oid
-                                    bot.setdefault('_all_hedge_order_ids', []).append(fav_order_id)
-                                    if fav_side == 'yes':
-                                        bot['yes_order_id'] = _recon_new_oid
-                                    else:
-                                        bot['no_order_id'] = _recon_new_oid
-                                    fav_order_id = _recon_new_oid
-                                print(f'✅ PHANTOM RECONCILE AMEND: {bot_id} fav qty {_partial_q}→{_recon_total} (price unchanged)')
-                                bot_log('PHANTOM_RECONCILE_AMEND', bot_id, {
-                                    'old_qty': _partial_q, 'new_qty': _recon_total,
-                                    'fav_order_id': fav_order_id[:12],
-                                })
-                            except Exception as _amend_err:
-                                print(f'⚠ PHANTOM RECONCILE AMEND FAILED: {bot_id} {_amend_err}')
-                                bot_log('PHANTOM_RECONCILE_AMEND_FAIL', bot_id, {'error': str(_amend_err)[:200]}, level='ERROR')
-                    elif fav_filled >= _partial_q:
-                        # Fav already filled the original partial qty — need supplemental hedge
-                        _supp_qty = _recon_total - fav_filled
-                        if _supp_qty > 0:
-                            try:
-                                _supp_bid = 0
-                                if ws_manager:
-                                    _ws_t = hedge_ticker if hedge_ticker != ticker else ticker
-                                    _ws_d = ws_manager.get_price(_ws_t)
-                                    if _ws_d:
-                                        _supp_bid = _ws_d.get(f'{fav_side}_bid', 0)
-                                if _supp_bid <= 0:
-                                    _supp_bid = bot.get(f'live_{fav_side}_bid', 0)
-                                if _supp_bid > 0:
-                                    api_rate_limiter.wait()
-                                    _supp_resp, _supp_price = create_order_maker(
-                                        ticker=hedge_ticker, side=fav_side, action='buy',
-                                        count=_supp_qty, price=_supp_bid, priority=True,
-                                    )
-                                    _supp_oid = _supp_resp['order']['order_id']
-                                    bot['fav_order_id'] = _supp_oid
-                                    bot.setdefault('_all_hedge_order_ids', []).append(fav_order_id)
-                                    if fav_side == 'yes':
-                                        bot['yes_order_id'] = _supp_oid
-                                    else:
-                                        bot['no_order_id'] = _supp_oid
-                                    fav_order_id = _supp_oid
-                                    bot['fav_price'] = _supp_price
-                                    print(f'✅ PHANTOM SUPPLEMENTAL HEDGE: {bot_id} +{_supp_qty}x {fav_side} @{_supp_bid}¢')
-                                    bot_log('PHANTOM_SUPPLEMENTAL_HEDGE', bot_id, {
-                                        'supp_qty': _supp_qty, 'price': _supp_bid,
-                                        'order_id': _supp_oid[:12],
-                                    })
-                                    # Reset fill tracking — fav_fill_qty should only count new hedge fills
-                                    fav_filled = 0
-                                    bot['fav_fill_qty'] = 0
-                                else:
-                                    print(f'⚠ PHANTOM SUPPLEMENTAL: {bot_id} no fav bid — deferring')
-                            except Exception as _supp_err:
-                                print(f'⚠ PHANTOM SUPPLEMENTAL FAILED: {bot_id} {_supp_err}')
-                                bot_log('PHANTOM_SUPPLEMENTAL_FAIL', bot_id, {'error': str(_supp_err)[:200]}, level='ERROR')
-                    bot['quantity'] = _recon_total
-                    save_state()
-                elif _recon_total == _partial_q:
-                    bot['_dog_reconciled'] = True  # no drift — stop checking
-            except Exception as _recon_err:
-                bot_log('PHANTOM_RECONCILE_FAIL', bot_id, {'error': str(_recon_err)[:200]}, level='ERROR')
-
         if fav_filled >= qty:
             # Guard: if _trade_recorded is already True but status never changed (crash recovery),
             # re-run the completion so the trade actually gets recorded in history
@@ -11386,39 +11272,6 @@ def _handle_phantom(bot_id, bot, actions):
                     _push_notification('orphan_detected', f'⚠ Phantom {bot_id}: {_ph_unhedged} unhedged {_ph_heavy} on {ticker}', {
                         'bot_id': bot_id, 'ticker': ticker, 'side': _ph_heavy, 'qty': _ph_unhedged,
                     })
-                    bot_log('PHANTOM_ORDER_VERIFY', bot_id, {
-                        'verified_yes': _ph_yes, 'verified_no': _ph_no,
-                        'unhedged': _ph_unhedged, 'orders_checked': _ph_checked,
-                        'local_dog_fill': bot.get('dog_fill_qty', 0), 'local_fav_fill': fav_filled,
-                    })
-                    # SAFETY NET: don't complete/repeat with unhedged positions
-                    # Post a supplemental hedge for the unhedged amount
-                    _dog_fills = _ph_no if dog_side == 'no' else _ph_yes
-                    _fav_fills = _ph_yes if dog_side == 'no' else _ph_no
-                    _need_hedge = _dog_fills - _fav_fills
-                    if _need_hedge > 0:
-                        bot['_partial_hedge_qty'] = _need_hedge  # hedge just the gap
-                        bot['quantity'] = _need_hedge  # monitor reads qty from here
-                        bot['dog_fill_qty'] = _dog_fills
-                        bot['_dog_reconciled'] = False
-                        bot['_last_dog_reconcile'] = 0
-                        bot['_trade_recorded'] = False
-                        bot['_hedge_fired'] = False
-                        # Clear fav_order_id so monitor's dog_filled handler posts fresh
-                        _old_fav_oid = bot.get('fav_order_id')
-                        if _old_fav_oid:
-                            bot.setdefault('_all_hedge_order_ids', []).append(_old_fav_oid)
-                        bot['fav_order_id'] = None
-                        bot['fav_fill_qty'] = 0
-                        bot['status'] = 'dog_filled'
-                        bot['dog_filled_at'] = time.time()
-                        save_state()
-                        print(f'🔄 PHANTOM VERIFY → REHEDGE: {bot_id} {_need_hedge} unhedged, re-entering dog_filled')
-                        bot_log('PHANTOM_VERIFY_REHEDGE', bot_id, {
-                            'unhedged': _need_hedge, 'heavy_side': _ph_heavy,
-                            'dog_fills': _dog_fills, 'fav_fills': _fav_fills,
-                        })
-                        return
                 else:
                     print(f'✅ PHANTOM ORDER VERIFY: {bot_id} balanced YES={_ph_yes} NO={_ph_no}')
                 bot_log('PHANTOM_ORDER_VERIFY', bot_id, {
@@ -11496,8 +11349,6 @@ def _handle_phantom(bot_id, bot, actions):
                     bot['quantity'] = bot['_original_qty']
                     bot.pop('_original_qty', None)
                 bot.pop('_partial_hedge_qty', None)
-                bot.pop('_dog_reconciled', None)
-                bot.pop('_last_dog_reconcile', None)
                 _label = f'smart({_smart_reason})' if bot.get('smart_mode') else f'cycle {repeats_done_now}/{repeat_total}'
                 print(f'🔄 PHANTOM REPEAT: {bot_id} {_label} pnl={net_pnl}¢')
                 _audit('PHANTOM_REPEAT_ENTER', bot_id, {'ticker': ticker, 'cycle': repeats_done_now, 'total': repeat_total, 'smart': _smart_reason})

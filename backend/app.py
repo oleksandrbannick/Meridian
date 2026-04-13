@@ -21558,6 +21558,65 @@ def _run_startup():
             _bot['_all_dog_order_ids'] = [_cur_oid] if _cur_oid else []
     save_state()
 
+    # ── Apex MM startup reconciliation: sync inventory with Kalshi positions ──
+    # After restart, fills may have arrived while server was down. The bot's net_yes/net_no
+    # could be stale. Compare against Kalshi and fix discrepancies to prevent orphans.
+    if kalshi_client:
+        _mm_reconciled = 0
+        for _bid, _bot in list(active_bots.items()):
+            if _bot.get('type') != 'apex_mm':
+                continue
+            _bst = _bot.get('status', '')
+            if _bst in ('completed', 'stopped', 'cancelled'):
+                continue
+            _tk = _bot.get('ticker', '')
+            if not _tk:
+                continue
+            try:
+                api_read_limiter.wait()
+                _rp = kalshi_client.get_positions(ticker=_tk)
+                _rpl = _rp.get('market_positions', _rp.get('positions', []))
+                _kalshi_net = 0
+                for _p in _rpl:
+                    if _p.get('ticker') == _tk:
+                        _kalshi_net = _parse_position_qty(_p)
+                        break
+                _kalshi_yes = max(0, _kalshi_net)
+                _kalshi_no = max(0, -_kalshi_net)
+                _bot_yes = _bot.get('net_yes', 0)
+                _bot_no = _bot.get('net_no', 0)
+                if _kalshi_yes != _bot_yes or _kalshi_no != _bot_no:
+                    print(f'🚨 APEX MM STARTUP RECONCILE: {_bid[:50]} bot=Y{_bot_yes}/N{_bot_no} kalshi=Y{_kalshi_yes}/N{_kalshi_no} → syncing to kalshi')
+                    _bot['net_yes'] = _kalshi_yes
+                    _bot['net_no'] = _kalshi_no
+                    # Fix cost basis if needed
+                    if _kalshi_yes > 0 and _bot.get('avg_yes_cost', 0) == 0:
+                        _est = _bot.get('live_yes_ask', 0) or _bot.get('live_yes_bid', 50) or 50
+                        _bot['avg_yes_cost'] = _est
+                        _bot['total_yes_cost'] = _est * _kalshi_yes
+                    if _kalshi_no > 0 and _bot.get('avg_no_cost', 0) == 0:
+                        _est = _bot.get('live_no_ask', 0) or _bot.get('live_no_bid', 50) or 50
+                        _bot['avg_no_cost'] = _est
+                        _bot['total_no_cost'] = _est * _kalshi_no
+                    if _kalshi_yes == 0:
+                        _bot['avg_yes_cost'] = 0
+                        _bot['total_yes_cost'] = 0
+                    if _kalshi_no == 0:
+                        _bot['avg_no_cost'] = 0
+                        _bot['total_no_cost'] = 0
+                    _mm_reconciled += 1
+                    bot_log('APEX_MM_STARTUP_RECONCILE', _bid, {
+                        'old_yes': _bot_yes, 'old_no': _bot_no,
+                        'kalshi_yes': _kalshi_yes, 'kalshi_no': _kalshi_no,
+                    }, level='WARN')
+            except Exception as _me:
+                print(f'⚠ APEX MM startup reconcile {_bid[:30]}: {_me}')
+        if _mm_reconciled:
+            print(f'🔧 Reconciled {_mm_reconciled} Apex MM bot(s) with Kalshi positions')
+            save_state()
+        else:
+            print('✅ Apex MM startup reconcile: all bots match Kalshi')
+
     # ── Validate bot order IDs against Kalshi — clear stale ones before orphan sweep ──
     if kalshi_client:
         try:
@@ -21672,8 +21731,13 @@ def _run_startup():
                     if fav_qty > 0 and fav_side:
                         managed_qty[(_hedge_t, fav_side)] = managed_qty.get((_hedge_t, fav_side), 0) + fav_qty
                 elif cat == 'ladder_arb':
-                    yes_qty = _safe_int(b.get('filled_yes_qty'))
-                    no_qty = _safe_int(b.get('filled_no_qty'))
+                    if b.get('type') == 'apex_mm':
+                        # Apex MM uses net_yes/net_no for inventory tracking
+                        yes_qty = _safe_int(b.get('net_yes'))
+                        no_qty = _safe_int(b.get('net_no'))
+                    else:
+                        yes_qty = _safe_int(b.get('filled_yes_qty'))
+                        no_qty = _safe_int(b.get('filled_no_qty'))
                     if yes_qty > 0:
                         managed_qty[(t, 'yes')] = managed_qty.get((t, 'yes'), 0) + yes_qty
                     if no_qty > 0:

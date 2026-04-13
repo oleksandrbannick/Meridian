@@ -21272,6 +21272,64 @@ def watch_position():
         if not ticker:
             return jsonify({'error': 'ticker required'}), 400
 
+        # ── Clean house: cancel all resting orders on this ticker not owned by other active bots ──
+        cleanup_cancelled = []
+        cleanup_errors = []
+        try:
+            # Build set of order IDs owned by OTHER active bots on this ticker
+            protected_oids = set()
+            for _bid, _b in active_bots.items():
+                if _b.get('status', '') in ('completed', 'stopped', 'cancelled'):
+                    continue
+                if _b.get('ticker') != ticker:
+                    continue
+                for _key in ('order_id', 'hedge_order_id', '_orphan_hedge_oid', 'dog_order_id',
+                             'fav_order_id', 'yes_order_id', 'no_order_id', 'tp_order_id'):
+                    _oid = _b.get(_key)
+                    if _oid:
+                        protected_oids.add(_oid)
+                for _oid in _b.get('_all_hedge_order_ids', []):
+                    protected_oids.add(_oid)
+                for _oid in _b.get('_all_dog_order_ids', []):
+                    protected_oids.add(_oid)
+                for _oid in _b.get('_all_placed_order_ids', []):
+                    protected_oids.add(_oid)
+                for _side_key in ('yes_orders', 'no_orders'):
+                    for _lvl in _b.get(_side_key, {}).values():
+                        _lvl_oid = _lvl.get('oid')
+                        if _lvl_oid:
+                            protected_oids.add(_lvl_oid)
+
+            # Fetch all resting orders on this ticker
+            api_read_limiter.wait()
+            _resting = kalshi_client.get_orders(status='resting', ticker=ticker)
+            _resting_orders = _resting.get('orders', []) if isinstance(_resting, dict) else []
+            for _ro in _resting_orders:
+                _ro_oid = _ro.get('order_id', '')
+                if _ro_oid and _ro_oid not in protected_oids:
+                    try:
+                        _safe_cancel(_ro_oid, f'scout_takeover_{ticker}')
+                        cleanup_cancelled.append(_ro_oid)
+                        print(f'🧹 SCOUT CLEANUP: cancelled resting order {_ro_oid} on {ticker}')
+                    except Exception as _ce:
+                        cleanup_errors.append(str(_ce))
+
+            # Cancel pending maker sells (shadow-ask orphan sells) for this ticker
+            for _sk, _sv in list(_pending_maker_sells.items()):
+                if _sv.get('ticker') == ticker:
+                    _pms_oid = _sv.get('oid')
+                    if _pms_oid and _pms_oid not in protected_oids:
+                        try:
+                            _safe_cancel(_pms_oid, f'scout_takeover_pending_sell_{ticker}')
+                            cleanup_cancelled.append(_pms_oid)
+                            print(f'🧹 SCOUT CLEANUP: cancelled pending maker sell {_pms_oid} on {ticker}')
+                        except Exception:
+                            pass
+                    del _pending_maker_sells[_sk]
+        except Exception as cleanup_err:
+            print(f'⚠ Scout cleanup error for {ticker}: {cleanup_err}')
+            cleanup_errors.append(str(cleanup_err))
+
         bot_id = f"watch_{ticker}_{int(time.time())}"
         active_bots[bot_id] = {
             'type':              'watch',
@@ -21322,12 +21380,14 @@ def watch_position():
 
         save_state()
 
+        cleanup_msg = f' · Cleaned up {len(cleanup_cancelled)} stale order(s)' if cleanup_cancelled else ''
         return jsonify({
             'success': True,
             'bot_id':  bot_id,
+            'cleaned_orders': len(cleanup_cancelled),
             'message': f'Watching {side.upper()} on {ticker} — SL: -{stop_loss_cents}¢'
                        + (f', TP: +{take_profit_cents}¢' if take_profit_cents else '')
-                       + tp_info,
+                       + tp_info + cleanup_msg,
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500

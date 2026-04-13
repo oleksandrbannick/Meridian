@@ -16026,6 +16026,11 @@ def _run_monitor():
                 mkt_f_data = mkt_f.get('market', mkt_f)
                 if mkt_f_data.get('status', '') not in ('active', 'open', ''):
                     result_f = mkt_f_data.get('result', '').lower()
+                    # Guard: require actual result before settling — Kalshi may
+                    # close the market before populating the result field
+                    if result_f not in ('yes', 'no'):
+                        bot['_last_settle_check'] = now_s
+                        continue
                     filled_leg_win = (result_f == 'no')
                     qty_s = bot.get('qty', 1)
                     fill_price = bot.get(f'leg_{filled_leg}_fill_price') or bot.get('target_price', 49)

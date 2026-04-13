@@ -14542,6 +14542,16 @@ def _run_monitor():
                                 entry       = bot.get('entry_price', 50)
                                 qty         = bot.get('quantity', 1)
                                 won = (mkt_result_w == watch_side) if mkt_result_w else None
+                                # Infer result from bid prices if Kalshi hasn't published result yet
+                                if won is None:
+                                    _yes_bid_w = bot.get('live_yes_bid', 0) or 0
+                                    _no_bid_w = bot.get('live_no_bid', 0) or 0
+                                    if _yes_bid_w <= 0 and _no_bid_w >= 95:
+                                        won = (watch_side == 'no')
+                                        mkt_result_w = 'no'
+                                    elif _no_bid_w <= 0 and _yes_bid_w >= 95:
+                                        won = (watch_side == 'yes')
+                                        mkt_result_w = 'yes'
                                 if won is True:
                                     profit_cents = (100 - entry) * qty
                                     loss_cents   = 0

@@ -6323,13 +6323,14 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const _isDriftStop = _exitReason.includes('drift_stop');
     const _isTimeStop = _exitReason.includes('time_stop');
     const _isSmartStop = _exitReason.includes('smart_stop');
+    const _apexSettled = bot._market_settled_at > 0 || bot._smart_stop_reason === 'final';
     const statusMap = {
         'market_making_active': ['ACTIVE', '#00d4ff'],
         'mm_depth_pulled': ['PULLED', '#ffaa00'],
         'mm_exiting': ['EXITING', '#ff8800'],
-        'completed': [_isDriftStop ? 'DRIFT STOP' : _isTimeStop ? 'TIME STOP' : _isSmartStop ? 'SMART STOP' : 'DONE',
-                      _isDriftStop || _isTimeStop || _isSmartStop ? '#ff8800' : '#00ff88'],
-        'stopped': ['STOPPED', '#ff4444'],
+        'completed': [_apexSettled ? '🏁 SETTLED' : _isDriftStop ? 'DRIFT STOP' : _isTimeStop ? 'TIME STOP' : _isSmartStop ? 'SMART STOP' : 'DONE',
+                      _apexSettled ? '#ffaa00' : (_isDriftStop || _isTimeStop || _isSmartStop ? '#ff8800' : '#00ff88')],
+        'stopped': [bot._pending_sells?.length ? '📤 SELLING' : 'STOPPED', bot._pending_sells?.length ? '#ffaa00' : '#ff4444'],
     };
     const [statusLabel, accentCol] = statusMap[status] || [status.toUpperCase(), '#8892a6'];
 
@@ -6355,7 +6356,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const invLimit = bot.inventory_limit || 0;
     const hasInv = netYes > 0 || netNo > 0;
 
-    const pnlColor = totalPnl >= 0 ? '#00ff88' : '#ff4444';
+    const pnlColor = totalPnl >= 0 ? '#00d4ff' : '#ff4444';
     const pnlSign = totalPnl >= 0 ? '+' : '';
 
     // Team name
@@ -6730,7 +6731,8 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
     const ageMin = bot.created_at ? Math.floor((nowSec - bot.created_at) / 60) : 0;
     const status = bot.status || 'waiting';
     const borderCol = { waiting:'#aa66ff', one_filled:'#ffaa00', both_filled:'#00ff88', stopped: bot._pending_sells?.length ? '#ffaa00' : '#ff4444', completed:'#00ff88', one_leg_timeout:'#ff8800', awaiting_settlement:'#818cf8' }[status] || '#aa66ff';
-    const statusLabel = { waiting:'⏳ WAITING', one_filled:'✅ ONE LEG IN', both_filled:'🔒 BOTH FILLED', stopped: bot._pending_sells?.length ? '📤 SELLING' : '🛑 STOPPED', completed:'✓ COMPLETE', one_leg_timeout:'⌛ SETTLING', awaiting_settlement:'⏳ SETTLING' }[status] || status;
+    const _midSettled = bot._market_settled_at > 0 || bot._smart_stop_reason === 'final';
+    const statusLabel = { waiting:'⏳ WAITING', one_filled:'✅ ONE LEG IN', both_filled:'🔒 BOTH FILLED', stopped: bot._pending_sells?.length ? '📤 SELLING' : '🛑 STOPPED', completed: _midSettled ? '🏁 SETTLED' : '✓ COMPLETE', one_leg_timeout:'⌛ SETTLING', awaiting_settlement:'⏳ SETTLING' }[status] || status;
     const targetA = bot.target_price_a || bot.target_price || 0;
     // Don't fall back to target_price for leg B — it stores leg A's price (legacy), which caused both to show same value
     const targetB = bot.target_price_b || 0;
@@ -7036,8 +7038,10 @@ function _renderWatchBotCard(bot, botId, container, gameScores) {
 
     // Status label + accent color
     let statusLabel, accentCol;
+    const _scoutSettled = bot._market_settled_at > 0 || bot._smart_stop_reason === 'final';
     if (isStopped) {
-        if (exitReason === 'stop_loss') { statusLabel = 'SL EXIT'; accentCol = '#ff4444'; }
+        if (_scoutSettled) { statusLabel = '🏁 SETTLED'; accentCol = '#ffaa00'; }
+        else if (exitReason === 'stop_loss') { statusLabel = 'SL EXIT'; accentCol = '#ff4444'; }
         else if (exitReason === 'take_profit') { statusLabel = 'TP HIT'; accentCol = '#00ff88'; }
         else { statusLabel = bot.status === 'stopped' ? 'STOPPED' : 'DONE'; accentCol = '#888'; }
     } else if (!orderFilled) {

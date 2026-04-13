@@ -7637,22 +7637,28 @@ def _apex_mm_walk_up(bot_id, bot):
 
     live_combined = avg_held + live_exit_bid
 
-    # ── SOAK: 15s after first exit post, hold at target for queue priority ──
+    # ── SOAK: hold at target for queue priority ──
     SOAK_SECONDS = 15
+    MAX_SOAK_SECONDS = 25  # hard cap — no infinite waiting
     soak_start = bot.get('_exit_soak_start') or bot.get('_exit_posted_at', now)
     if not bot.get('_exit_soak_start'):
         bot['_exit_soak_start'] = soak_start
     age = now - soak_start
+    # Absolute age since exit was first posted (never resets)
+    total_age = now - (bot.get('_exit_posted_at') or soak_start)
 
-    if age < SOAK_SECONDS and live_combined <= 100:
+    # ── ABSOLUTE SNAP OVERRIDE: bid moved >2c from target — snap NOW, ignore soak ──
+    _target_dist = abs(live_exit_bid - target_price) if live_exit_bid > 0 else 999
+    if _target_dist > 2 and live_exit_bid > 0 and total_age > 3:
+        pass  # fall through to snap/walk logic — market is running, don't wait
+
+    elif age < SOAK_SECONDS and live_combined <= 100:
         return  # still in soak and not underwater — hold for fill at target
 
-    # ── BREATHING GUARD: bid is close to target — reset soak, keep waiting ──
-    # If exit bid is within 2c of target, the market hasn't moved away — be patient
-    _target_dist = abs(live_exit_bid - target_price) if live_exit_bid > 0 else 999
-    if _target_dist <= 2 and live_combined <= 100:
+    # ── BREATHING GUARD: bid within 2c of target — extend soak once ──
+    elif _target_dist <= 2 and live_combined <= 100 and total_age < MAX_SOAK_SECONDS:
         if age >= SOAK_SECONDS:
-            bot['_exit_soak_start'] = now  # reset soak — still close, keep waiting
+            bot['_exit_soak_start'] = now  # one extension, capped by MAX_SOAK_SECONDS
         return
 
     # ── SNAP-BACK: bid improved, follow it down for better fill ──

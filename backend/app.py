@@ -3735,9 +3735,9 @@ def _ws_maker_sell_follow(ticker, yes_ask, no_ask):
             if _current_ask <= 0:
                 continue
             _posted = _sv.get('posted_price', 0)
-            if _current_ask >= _posted:
-                continue  # ask hasn't dropped, we're already competitive
-            # Ask dropped below us — amend down instantly
+            if _current_ask == _posted:
+                continue  # already at ask, nothing to do
+            # Ask changed — shadow it (follow up or down to stay at ask)
             try:
                 _amend_kw = {f'{_side}_price': _current_ask}
                 api_rate_limiter.wait()
@@ -3748,8 +3748,9 @@ def _ws_maker_sell_follow(ticker, yes_ask, no_ask):
                 _sell_new_oid = _sell_ord.get('order_id', '')
                 if _sell_new_oid and _sell_new_oid != _sv['oid']:
                     _sv['oid'] = _sell_new_oid
+                _dir = '↓' if _current_ask < _posted else '↑'
                 _sv['posted_price'] = _current_ask
-                print(f'⚡ WS MAKER SELL SNAP: {_sv["reason"]} {_side} {ticker} → {_current_ask}¢')
+                print(f'⚡ WS MAKER SELL SNAP: {_sv["reason"]} {_side} {ticker} {_posted}→{_current_ask}¢ {_dir}')
             except Exception as _e:
                 if '404' in str(_e) or 'not found' in str(_e).lower():
                     print(f'⚠ WS MAKER SELL SNAP: order gone for {_sv["reason"]} — will repost on next monitor tick')
@@ -14115,7 +14116,7 @@ def _run_monitor():
                     del _pending_maker_sells[_sk]
                     execute_maker_sell(_s_ticker, _s_side, _s_qty - _s_fills, reason=_sv['reason'])
                     continue
-                # Still resting — follow ask down every 3s, walk toward bid if stale >30s
+                # Still resting — shadow ask (fallback for when WS handler misses)
                 if (time.time() - _sv.get('_last_amend', 0)) > 3:
                     _sv['_last_amend'] = time.time()
                     # Use WS for live prices first, orderbook as fallback
@@ -14132,14 +14133,12 @@ def _run_monitor():
                         if _s_bid <= 0:
                             _s_bid = _best_bid(_s_ob, _s_side) if callable(globals().get('_best_bid', None)) else 0
                     _new_price = _sv['posted_price']
-                    if _s_ask > 0 and _s_ask < _sv['posted_price']:
-                        # Ask dropped below us — follow down instantly
+                    if _s_ask > 0 and _s_ask != _sv['posted_price']:
+                        # Shadow ask — follow up or down to stay at current ask
                         _new_price = _s_ask
-                    elif _s_age > 30 and _s_bid > 0 and _sv['posted_price'] > _s_bid and (time.time() - _sv.get('_last_walk_down', 0)) >= 30:
-                        # Stale >30s — walk -1c every 30s toward bid (stop AT bid to cross)
-                        _new_price = _sv['posted_price'] - 1
-                        _sv['_last_walk_down'] = time.time()
-                        print(f'📤 MAKER SELL WALK: {_sv["reason"]} {_s_side} {_s_ticker} {_sv["posted_price"]}→{_new_price}c (bid={_s_bid} ask={_s_ask} age={int(_s_age)}s)')
+                        if _new_price != _sv['posted_price']:
+                            _dir = '↓' if _new_price < _sv['posted_price'] else '↑'
+                            print(f'📤 MAKER SELL SHADOW: {_sv["reason"]} {_s_side} {_s_ticker} {_sv["posted_price"]}→{_new_price}c {_dir} (bid={_s_bid} ask={_s_ask} age={int(_s_age)}s)')
                     if _new_price != _sv['posted_price'] and _new_price > 0:
                         try:
                             _amend_kw = {f'{_s_side}_price': _new_price}

@@ -10375,7 +10375,7 @@ def _handle_phantom(bot_id, bot, actions):
 
     # (Race orphan system removed — ceiling exit cancels hedge before selling, no race possible)
 
-    # ── Smart-stopped cleanup: cancel unfilled orders and complete ──
+    # ── Smart-stopped cleanup: cancel unfilled orders, stay as 'stopped' so user can restart ──
     if bot.get('_smart_stopped') and status in ('dog_anchor_posted', 'waiting_repeat'):
         _cancel_oid = bot.get('dog_order_id')
         if _cancel_oid:
@@ -10384,9 +10384,11 @@ def _handle_phantom(bot_id, bot, actions):
                 kalshi_client.cancel_order(_cancel_oid)
             except Exception:
                 pass
-        _phantom_set_final_status(bot, bot_id)
+        bot['status'] = 'stopped'
+        bot['stopped_at'] = time.time()
+        bot['_stop_reason'] = bot.get('_smart_stop_reason', 'smart_consecutive')
         bot_log('PHANTOM_SMART_STOP_CLEANUP', bot_id, {'prev_status': status, 'cancelled_order': bool(_cancel_oid)})
-        print(f'🧹 SMART CLEANUP: {bot_id} smart-stopped in {status} → {bot["status"]}')
+        print(f'🛑 SMART STOP: {bot_id} smart-stopped in {status} → stopped (awaiting restart or settlement)')
         save_state()
         return
 
@@ -13772,7 +13774,7 @@ def _run_monitor():
         _purge_ids = [bid for bid, b in active_bots.items()
                       if (b.get('status') == 'cancelled'
                           and (b.get('cancelled_at') or 0) < _purge_cutoff)
-                      or (b.get('status') == 'completed'
+                      or (b.get('status') in ('completed', 'stopped')
                           and b.get('_smart_stop_reason') != 'manual'
                           and b.get('_market_settled_at', 0) > 0
                           and b['_market_settled_at'] < _purge_cutoff)

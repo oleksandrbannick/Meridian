@@ -6436,38 +6436,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             else walkLabel = `<span style="color:#00ff88;font-size:8px;font-weight:700;">TARGET +${100 - combined}c</span>`;
         }
         // Walk bar — full range from target to stop-loss
-        let walkBarHtml = '';
-        if (exitPrice > 0) {
-            const barMin = origTargetCombined;
-            const barMax = stopLoss;
-            // 100c is always at 50% — left half = profit zone, right half = loss zone
-            const leftRange = 100 - barMin;  // target to 100c
-            const rightRange = barMax - 100;  // 100c to stop loss
-            const combPct = combined <= 100
-                ? Math.max(0, Math.min(50, leftRange > 0 ? Math.round((combined - barMin) / leftRange * 50) : 0))
-                : Math.min(100, 50 + (rightRange > 0 ? Math.round((combined - 100) / rightRange * 50) : 0));
-            const walkProfitNow = 100 - combined;
-            const walkProfitTarget = 100 - origTargetCombined;
-            const markerCol = combined <= origTargetCombined + 1 ? '#00ff88' : combined < 100 ? '#ffaa00' : '#ff4444';
-            walkBarHtml = `<div style="margin-top:8px;padding:8px 10px;background:#060a12;border:1px solid #1e274030;border-radius:8px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                    <span style="color:#8892a6;font-size:8px;font-weight:700;letter-spacing:.06em;">WALK</span>
-                    <span style="font-size:8px;">${walkLabel}</span>
-                    <span style="color:#556;font-size:8px;">${origTargetCombined}c → ${stopLoss}c</span>
-                </div>
-                <div style="position:relative;height:8px;background:#0a1018;border-radius:4px;overflow:hidden;">
-                    <div style="position:absolute;left:0;width:50%;height:100%;background:linear-gradient(90deg,#00ff8818,#00ff8808);"></div>
-                    <div style="position:absolute;left:50%;width:50%;height:100%;background:linear-gradient(90deg,#ff444410,#ff444420);"></div>
-                    <div style="position:absolute;left:50%;width:2px;height:100%;background:#ffaa00;z-index:2;"></div>
-                    <div style="position:absolute;left:${combPct}%;width:8px;height:100%;background:${markerCol};border-radius:4px;z-index:3;transform:translateX(-4px);box-shadow:0 0 6px ${markerCol}80;"></div>
-                </div>
-                <div style="display:flex;justify-content:space-between;margin-top:3px;font-size:7px;font-weight:700;">
-                    <span style="color:#00ff88;">${origTargetCombined}c</span>
-                    <span style="color:#ffaa00;">100c</span>
-                    <span style="color:#ff4444;">${stopLoss}c</span>
-                </div>
-            </div>`;
-        }
+        // Walk bar removed — exit panel (Section 3) already shows zone bar with full detail
         positionBarHtml = `<div style="margin-bottom:8px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
                 <span style="color:${profitCol};font-weight:800;font-size:16px;">${profit >= 0 ? '+' : ''}${profit}c</span>
@@ -6475,36 +6444,35 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 ${skewSec > 0 ? `<span style="color:#445;font-size:9px;">${timeStr}</span>` : ''}
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
-                <div style="padding:8px 10px;background:#00d4ff08;border:1px solid #00d4ff20;border-radius:6px;">
+                <div style="padding:8px 10px;background:${longSide === 'YES' ? '#00d4ff08' : '#ff704308'};border:1px solid ${longSide === 'YES' ? '#00d4ff20' : '#ff704320'};border-radius:6px;">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                        <span style="color:#00d4ff;font-size:9px;font-weight:800;">ANCHOR ${longSide}</span>
-                        <span style="color:#00d4ff;font-size:10px;font-weight:700;">${avgCost}c</span>
+                        <span style="color:${longSide === 'YES' ? '#00d4ff' : '#ff7043'};font-size:9px;font-weight:800;">YES ${longSide === 'YES' ? 'ENTRY' : 'EXIT'}</span>
+                        <span style="color:${longSide === 'YES' ? '#00d4ff' : '#ff7043'};font-size:10px;font-weight:700;">${longSide === 'YES' ? avgCost + 'c' : (exitPrice > 0 ? exitPrice + 'c' : '--')}</span>
                     </div>
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
-                        <span style="color:#556;font-size:9px;">${netHeld}x held</span>
-                        <span style="font-size:8px;"><span style="color:#00ff88;">${longSide === 'YES' ? liveYesBid : liveNoBid}</span><span style="color:#334;"> / </span><span style="color:#ff4444;">${longSide === 'YES' ? liveYesAsk : liveNoAsk}</span></span>
+                        <span style="color:#556;font-size:9px;">${longSide === 'YES' ? netHeld + 'x held' : (exitPrice > 0 ? exitFillQty + '/' + exitTotalQty + ' filled' : 'pending')}</span>
+                        <span style="font-size:8px;"><span style="color:#00ff88;">${liveYesBid}</span><span style="color:#334;"> / </span><span style="color:#ff4444;">${liveYesAsk}</span></span>
                     </div>
                     <div style="height:4px;background:#0a1018;border-radius:2px;overflow:hidden;">
-                        <div style="width:${anchorFp}%;height:100%;background:#00d4ff;border-radius:2px;transition:width .3s;"></div>
+                        <div style="width:${longSide === 'YES' ? anchorFp : hedgeFp}%;height:100%;background:${longSide === 'YES' ? '#00d4ff' : '#ff7043'};border-radius:2px;transition:width .3s;"></div>
                     </div>
-                    <div style="color:#334;font-size:7px;margin-top:1px;text-align:right;">${anchorTotalFills}/${anchorTotalQty}</div>
+                    <div style="color:#334;font-size:7px;margin-top:1px;text-align:right;">${longSide === 'YES' ? anchorTotalFills + '/' + anchorTotalQty : exitFillQty + '/' + exitTotalQty}</div>
                 </div>
-                <div style="padding:8px 10px;background:#ff704308;border:1px solid #ff704320;border-radius:6px;">
+                <div style="padding:8px 10px;background:${longSide === 'NO' ? '#00d4ff08' : '#ff704308'};border:1px solid ${longSide === 'NO' ? '#00d4ff20' : '#ff704320'};border-radius:6px;">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                        <span style="color:#ff7043;font-size:9px;font-weight:800;">HEDGE ${exitSide}</span>
-                        <span style="color:#ff7043;font-size:10px;font-weight:700;">${exitPrice > 0 ? exitPrice + 'c' : '--'}</span>
+                        <span style="color:${longSide === 'NO' ? '#00d4ff' : '#ff7043'};font-size:9px;font-weight:800;">NO ${longSide === 'NO' ? 'ENTRY' : 'EXIT'}</span>
+                        <span style="color:${longSide === 'NO' ? '#00d4ff' : '#ff7043'};font-size:10px;font-weight:700;">${longSide === 'NO' ? avgCost + 'c' : (exitPrice > 0 ? exitPrice + 'c' : '--')}</span>
                     </div>
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
-                        <span style="color:#556;font-size:9px;">${exitPrice > 0 ? `${exitFillQty}/${exitTotalQty} filled` : 'pending'}</span>
-                        <span style="font-size:8px;">${slBadge}<span style="color:#00ff88;">${exitSide === 'YES' ? liveYesBid : liveNoBid}</span><span style="color:#334;"> / </span><span style="color:#ff4444;">${exitSide === 'YES' ? liveYesAsk : liveNoAsk}</span></span>
+                        <span style="color:#556;font-size:9px;">${longSide === 'NO' ? netHeld + 'x held' : (exitPrice > 0 ? exitFillQty + '/' + exitTotalQty + ' filled' : 'pending')}</span>
+                        <span style="font-size:8px;">${longSide === 'NO' ? '' : slBadge}<span style="color:#00ff88;">${liveNoBid}</span><span style="color:#334;"> / </span><span style="color:#ff4444;">${liveNoAsk}</span></span>
                     </div>
                     <div style="height:4px;background:#0a1018;border-radius:2px;overflow:hidden;">
-                        <div style="width:${hedgeFp}%;height:100%;background:#ff7043;border-radius:2px;transition:width .3s;"></div>
+                        <div style="width:${longSide === 'NO' ? anchorFp : hedgeFp}%;height:100%;background:${longSide === 'NO' ? '#00d4ff' : '#ff7043'};border-radius:2px;transition:width .3s;"></div>
                     </div>
-                    <div style="color:#334;font-size:7px;margin-top:1px;text-align:right;">${exitFillQty}/${exitTotalQty}</div>
+                    <div style="color:#334;font-size:7px;margin-top:1px;text-align:right;">${longSide === 'NO' ? anchorTotalFills + '/' + anchorTotalQty : exitFillQty + '/' + exitTotalQty}</div>
                 </div>
             </div>
-            ${walkBarHtml}
         </div>`;
     }
 

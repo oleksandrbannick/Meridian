@@ -14370,6 +14370,21 @@ def _handle_apex(bot_id, bot, actions):
             print(f'🛡️ APEX MM HEDGE PULL: {bot_id} cancelled {_hedge_cancelled} {hedge_side} ladder rungs (keeping exit)')
             save_state()
 
+    # 3.75. Missing exit order recovery: if holding inventory but no exit OID,
+    # create the exit order. Happens after restart when state was saved without OID.
+    net_yes = bot.get('net_yes', 0)
+    net_no = bot.get('net_no', 0)
+    if net_yes > 0 or net_no > 0:
+        _held_side_r = 'yes' if net_yes > net_no else 'no'
+        _exit_side_r = 'no' if _held_side_r == 'yes' else 'yes'
+        if not bot.get(f'_{_exit_side_r}_exit_oid'):
+            print(f'🔧 APEX MM MISSING EXIT: {bot_id} holding {_held_side_r.upper()} but no {_exit_side_r} exit OID — creating')
+            bot_log('APEX_MM_MISSING_EXIT', bot_id, {
+                'held_side': _held_side_r, 'exit_side': _exit_side_r,
+                'net_yes': net_yes, 'net_no': net_no,
+            }, level='WARN')
+            threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _held_side_r), daemon=True).start()
+
     # 4. Unrealized P&L stop
     if _apex_mm_check_loss_limit(bot_id, bot):
         return

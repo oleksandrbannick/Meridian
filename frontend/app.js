@@ -6584,7 +6584,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                         const combCol = combPrice > 0 ? (combPrice < 99 ? '#00ff88' : combPrice <= 100 ? '#ffaa00' : '#ff4444') : '';
                         const sellPrice = ex.type === 'arb_complete' ? ex.exit_price : ex.sell_price;
                         return `<div style="display:grid;grid-template-columns:28px 36px 36px 38px 30px 1fr;align-items:center;padding:2px 0;font-size:10px;${i > 0 ? 'border-top:1px solid #0f1520;' : ''}">
-                            <span style="color:${sideCol};font-weight:700;">${sideLabel}</span>
+                            <span style="color:#ff7043;">#${i+1}</span>
                             <span style="color:${heldCol};text-align:right;">${ex.held_avg}c</span>
                             <span style="color:${exitCol};text-align:right;">${sellPrice}c</span>
                             <span style="text-align:right;">${combPrice > 0 ? `<span style="color:${combCol};font-weight:700;">${combPrice}c</span>` : ''}</span>

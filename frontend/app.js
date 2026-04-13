@@ -7961,6 +7961,32 @@ async function loadBots() {
                     <span style="color:#aaa;">${heldDesc}</span> <span style="color:#555;">· waiting ${awaitMin}m</span>
                     <br><span style="color:#555;font-size:9px;">Will auto-resolve when Kalshi settles the market</span>
                 </div>`;
+            } else if (_isSettled && isAnchorDog) {
+                // Settled phantom — show settlement result
+                const dogSide = (bot.dog_side || '?').toUpperCase();
+                const dogPrice = bot.dog_price || 0;
+                const settledQty = bot._settled_qty || bot.quantity || 0;
+                const hadFills = (bot.dog_fill_qty || 0) > 0 || (bot._settled_qty || 0) > 0;
+                if (hadFills && bot._settled_pnl != null) {
+                    const won = bot._settled_won;
+                    const pnl = bot._settled_pnl;
+                    const pnlDollars = (Math.abs(pnl) / 100).toFixed(2);
+                    const favFills = bot._settled_fav_fills || 0;
+                    const resultLabel = won ? `WIN +$${pnlDollars}` : `LOSS -$${pnlDollars}`;
+                    const resultColor = won ? '#00ff88' : '#ff4444';
+                    const hedgeNote = favFills > 0
+                        ? `${favFills}/${settledQty} hedged · ${settledQty - favFills} rode to settlement`
+                        : `${settledQty} contracts rode to settlement unhedged`;
+                    stopLossInfo = `<div style="background:${resultColor}11;border:1px solid ${resultColor}33;border-radius:5px;padding:6px 10px;font-size:10px;color:${resultColor};margin-top:6px;">
+                        <div style="font-weight:800;font-size:12px;margin-bottom:3px;">🏁 ${resultLabel}</div>
+                        <div style="color:#aaa;font-size:10px;">${dogSide} @ ${dogPrice}¢ · ${hedgeNote}</div>
+                        <div style="color:#555;font-size:9px;">Market result: ${(bot._settled_result || '?').toUpperCase()}</div>
+                    </div>`;
+                } else if (!hadFills) {
+                    stopLossInfo = `<div style="background:#00ff8811;border:1px solid #00ff8833;border-radius:5px;padding:6px 10px;font-size:10px;color:#00ff88;margin-top:6px;">
+                        🏁 <strong>SETTLED</strong> — no fills, no P&L impact
+                    </div>`;
+                }
             } else if (isAnchorDog && bot.status === 'dog_anchor_posted') {
                 const dogSide = (bot.dog_side || '?').toUpperCase();
                 const favSide = (bot.fav_side || '?').toUpperCase();
@@ -8280,6 +8306,37 @@ async function loadBots() {
                             const isFavWaiting = !bot.fav_price && bot.status !== 'fav_hedge_posted';
                             const dogColor = dogSide === 'yes' ? '#00ff88' : '#ff4444';
                             const favColor = favSide === 'yes' ? '#00ff88' : '#ff4444';
+
+                            // Settled state: show clean settlement boxes
+                            if (_isSettled) {
+                                const sQty = bot._settled_qty || qty;
+                                const sFavFills = bot._settled_fav_fills || 0;
+                                const sWon = bot._settled_won;
+                                const sResult = (bot._settled_result || '?').toUpperCase();
+                                const sDogFill = sQty;
+                                const sDogColor = dogSide === 'yes' ? '#00ff88' : '#ff4444';
+                                const hasFills = sDogFill > 0 || dogFill > 0;
+                                if (!hasFills) {
+                                    // No fills — clean settled
+                                    return `<div style="grid-column:1/-1;text-align:center;color:#555;font-size:10px;padding:10px;">
+                                        🏁 Market settled · no fills
+                                    </div>`;
+                                }
+                                const resultColor = sWon ? '#00ff88' : '#ff4444';
+                                const resultIcon = sWon ? '✓ WON' : '✗ LOST';
+                                return `
+                                <div style="background:${sDogColor}08;border:1px solid ${sDogColor}22;border-radius:6px;padding:8px;">
+                                    <div style="color:${sDogColor};font-size:9px;font-weight:700;margin-bottom:4px;">🎯 ANCHOR · ${dogSide.toUpperCase()} · SETTLED</div>
+                                    <div style="font-size:18px;font-weight:800;color:#fff;">${dogPrice}¢</div>
+                                    <div style="color:#555;font-size:10px;">${sDogFill} contracts</div>
+                                    <div style="color:${resultColor};font-size:10px;font-weight:700;margin-top:4px;">${sResult} → ${resultIcon}</div>
+                                </div>
+                                <div style="background:${favColor}08;border:1px solid ${favColor}22;border-radius:6px;padding:8px;">
+                                    <div style="color:${favColor};font-size:9px;font-weight:700;margin-bottom:4px;">⭐ FAV · ${favSide.toUpperCase()}</div>
+                                    <div style="font-size:18px;font-weight:800;color:#fff;">${sFavFills > 0 ? favPrice + '¢' : '—'}</div>
+                                    <div style="color:#555;font-size:10px;">${sFavFills > 0 ? sFavFills + '/' + sQty + ' hedged' : 'unhedged — rode to settlement'}</div>
+                                </div>`;
+                            }
 
                             return `
                             <div>

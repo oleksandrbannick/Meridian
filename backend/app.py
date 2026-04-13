@@ -12507,6 +12507,12 @@ def _handle_phantom(bot_id, bot, actions):
                     _phantom_set_final_status(bot, bot_id)
                     bot['_smart_stopped'] = True
                     bot['_smart_stop_reason'] = 'final'
+                    # Store settlement result for frontend display
+                    bot['_settled_won'] = dog_won
+                    bot['_settled_pnl'] = profit
+                    bot['_settled_result'] = _settle_result
+                    bot['_settled_fav_fills'] = _fav_settled
+                    bot['_settled_qty'] = qty
                     save_state()
                     actions.append({'bot_id': bot_id, 'action': 'anchor_settled', 'won': dog_won, 'pnl': profit})
                     return
@@ -13088,6 +13094,12 @@ def _handle_phantom(bot_id, bot, actions):
                     bot['_smart_stopped'] = True
                     bot['_smart_stop_reason'] = 'final'
                     bot['_needs_settlement_pnl'] = False
+                    # Store settlement result for frontend display
+                    bot['_settled_won'] = dog_won
+                    bot['_settled_pnl'] = profit
+                    bot['_settled_result'] = _settle_result
+                    bot['_settled_fav_fills'] = _fav_filled
+                    bot['_settled_qty'] = _s_qty
                     save_state()
                     actions.append({'bot_id': bot_id, 'action': 'anchor_settled', 'won': dog_won, 'pnl': profit})
                     return

@@ -8737,6 +8737,11 @@ def _apex_mm_begin_exit_inner(bot_id, bot, reason):
             net_no = _be_qty if _be_side == 'no' else 0
             bot['net_yes'] = net_yes
             bot['net_no'] = net_no
+            # Set cost basis — use live price as estimate to prevent phantom P&L
+            if bot.get(f'avg_{_be_side}_cost', 0) == 0:
+                _be_est = bot.get(f'live_{_be_side}_ask', 0) or bot.get(f'live_{_be_side}_bid', 50) or 50
+                bot[f'avg_{_be_side}_cost'] = _be_est
+                bot[f'total_{_be_side}_cost'] = _be_est * _be_qty
             print(f'🚨 APEX MM BEGIN_EXIT ORPHAN CATCH: {bot_id} thought flat but kalshi has {_be_qty}x {_be_side.upper()} — routing to mm_exiting')
             bot_log('APEX_MM_BEGIN_EXIT_ORPHAN', bot_id, {
                 'side': _be_side, 'qty': _be_qty, 'reason': reason,
@@ -8898,6 +8903,10 @@ def _apex_mm_exit_tick(bot_id, bot):
                     # Buy-opposite: arb completion (YES + NO = 100c payout)
                     held_side = sell_info.get('held_side', 'yes' if side == 'no' else 'no')
                     held_avg = bot.get(f'avg_{held_side}_cost', 0)
+                    # SAFETY: if held_avg is 0, cost basis was lost — assume 100-actual_price (zero P&L)
+                    if held_avg == 0:
+                        held_avg = 100 - actual_price
+                        print(f'🛡️ APEX MM ARB EXIT ZERO-COST GUARD: {bot_id} held_avg was 0 → using {held_avg}c (zero P&L)')
                     gross_pnl_per = 100 - held_avg - actual_price
                     gross_pnl = gross_pnl_per * target
                     fee_held = _kalshi_side_fee_cents(held_avg, target)
@@ -8936,6 +8945,11 @@ def _apex_mm_exit_tick(bot_id, bot):
                     # Sell held side (original path)
                     opposite_side = 'no' if side == 'yes' else 'yes'
                     avg_cost = bot.get(f'avg_{side}_cost', 0)
+                    # SAFETY: if avg_cost is 0, cost basis was lost (orphan recovery race)
+                    # Assume zero P&L — never record phantom profit from missing cost basis
+                    if avg_cost == 0 and bot.get(f'net_{side}', 0) > 0:
+                        avg_cost = actual_price
+                        print(f'🛡️ APEX MM SELLBACK ZERO-COST GUARD: {bot_id} {side.upper()} avg_cost was 0 → using sell price {actual_price}c (zero P&L)')
                     gross_pnl_per = actual_price - avg_cost
                     gross_pnl = gross_pnl_per * target
                     fee_entry = _kalshi_side_fee_cents(avg_cost, target)
@@ -9042,6 +9056,11 @@ def _apex_mm_exit_tick(bot_id, bot):
             _orphan_side = 'yes' if _exit_kalshi_net > 0 else 'no'
             _orphan_qty = abs(_exit_kalshi_net)
             bot[f'net_{_orphan_side}'] = _orphan_qty
+            # Set cost basis — use live ask or bid as estimate to prevent phantom P&L
+            if bot.get(f'avg_{_orphan_side}_cost', 0) == 0:
+                _orph_est = bot.get(f'live_{_orphan_side}_ask', 0) or bot.get(f'live_{_orphan_side}_bid', 50) or 50
+                bot[f'avg_{_orphan_side}_cost'] = _orph_est
+                bot[f'total_{_orphan_side}_cost'] = _orph_est * _orphan_qty
             print(f'🚨 APEX MM ORPHAN CATCH: {bot_id} bot thought flat but kalshi has {_orphan_qty}x {_orphan_side.upper()} — reposting exit sell')
             bot_log('APEX_MM_ORPHAN_CATCH', bot_id, {
                 'side': _orphan_side, 'qty': _orphan_qty, 'kalshi_net': _exit_kalshi_net,
@@ -9127,6 +9146,12 @@ def _apex_mm_exit_tick(bot_id, bot):
                         bot[f'net_{_sell_side}'] = _sell_qty
                         _other = 'no' if _sell_side == 'yes' else 'yes'
                         bot[f'net_{_other}'] = 0
+                        # Ensure cost basis exists — if 0, use live ask as estimate
+                        if bot.get(f'avg_{_sell_side}_cost', 0) == 0:
+                            _est_cost = bot.get(f'live_{_sell_side}_ask', 0) or bot.get(f'live_{_sell_side}_bid', 50) or 50
+                            bot[f'avg_{_sell_side}_cost'] = _est_cost
+                            bot[f'total_{_sell_side}_cost'] = _est_cost * _sell_qty
+                            print(f'🛡️ APEX MM STUCK RECOVERY COST: {bot_id} {_sell_side.upper()} avg_cost was 0 → using {_est_cost}c')
                         _live_bid = bot.get(f'live_{_sell_side}_bid', 0)
                         _live_ask = bot.get(f'live_{_sell_side}_ask', 0)
                         _sell_price = _live_ask if _live_ask > 0 else (_live_bid + 1 if _live_bid > 0 else bot.get(f'avg_{_sell_side}_cost', 50))

@@ -4583,8 +4583,8 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 net_no = bot.get('net_no', 0)
                 if net_yes == 0 and net_no == 0:
                     bot[f'_{matched_side}_exit_oid'] = None
-                    threading.Thread(target=_apex_mm_cycle_reset, args=(bot_id, bot), daemon=True).start()
-                    print(f'📊 APEX MM FLAT: {bot_id} → cycle reset')
+                    threading.Thread(target=_apex_mm_cycle_refill, args=(bot_id, bot), daemon=True).start()
+                    print(f'📊 APEX MM FLAT: {bot_id} → cycle refill')
                 elif abs(net_yes - net_no) > 0:
                     # Still holding some — amend exit order with reduced count + refill freed slots
                     threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, matched_side), daemon=True).start()
@@ -8051,6 +8051,304 @@ def _apex_mm_cycle_reset(bot_id, bot):
     print(f'📊 APEX MM CYCLE RESET: {bot_id} flat → fresh ladder @ mid={midpoint}')
 
 
+_apex_mm_cycle_refill_lock = threading.Lock()
+
+
+def _apex_mm_fresh_ladder(bot_id, bot):
+    """Post a fresh symmetric ladder from a known-flat, known-clean state.
+    Used after begin_exit or exit_tick when smart mode says repeat.
+    All orders already cancelled by caller — just compute midpoint and post."""
+    ticker = bot.get('ticker', '')
+    midpoint = _apex_mm_midpoint(ticker)
+    if midpoint is None:
+        yb = bot.get('live_yes_bid', 0)
+        nb = bot.get('live_no_bid', 0)
+        if yb > 0 and nb > 0:
+            midpoint = round((yb + (100 - nb)) / 2)
+        else:
+            print(f'⚠ APEX MM FRESH LADDER: {bot_id} no prices — cannot post')
+            return False
+
+    # Apply any deferred edits now that we're flat
+    _pending = bot.pop('_pending_edit', None)
+    if _pending:
+        for key, vals in _pending.items():
+            bot[key] = vals['new']
+            if key == 'qty_per_level':
+                bot['base_qty'] = vals['new']
+        _il_levels = bot.get('levels', 7)
+        _il_qty = bot.get('qty_per_level', 10)
+        bot['inventory_limit'] = sum(max(1, round(_il_qty * (1.0 + (i * 1.0 / max(1, _il_levels - 1))))) for i in range(_il_levels))
+        print(f'🔧 APEX MM DEFERRED EDIT APPLIED: {bot_id} — {_pending}')
+        bot_log('APEX_MM_EDIT_APPLIED', bot_id, {'changes': _pending})
+
+    base_qty = bot.get('base_qty', bot.get('qty_per_level', 10))
+    bot['_yes_side_paused'] = False
+    bot['_no_side_paused'] = False
+    # Clear stale fill counts — fresh orders
+    for _sk in ('yes_orders', 'no_orders'):
+        for _lv in bot.get(_sk, {}).values():
+            _lv['fill_qty'] = 0
+            _lv['oid'] = None
+    yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, scale=bot.get('auto_scale', True), inv_limit=bot.get('inventory_limit', 0))
+    _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
+    bot['midpoint'] = midpoint
+    bot['_skew_active'] = False
+    bot['_skew_direction'] = ''
+    bot['_exit_price'] = 0
+    bot['_exit_walk_count'] = 0
+    bot['_exit_walk_started'] = 0
+    bot['_exit_posted_at'] = 0
+    bot['_exit_fill_qty'] = 0
+    bot['_exit_total_qty'] = 0
+    bot['_exit_soak_start'] = None
+    bot['_last_pull_reason'] = ''
+    bot['_velocity_gated'] = False
+    bot['_velocity_gated_side'] = ''
+    bot['_velocity_gated_at'] = 0
+    bot['_velocity_fills'] = []
+    bot['_sl_breach_since'] = None
+    bot['_sl_breach_peak'] = None
+    bot['_sl_breach_phase'] = None
+    # Prune to current cycle's orders only
+    _current_oids = set()
+    for _side_key in ('yes_orders', 'no_orders'):
+        for _lvl in bot.get(_side_key, {}).values():
+            _oid = _lvl.get('oid')
+            if _oid:
+                _current_oids.add(_oid)
+    bot['_all_placed_order_ids'] = list(_current_oids)
+    bot['_counted_order_fills'] = {}
+    bot['_cycle_start_pnl'] = bot.get('realized_pnl_cents', 0)
+    save_state()
+    bot_log('APEX_MM_FRESH_LADDER', bot_id, {'midpoint': midpoint})
+    print(f'📊 APEX MM FRESH LADDER: {bot_id} → symmetric ladder @ mid={midpoint}')
+    return True
+
+
+def _apex_mm_cycle_refill(bot_id, bot):
+    """Incremental refill: keep unfilled anchor orders, repost only missing rungs.
+    Called when exit fill completes a round trip and bot is flat.
+    Eliminates the cancel-everything race condition of _apex_mm_cycle_reset."""
+    if not _apex_mm_cycle_refill_lock.acquire(blocking=False):
+        print(f'🛡️ APEX MM CYCLE REFILL SKIPPED: {bot_id} already in progress')
+        return
+    try:
+        _apex_mm_cycle_refill_inner(bot_id, bot)
+    finally:
+        _apex_mm_cycle_refill_lock.release()
+
+
+def _apex_mm_cycle_refill_inner(bot_id, bot):
+    """Inner refill logic — protected by _apex_mm_cycle_refill_lock."""
+    ticker = bot.get('ticker', '')
+    net_yes = bot.get('net_yes', 0)
+    net_no = bot.get('net_no', 0)
+
+    # Guard: must be flat
+    if net_yes != 0 or net_no != 0:
+        print(f'⚠ APEX MM CYCLE REFILL: {bot_id} not flat (Y={net_yes} N={net_no}) — falling back to cycle_reset')
+        _apex_mm_cycle_reset(bot_id, bot)
+        return
+
+    # ── Smart mode check ──
+    _cycle_pnl = bot.get('realized_pnl_cents', 0) - bot.get('_cycle_start_pnl', 0)
+    _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, _cycle_pnl)
+    if not _smart_repeat:
+        # Cancel remaining anchor orders and complete
+        for side_key in ('yes_orders', 'no_orders'):
+            for price_str, level in list(bot.get(side_key, {}).items()):
+                oid = level.get('oid')
+                if oid:
+                    _safe_cancel(oid, f'apex_mm_refill_complete_{bot_id}')
+                    level['oid'] = None
+        bot['status'] = 'completed'
+        bot['completed_at'] = time.time()
+        bot['_smart_stop_reason'] = _smart_reason
+        save_state()
+        bot_log('APEX_MM_COMPLETE', bot_id, {
+            'reason': f'smart_stop ({_smart_reason})',
+            'realized_pnl': bot.get('realized_pnl_cents', 0),
+            'round_trips': bot.get('round_trips_completed', 0),
+            'cycle_pnl': _cycle_pnl,
+        })
+        print(f'✅ APEX MM COMPLETE: {bot_id} smart_stop={_smart_reason} pnl={bot.get("realized_pnl_cents", 0)}c')
+        return
+
+    # ── Check for pending edits ──
+    _has_pending_edit = bool(bot.get('_pending_edit'))
+
+    # ── Compute midpoint + drift check ──
+    live_midpoint = _apex_mm_midpoint(ticker)
+    if live_midpoint is None:
+        yb = bot.get('live_yes_bid', 0)
+        nb = bot.get('live_no_bid', 0)
+        if yb > 0 and nb > 0:
+            live_midpoint = round((yb + (100 - nb)) / 2)
+        else:
+            print(f'⚠ APEX MM CYCLE REFILL: {bot_id} no prices — cannot refill')
+            return
+    stored_midpoint = bot.get('midpoint', 0)
+    _drift = abs(live_midpoint - stored_midpoint) if stored_midpoint > 0 else 0
+
+    # If midpoint drifted or pending edits → cancel all anchors, full repost
+    if _drift >= APEX_MM_DRIFT_THRESHOLD or _has_pending_edit:
+        _reason = f'drift ({stored_midpoint}→{live_midpoint})' if _drift >= APEX_MM_DRIFT_THRESHOLD else 'pending_edit'
+        print(f'📊 APEX MM REFILL → FULL REPOST: {bot_id} {_reason}')
+        # Cancel all remaining orders with fill-check
+        _late_fills = 0
+        for side_key in ('yes_orders', 'no_orders'):
+            _side = 'yes' if side_key == 'yes_orders' else 'no'
+            for price_str, level in list(bot.get(side_key, {}).items()):
+                oid = level.get('oid')
+                if not oid:
+                    continue
+                _cr = _safe_cancel(oid, f'apex_mm_refill_drift_{bot_id}')
+                with ws_fill_lock:
+                    if isinstance(_cr, tuple) and _cr[0] == 'filled':
+                        _kalshi_fills = _cr[1]
+                        _ws_already = max(level.get('fill_qty', 0),
+                                          bot.get('_counted_order_fills', {}).get(oid, 0))
+                        _new_fills = max(0, _kalshi_fills - _ws_already)
+                        if _new_fills > 0:
+                            _price = int(price_str)
+                            _late_fills += _new_fills
+                            bot[f'net_{_side}'] = bot.get(f'net_{_side}', 0) + _new_fills
+                            bot[f'total_{_side}_cost'] = bot.get(f'total_{_side}_cost', 0) + (_price * _new_fills)
+                            _net = bot[f'net_{_side}']
+                            bot[f'avg_{_side}_cost'] = round(bot[f'total_{_side}_cost'] / _net) if _net > 0 else 0
+                            bot.setdefault('_counted_order_fills', {})[oid] = _kalshi_fills
+                            print(f'🚨 REFILL LATE FILL: {bot_id} {_side.upper()} +{_new_fills}x @{_price}c')
+                level['oid'] = None
+        # If late fills found, abort and handle inventory
+        if _late_fills > 0:
+            print(f'🚨 REFILL ABORTED: {bot_id} {_late_fills} late fills during anchor cancel — not flat')
+            _fill_side = 'yes' if bot.get('net_yes', 0) > bot.get('net_no', 0) else 'no'
+            threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _fill_side), daemon=True).start()
+            save_state()
+            return
+        # Still flat — full fresh ladder
+        _apex_mm_fresh_ladder(bot_id, bot)
+        return
+
+    # ── OBI gate ──
+    should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH, obi_threshold=APEX_MM_PULL_OBI)
+    if should_pull:
+        # Cancel all remaining orders (safe — we're flat) and enter pulled state
+        for side_key in ('yes_orders', 'no_orders'):
+            for price_str, level in list(bot.get(side_key, {}).items()):
+                oid = level.get('oid')
+                if oid:
+                    _safe_cancel(oid, f'apex_mm_refill_obi_{bot_id}')
+                    level['oid'] = None
+        bot['status'] = 'mm_depth_pulled'
+        bot['_pull_count'] = bot.get('_pull_count', 0) + 1
+        bot['_last_pull_at'] = time.time()
+        bot['_last_pull_reason'] = f'refill_obi: {pull_reason}'
+        bot['_cycle_start_pnl'] = bot.get('realized_pnl_cents', 0)
+        save_state()
+        bot_log('APEX_MM_REFILL_OBI_PULL', bot_id, {'reason': pull_reason})
+        print(f'📊 APEX MM REFILL → OBI PULL: {bot_id} {pull_reason}')
+        return
+
+    # ── Incremental refill: diff expected vs. live, post missing rungs ──
+    bot['_refill_in_progress'] = True
+    try:
+        base_qty = bot.get('base_qty', bot.get('qty_per_level', 10))
+        yes_levels, no_levels = _apex_mm_levels(
+            stored_midpoint, bot['start_gap'], bot['levels'], bot['spacing'],
+            base_qty=base_qty, scale=bot.get('auto_scale', True),
+            inv_limit=bot.get('inventory_limit', 0)
+        )
+
+        _refilled = 0
+        for side, expected_levels in [('yes', yes_levels), ('no', no_levels)]:
+            orders_key = f'{side}_orders'
+            orders_dict = bot.setdefault(orders_key, {})
+            missing_specs = []
+            missing_meta = []  # (price, qty) for tracking
+
+            for price, qty in expected_levels:
+                price_str = str(price)
+                existing = orders_dict.get(price_str)
+                if existing and existing.get('oid'):
+                    continue  # order still live — keep it
+                # Missing or consumed rung — needs repost
+                missing_specs.append({
+                    'ticker': ticker, 'side': side, 'action': 'buy',
+                    'count': qty, 'price': price,
+                })
+                missing_meta.append((price, qty))
+
+            if not missing_specs:
+                continue
+
+            # Post missing rungs via batch wrapper (handles retry + fallback)
+            results = create_orders_batch(missing_specs)
+            if results:
+                for idx, (price, qty) in enumerate(missing_meta):
+                    if idx < len(results) and results[idx]:
+                        _resp, _actual_price = results[idx]
+                        _oid = _resp.get('order', {}).get('order_id', '') if isinstance(_resp, dict) else ''
+                        if _oid:
+                            orders_dict[str(_actual_price)] = {'oid': _oid, 'qty': qty, 'fill_qty': 0}
+                            bot.setdefault('_all_placed_order_ids', []).append(_oid)
+                            _refilled += 1
+                        else:
+                            print(f'⚠ APEX MM REFILL: {bot_id} no oid for {side.upper()} @{price}c')
+                    else:
+                        print(f'⚠ APEX MM REFILL: {bot_id} failed {side.upper()} @{price}c')
+            _side_posted = sum(1 for r in (results or []) if r)
+            print(f'🔄 APEX MM REFILL: {bot_id} posted {_side_posted}/{len(missing_meta)} {side.upper()} rungs')
+
+        # ── Reset exit state (not tracking state) ──
+        bot['_yes_side_paused'] = False
+        bot['_no_side_paused'] = False
+        bot['_skew_active'] = False
+        bot['_skew_direction'] = ''
+        bot['_exit_price'] = 0
+        bot['_exit_walk_count'] = 0
+        bot['_exit_walk_started'] = 0
+        bot['_exit_posted_at'] = 0
+        bot['_exit_fill_qty'] = 0
+        bot['_exit_total_qty'] = 0
+        bot['_exit_soak_start'] = None
+        bot['_velocity_gated'] = False
+        bot['_velocity_gated_side'] = ''
+        bot['_velocity_gated_at'] = 0
+        bot['_velocity_fills'] = []
+        bot['_sl_breach_since'] = None
+        bot['_sl_breach_peak'] = None
+        bot['_sl_breach_phase'] = None
+
+        # Prune tracking — remove entries for OIDs no longer in any order dict
+        _live_oids = set()
+        for _sk in ('yes_orders', 'no_orders'):
+            for _lv in bot.get(_sk, {}).values():
+                _o = _lv.get('oid')
+                if _o:
+                    _live_oids.add(_o)
+        bot['_all_placed_order_ids'] = list(_live_oids)
+        _old_counted = bot.get('_counted_order_fills', {})
+        bot['_counted_order_fills'] = {k: v for k, v in _old_counted.items() if k in _live_oids}
+
+        bot['_cycle_start_pnl'] = bot.get('realized_pnl_cents', 0)
+        save_state()
+
+        # Count live orders per side for logging
+        _live_yes = sum(1 for lv in bot.get('yes_orders', {}).values() if lv.get('oid'))
+        _live_no = sum(1 for lv in bot.get('no_orders', {}).values() if lv.get('oid'))
+        bot_log('APEX_MM_CYCLE_REFILL', bot_id, {
+            'midpoint': stored_midpoint, 'refilled': _refilled,
+            'live_yes': _live_yes, 'live_no': _live_no,
+            'cycle_pnl': _cycle_pnl,
+        })
+        print(f'📊 APEX MM CYCLE REFILL: {bot_id} refilled {_refilled} rungs (Y={_live_yes} N={_live_no}) @ mid={stored_midpoint} cycle_pnl={_cycle_pnl}c')
+
+    finally:
+        bot['_refill_in_progress'] = False
+
+
 def _apex_mm_begin_exit(bot_id, bot, reason):
     """Cancel all unfilled orders and begin exit sequence."""
     # Guard: prevent duplicate begin_exit calls (WS tick + monitor can race)
@@ -8173,7 +8471,7 @@ def _apex_mm_begin_exit_inner(bot_id, bot, reason):
             bot['_exit_reason'] = None
             bot['_exit_started_at'] = None
             bot['_exit_sell_oids'] = {}
-            _apex_mm_cycle_reset(bot_id, bot)
+            _apex_mm_fresh_ladder(bot_id, bot)
             return
         bot['status'] = 'completed'
         bot['completed_at'] = time.time()
@@ -8453,7 +8751,7 @@ def _apex_mm_exit_tick(bot_id, bot):
             bot['_exit_reason'] = None
             bot['_exit_started_at'] = None
             bot['_exit_sell_oids'] = {}
-            _apex_mm_cycle_reset(bot_id, bot)
+            _apex_mm_fresh_ladder(bot_id, bot)
         else:
             bot['status'] = 'completed'
             bot['completed_at'] = now
@@ -13412,6 +13710,9 @@ def _handle_apex(bot_id, bot, actions):
         return
 
     # 1. OBI check — pull if hostile (MM uses deeper book view)
+    # Skip if refill is in progress — avoid racing with cycle_refill posting new orders
+    if bot.get('_refill_in_progress'):
+        return
     should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH, obi_threshold=APEX_MM_PULL_OBI)
     if should_pull:
         net_yes = bot.get('net_yes', 0)

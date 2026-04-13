@@ -6423,11 +6423,14 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             else if (exitPrice > origTarget) walkBadge = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">SNAPPED</span>`;
             else walkBadge = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">TARGET</span>`;
         }
-        // Zone bar
+        // Zone bar — symmetric around 100c so the breakeven line is always centered
         let zoneBarHtml = '';
         if (exitPrice > 0) {
-            const barMin = origTargetCombined;
-            const barMax = stopLoss;
+            const distBelow = 100 - origTargetCombined;
+            const distAbove = stopLoss - 100;
+            const maxDist = Math.max(distBelow, distAbove, 1);
+            const barMin = 100 - maxDist;
+            const barMax = 100 + maxDist;
             const barRange = barMax - barMin;
             const combPct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((combined - barMin) / barRange * 100))) : 0;
             const bePct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((100 - barMin) / barRange * 100))) : 50;

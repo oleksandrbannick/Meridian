@@ -4110,6 +4110,7 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 # Flat — clear stale breach timer (both sides may have filled during gate)
                 bot['_sl_breach_since'] = None
                 bot['_sl_breach_peak'] = None
+                bot['_sl_breach_phase'] = None
                 continue
 
             if net_yes > net_no:
@@ -4132,32 +4133,46 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
             stop = 100 + width
 
             if best_combined >= stop and best_combined < 999:
-                # Persistence gate: price must stay above stop for APEX_MM_SL_PERSIST_S
-                # before firing. Filters flash spikes in volatile end-of-game markets.
+                hard_stop = stop + APEX_MM_SL_HARD_MARGIN
                 _now = time.time()
+
+                # ── HARD BREACH: circuit breaker — instant eject, no timer ──
+                if best_combined > hard_stop:
+                    bot['status'] = 'mm_exiting'
+                    _breach_dur = _now - bot['_sl_breach_since'] if bot.get('_sl_breach_since') else 0
+                    print(f'🚨 APEX MM CIRCUIT BREAKER: {bot_id} combined={best_combined}c > {hard_stop}c — INSTANT EJECT (binary gap, breach_dur={_breach_dur:.2f}s)')
+                    def _fire_exit(_bid=bot_id, _b=bot, _bc=best_combined, _hs=hard_stop, _w=width):
+                        _apex_mm_begin_exit(_bid, _b, f'circuit_breaker (combined={_bc}c > {_hs}c, hard_margin={APEX_MM_SL_HARD_MARGIN}c)')
+                    threading.Thread(target=_fire_exit, daemon=True).start()
+                    return
+
+                # ── SOFT BREACH: persistence gate — filter flash spikes ──
+                _persist_s, _phase = _apex_mm_sl_persist(ticker)
                 if not bot.get('_sl_breach_since'):
                     bot['_sl_breach_since'] = _now
                     bot['_sl_breach_peak'] = best_combined
-                    print(f'⏱ APEX MM SL BREACH START: {bot_id} combined={best_combined}c >= {stop}c — gate {APEX_MM_SL_PERSIST_S}s')
-                    continue  # start the clock, don't fire yet
+                    bot['_sl_breach_phase'] = _phase
+                    print(f'⏱ APEX MM SOFT BREACH: {bot_id} combined={best_combined}c >= {stop}c — gate {_persist_s}s ({_phase})')
+                    continue
                 bot['_sl_breach_peak'] = max(bot.get('_sl_breach_peak', 0), best_combined)
                 _breach_age = _now - bot['_sl_breach_since']
-                if _breach_age < APEX_MM_SL_PERSIST_S:
+                if _breach_age < _persist_s:
                     continue  # still within persistence window — let it breathe
                 # Persisted long enough — fire the exit
                 bot['status'] = 'mm_exiting'
-                print(f'🚨 APEX MM WS STOP-LOSS: {bot_id} combined={best_combined}c >= {stop}c — persisted {_breach_age:.1f}s (peak={bot.get("_sl_breach_peak", 0)}c)')
-                def _fire_exit(_bid=bot_id, _b=bot, _bc=best_combined, _s=stop, _w=width, _age=_breach_age):
-                    _apex_mm_begin_exit(_bid, _b, f'ws_stop_loss (combined={_bc}c >= {_s}c, width={_w}, persisted={_age:.1f}s)')
+                print(f'🚨 APEX MM WS STOP-LOSS: {bot_id} combined={best_combined}c >= {stop}c — persisted {_breach_age:.1f}s/{_persist_s}s ({_phase}, peak={bot.get("_sl_breach_peak", 0)}c)')
+                def _fire_exit(_bid=bot_id, _b=bot, _bc=best_combined, _s=stop, _w=width, _age=_breach_age, _ph=_phase):
+                    _apex_mm_begin_exit(_bid, _b, f'ws_stop_loss (combined={_bc}c >= {_s}c, persisted={_age:.1f}s, phase={_ph})')
                 threading.Thread(target=_fire_exit, daemon=True).start()
-                return  # one exit per tick max
+                return
             else:
-                # Combined back below stop — reset persistence gate
+                # Combined back below stop — reset persistence gate instantly
                 if bot.get('_sl_breach_since'):
                     _breach_dur = time.time() - bot['_sl_breach_since']
-                    print(f'✅ APEX MM SL BREACH RESET: {bot_id} combined={best_combined}c < {stop}c — spike lasted {_breach_dur:.1f}s (peak={bot.get("_sl_breach_peak", 0)}c)')
+                    print(f'✅ APEX MM SL RESET: {bot_id} combined={best_combined}c < {stop}c — filtered {_breach_dur:.2f}s spike (peak={bot.get("_sl_breach_peak", 0)}c, phase={bot.get("_sl_breach_phase", "?")})')
                     bot['_sl_breach_since'] = None
                     bot['_sl_breach_peak'] = None
+                    bot['_sl_breach_phase'] = None
 
             # ── Priority 2: Snap-down — chase cheaper exit price ──
             exit_oid = bot.get(f'_{exit_side}_exit_oid')
@@ -7048,7 +7063,61 @@ APEX_PULL_COOLDOWN_S = 10       # Don't re-post within 10s of pulling
 APEX_MAX_PULL_CYCLES = 8        # Phantom: stop re-posting after 8 pulls
 APEX_MM_MAX_PULL_CYCLES = 999   # MM: effectively unlimited — MM is patient, keeps reposting
 APEX_MM_OBI_DEPTH = 5           # MM uses top-5 levels for OBI (wider view than phantom's top-3)
-APEX_MM_SL_PERSIST_S = 3        # Stop-loss persistence gate: price must stay above threshold for this many seconds before firing
+
+# ── Dual-threshold stop-loss matrix ──
+# Soft breach (stop <= combined <= stop + HARD_MARGIN): persistence timer filters noise
+# Hard breach (combined > stop + HARD_MARGIN): instant eject, no timer (binary gap)
+APEX_MM_SL_HARD_MARGIN = 4      # Cents above stop for instant circuit-breaker eject
+APEX_MM_SL_SOFT_PERSIST = {     # Soft breach persistence by game phase (seconds)
+    'early':    1.5,            # Early/mid game: market makers will refill in <1s if noise
+    'mid':      1.5,
+    'late':     1.0,            # Final period, >2min: tighter
+    'end':      0.5,            # Final 2min: very tight
+    'ot':       0.25,           # Overtime: 250ms max — if it's still there, it's real
+    'default':  1.5,            # Unknown sport / no ESPN data
+}
+
+
+def _apex_mm_game_phase(ticker):
+    """Return game phase for stop-loss persistence: 'early', 'mid', 'late', 'end', 'ot', or 'default'."""
+    series = ticker.split('-')[0].upper() if ticker else ''
+    rule = None
+    rule_key = ''
+    for prefix, r in _LATE_GAME_RULES.items():
+        if series.startswith(prefix) and len(prefix) > len(rule_key):
+            rule = r
+            rule_key = prefix
+    if not rule:
+        return 'default'
+    gc = _get_game_context(ticker)
+    if not gc:
+        return 'default'
+    status = gc.get('status', '')
+    if status != 'in':
+        return 'default'
+    period = gc.get('period', 0)
+    secs = _parse_clock_seconds(gc.get('clock', ''))
+    # Overtime
+    if period > rule['final']:
+        return 'ot'
+    # Not in final period yet
+    if period < rule['block_period']:
+        # Rough split: first half = early, second half = mid
+        if period <= rule['final'] // 2:
+            return 'early'
+        return 'mid'
+    # In final period — check clock
+    if secs is not None:
+        if secs <= 120:
+            return 'end'      # final 2 minutes
+        return 'late'         # final period, >2min left
+    return 'late'
+
+
+def _apex_mm_sl_persist(ticker):
+    """Return persistence seconds for soft breach based on game phase."""
+    phase = _apex_mm_game_phase(ticker)
+    return APEX_MM_SL_SOFT_PERSIST.get(phase, APEX_MM_SL_SOFT_PERSIST['default']), phase
 
 
 def _apex_obi_snapshot(ticker):
@@ -7956,6 +8025,7 @@ def _apex_mm_begin_exit(bot_id, bot, reason):
     bot['_begin_exit_running'] = True
     bot['_sl_breach_since'] = None
     bot['_sl_breach_peak'] = None
+    bot['_sl_breach_phase'] = None
     try:
         _apex_mm_begin_exit_inner(bot_id, bot, reason)
     finally:
@@ -13196,6 +13266,7 @@ def _handle_apex(bot_id, bot, actions):
         bot['_begin_exit_running'] = False
         bot['_sl_breach_since'] = None
         bot['_sl_breach_peak'] = None
+        bot['_sl_breach_phase'] = None
         bot['_all_placed_order_ids'] = []
         bot['_counted_order_fills'] = {}
         bot['_cycle_start_pnl'] = bot.get('realized_pnl_cents', 0)
@@ -13231,6 +13302,7 @@ def _handle_apex(bot_id, bot, actions):
         # Flat — clear any stale breach timer (both sides may have filled during gate)
         bot['_sl_breach_since'] = None
         bot['_sl_breach_peak'] = None
+        bot['_sl_breach_phase'] = None
     if net_yes > 0 or net_no > 0:
         _held_avg = bot.get('avg_yes_cost', 0) if net_yes > net_no else bot.get('avg_no_cost', 0)
         _exit_side = 'no' if net_yes > net_no else 'yes'
@@ -13243,26 +13315,39 @@ def _handle_apex(bot_id, bot, actions):
         _best_combined = min(_buy_opp_combined, _sell_held_combined)
         _width = bot.get('start_gap', 4) * 2
         _stop = 100 + _width  # symmetric: risk = reward
-        # Drift stop: begin exit to cut losses — persistence gate filters flash spikes
+        # Drift stop: dual-threshold matrix (soft breach = timer, hard breach = instant)
         if _best_combined > _stop and _best_combined < 999:
+            _hard_stop = _stop + APEX_MM_SL_HARD_MARGIN
+
+            # ── HARD BREACH: circuit breaker — instant eject ──
+            if _best_combined > _hard_stop:
+                _breach_dur = now - bot['_sl_breach_since'] if bot.get('_sl_breach_since') else 0
+                print(f'🚨 APEX MM CIRCUIT BREAKER: {bot_id} combined={_best_combined}c > {_hard_stop}c — INSTANT EJECT (breach_dur={_breach_dur:.2f}s)')
+                _apex_mm_begin_exit(bot_id, bot, f'circuit_breaker (combined={_best_combined}c > {_hard_stop}c, hard_margin={APEX_MM_SL_HARD_MARGIN}c)')
+                return
+
+            # ── SOFT BREACH: persistence gate ──
+            _persist_s, _phase = _apex_mm_sl_persist(ticker)
             if not bot.get('_sl_breach_since'):
                 bot['_sl_breach_since'] = now
                 bot['_sl_breach_peak'] = _best_combined
-                print(f'⏱ APEX MM SL BREACH START: {bot_id} combined={_best_combined}c > {_stop}c — gate {APEX_MM_SL_PERSIST_S}s')
-                return  # start the clock
+                bot['_sl_breach_phase'] = _phase
+                print(f'⏱ APEX MM SOFT BREACH: {bot_id} combined={_best_combined}c > {_stop}c — gate {_persist_s}s ({_phase})')
+                return
             bot['_sl_breach_peak'] = max(bot.get('_sl_breach_peak', 0), _best_combined)
             _breach_age = now - bot['_sl_breach_since']
-            if _breach_age < APEX_MM_SL_PERSIST_S:
+            if _breach_age < _persist_s:
                 return  # still within persistence window
-            _apex_mm_begin_exit(bot_id, bot, f'drift_stop (combined={_best_combined}c > {_stop}c, width={_width}, persisted={_breach_age:.1f}s)')
+            _apex_mm_begin_exit(bot_id, bot, f'drift_stop (combined={_best_combined}c > {_stop}c, persisted={_breach_age:.1f}s/{_persist_s}s, phase={_phase})')
             return
         else:
-            # Below threshold — reset persistence gate
+            # Below threshold — reset persistence gate instantly
             if bot.get('_sl_breach_since'):
                 _breach_dur = now - bot['_sl_breach_since']
-                print(f'✅ APEX MM SL BREACH RESET: {bot_id} combined={_best_combined}c <= {_stop}c — spike lasted {_breach_dur:.1f}s (peak={bot.get("_sl_breach_peak", 0)}c)')
+                print(f'✅ APEX MM SL RESET: {bot_id} combined={_best_combined}c <= {_stop}c — filtered {_breach_dur:.2f}s spike (peak={bot.get("_sl_breach_peak", 0)}c, phase={bot.get("_sl_breach_phase", "?")})')
                 bot['_sl_breach_since'] = None
                 bot['_sl_breach_peak'] = None
+                bot['_sl_breach_phase'] = None
 
     # 0.5. Active drift guard — pull ladder if market is decided (one side > 90c)
     _active_max_bid = max(bot.get('live_yes_bid', 0), bot.get('live_no_bid', 0))

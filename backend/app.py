@@ -8957,9 +8957,9 @@ def _apex_mm_exit_tick(bot_id, bot):
                     avg_cost = bot.get(f'avg_{side}_cost', 0)
                     # SAFETY: if avg_cost is 0, cost basis was lost (orphan recovery race)
                     # Assume zero P&L — never record phantom profit from missing cost basis
-                    if avg_cost == 0 and bot.get(f'net_{side}', 0) > 0:
+                    if avg_cost == 0 or (avg_cost < 5 and actual_price > 20):
+                        print(f'🛡️ APEX MM SELLBACK COST GUARD: {bot_id} {side.upper()} avg_cost={avg_cost}c looks wrong (sell={actual_price}c) → using sell price (zero P&L)')
                         avg_cost = actual_price
-                        print(f'🛡️ APEX MM SELLBACK ZERO-COST GUARD: {bot_id} {side.upper()} avg_cost was 0 → using sell price {actual_price}c (zero P&L)')
                     gross_pnl_per = actual_price - avg_cost
                     gross_pnl = gross_pnl_per * target
                     fee_entry = _kalshi_side_fee_cents(avg_cost, target)

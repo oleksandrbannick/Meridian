@@ -6186,7 +6186,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 if (_curD < _rd) return `<span style="color:#ff4444;font-size:9px;font-weight:700;">rec:${_rd}¢ ⚠</span>`;
                 if (_curD === _rd) return `<span style="color:#555;font-size:9px;">rec:${_rd}¢ ✓</span>`;
                 return `<span style="color:#ffaa00;font-size:9px;">rec:${_rd}¢</span>`;
-            })()}${bot._fav_depth != null ? (() => { const _fd = bot._fav_depth, _q = qty || 1; const _fc = _fd < _q * 1.5 ? '#ff4444' : _fd < _q * 4 ? '#ffaa00' : '#00ff88'; const _fl = _fd >= 1000 ? (_fd/1000).toFixed(1) + 'K' : _fd; return `<span style="color:${_fc};font-size:9px;">fav:${_fl}</span>`; })() : ''}
+            })()}${bot._fav_depth != null ? (() => { const _fd = bot._fav_depth; const _fl = _fd >= 1000 ? (_fd/1000).toFixed(1) + 'K' : _fd; return `<span style="color:#ff66aa;font-size:9px;">fav:${_fl}</span>`; })() : ''}
             ${(() => { const _yb = bot.live_yes_bid || 0, _nb = bot.live_no_bid || 0; const _room = (_yb && _nb) ? 100 - _yb - _nb : -1; return _room >= 0 ? `<span style="color:${_room >= 4 ? '#00ff88' : _room >= 2 ? '#ffaa00' : '#ff4444'};font-weight:${_room <= 1 ? 700 : 400};font-size:9px;">${_room <= 1 ? '⚠ ' : ''}Room:${_room}¢</span>` : ''; })()}
             ${bot._obi != null ? (() => {
                 const obi = bot._obi;

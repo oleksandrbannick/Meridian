@@ -5645,10 +5645,9 @@ function selectMMWidth(w) {
     document.querySelectorAll('.mm-width-btn').forEach(btn => {
         const bw = parseInt(btn.dataset.width);
         const sel = bw === w;
-        btn.style.borderColor = sel ? '#ff7043' : '#1e274066';
+        btn.style.borderColor = sel ? '#ff7043' : '#1e2740';
         btn.style.color = sel ? '#ff7043' : '#556';
-        btn.style.background = sel ? 'radial-gradient(circle,#ff704320 0%,#ff704308 100%)' : '#0a0e1a';
-        btn.style.boxShadow = sel ? '0 0 10px #ff704330' : 'none';
+        btn.style.background = sel ? '#ff704318' : 'transparent';
     });
     const label = document.getElementById('mm-width-label');
     if (label) label.textContent = w + '¢';
@@ -5661,10 +5660,9 @@ function selectMMLevels(n) {
     document.querySelectorAll('.mm-levels-btn').forEach(btn => {
         const bl = parseInt(btn.dataset.levels);
         const sel = bl === n;
-        btn.style.borderColor = sel ? '#00d4ff' : '#1e274066';
+        btn.style.borderColor = sel ? '#00d4ff' : '#1e2740';
         btn.style.color = sel ? '#00d4ff' : '#556';
-        btn.style.background = sel ? 'radial-gradient(circle,#00d4ff20 0%,#00d4ff08 100%)' : '#0a0e1a';
-        btn.style.boxShadow = sel ? '0 0 10px #00d4ff30' : 'none';
+        btn.style.background = sel ? '#00d4ff18' : 'transparent';
     });
     updateMMMaxDefault();
     updateMMPreview();
@@ -5721,21 +5719,19 @@ function updateMMPreview() {
     const maxCombined = yesLevels.length && noLevels.length ? yesLevels[0].p + noLevels[0].p : 0;
     const capitalAtRisk = (yesLevels.reduce((a,l) => a + l.p * l.q, 0) + noLevels.reduce((a,l) => a + l.p * l.q, 0));
     el.innerHTML = `
-        <div style="display:flex;gap:16px;margin-bottom:8px;">
+        <div style="display:flex;gap:12px;margin-bottom:8px;">
             <div style="flex:1;">
-                <div style="color:#00ff88;font-weight:700;font-size:10px;margin-bottom:3px;">YES BIDS</div>
-                <div style="color:#00ff88;font-size:12px;font-weight:600;">${yesLevels.map(l=>l.p+'¢ ×'+l.q).join(', ')}</div>
+                <div style="color:#00d4ff;font-weight:700;font-size:10px;margin-bottom:3px;">YES</div>
+                <div style="color:#00d4ff;font-size:11px;font-weight:600;">${yesLevels.map(l=>l.p+'¢ ×'+l.q).join(', ')}</div>
             </div>
             <div style="flex:1;">
-                <div style="color:#ff4444;font-weight:700;font-size:10px;margin-bottom:3px;">NO BIDS</div>
-                <div style="color:#ff4444;font-size:12px;font-weight:600;">${noLevels.map(l=>l.p+'¢ ×'+l.q).join(', ')}</div>
+                <div style="color:#ff7043;font-weight:700;font-size:10px;margin-bottom:3px;">NO</div>
+                <div style="color:#ff7043;font-size:11px;font-weight:600;">${noLevels.map(l=>l.p+'¢ ×'+l.q).join(', ')}</div>
             </div>
         </div>
-        <div style="color:#8892a6;font-size:10px;line-height:1.6;">
-            Midpoint: <strong style="color:#fff;">${mid}¢</strong> · ${yesLevels.length + noLevels.length} orders · YES ${totalYesQty}x / NO ${totalNoQty}x<br>
-            Closest: ${maxCombined}¢ combined (+${100-maxCombined}¢) · Deepest: ${minCombined}¢ (+${100-minCombined}¢)<br>
-            Capital at risk: <strong style="color:#ffaa33;">$${(capitalAtRisk/100).toFixed(2)}</strong>
-            · <span style="color:#00d4ff;">Inventory skew active when holding</span>
+        <div style="color:#556;font-size:9px;line-height:1.5;">
+            Mid: <strong style="color:#8892a6;">${mid}¢</strong> · ${yesLevels.length + noLevels.length} orders · <span style="color:#00d4ff;">YES ${totalYesQty}x</span> / <span style="color:#ff7043;">NO ${totalNoQty}x</span><br>
+            Closest: ${maxCombined}¢ (+${100-maxCombined}¢) · Deepest: ${minCombined}¢ (+${100-minCombined}¢) · Risk: <strong style="color:#ffaa33;">$${(capitalAtRisk/100).toFixed(2)}</strong>
         </div>`;
 }
 

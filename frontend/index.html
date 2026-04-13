@@ -1103,8 +1103,7 @@
 
                 <!-- ═══════ APEX MARKET MAKER SECTION ═══════ -->
                 <div id="arb-section" style="display:none;">
-                    <!-- Strategy header -->
-                    <div id="apex-mode-desc" style="margin-bottom:14px;padding:10px 12px;background:#0a0e1a;border:1px solid #00d4ff44;border-radius:8px;font-size:11px;color:#6a7488;line-height:1.4;display:flex;align-items:center;gap:10px;">
+                    <div id="apex-mode-desc" style="margin-bottom:12px;padding:10px 12px;background:#0a0e1a;border:1px solid #00d4ff44;border-radius:8px;font-size:11px;color:#6a7488;line-height:1.4;display:flex;align-items:center;gap:10px;">
                         <canvas id="apex-form-ghost" width="48" height="48" style="image-rendering:pixelated;width:48px;height:48px;flex-shrink:0;"></canvas>
                         <div><strong style="color:#00d4ff;">△ Apex Market Maker</strong><br><span style="color:#8892a6;">Weighted ladder both sides. Inventory skew exits aggressive. OBI gating protects against hostile flow.</span></div>
                     </div>
@@ -1112,64 +1111,69 @@
                     <div id="bot-risk-warnings"></div>
 
                     <!-- Width -->
-                    <div style="margin-bottom:14px;">
-                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                    <div style="margin-bottom:12px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
                             <label style="color:#ff7043;font-weight:700;font-size:11px;letter-spacing:.05em;">WIDTH</label>
                             <span id="mm-width-label" style="color:#ff7043;font-weight:800;font-size:13px;">4¢</span>
                         </div>
-                        <div style="display:flex;justify-content:space-between;gap:6px;" id="mm-width-grid">
-                            <button onclick="selectMMWidth(4)" class="mm-width-btn" data-width="4" style="width:42px;height:42px;border-radius:50%;background:radial-gradient(circle,#ff704320 0%,#ff704308 100%);border:2px solid #ff7043;color:#ff7043;cursor:pointer;font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .2s;box-shadow:0 0 10px #ff704330;">4</button>
-                            <button onclick="selectMMWidth(5)" class="mm-width-btn" data-width="5" style="width:42px;height:42px;border-radius:50%;background:#0a0e1a;border:2px solid #1e274066;color:#556;cursor:pointer;font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .2s;">5</button>
-                            <button onclick="selectMMWidth(6)" class="mm-width-btn" data-width="6" style="width:42px;height:42px;border-radius:50%;background:#0a0e1a;border:2px solid #1e274066;color:#556;cursor:pointer;font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .2s;">6</button>
-                            <button onclick="selectMMWidth(7)" class="mm-width-btn" data-width="7" style="width:42px;height:42px;border-radius:50%;background:#0a0e1a;border:2px solid #1e274066;color:#556;cursor:pointer;font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .2s;">7</button>
-                            <button onclick="selectMMWidth(8)" class="mm-width-btn" data-width="8" style="width:42px;height:42px;border-radius:50%;background:#0a0e1a;border:2px solid #1e274066;color:#556;cursor:pointer;font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .2s;">8</button>
-                            <button onclick="selectMMWidth(10)" class="mm-width-btn" data-width="10" style="width:42px;height:42px;border-radius:50%;background:#0a0e1a;border:2px solid #1e274066;color:#556;cursor:pointer;font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .2s;">10</button>
-                            <button onclick="selectMMWidth(12)" class="mm-width-btn" data-width="12" style="width:42px;height:42px;border-radius:50%;background:#0a0e1a;border:2px solid #1e274066;color:#556;cursor:pointer;font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .2s;">12</button>
+                        <div style="display:flex;justify-content:space-between;gap:5px;" id="mm-width-grid">
+                            <button onclick="selectMMWidth(4)" class="mm-width-btn" data-width="4" style="width:36px;height:36px;border-radius:50%;background:#ff704318;border:1px solid #ff7043;color:#ff7043;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;">4</button>
+                            <button onclick="selectMMWidth(5)" class="mm-width-btn" data-width="5" style="width:36px;height:36px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;">5</button>
+                            <button onclick="selectMMWidth(6)" class="mm-width-btn" data-width="6" style="width:36px;height:36px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;">6</button>
+                            <button onclick="selectMMWidth(7)" class="mm-width-btn" data-width="7" style="width:36px;height:36px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;">7</button>
+                            <button onclick="selectMMWidth(8)" class="mm-width-btn" data-width="8" style="width:36px;height:36px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;">8</button>
+                            <button onclick="selectMMWidth(10)" class="mm-width-btn" data-width="10" style="width:36px;height:36px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;transition:all .15s;">10</button>
+                            <button onclick="selectMMWidth(12)" class="mm-width-btn" data-width="12" style="width:36px;height:36px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;transition:all .15s;">12</button>
                         </div>
                     </div>
 
-                    <!-- Rungs + Base Qty side by side -->
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+                    <!-- Rungs + Base Qty -->
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
                         <div>
-                            <label style="color:#00d4ff;font-weight:700;font-size:11px;letter-spacing:.05em;display:block;margin-bottom:8px;">RUNGS <span style="color:#3a4560;font-size:9px;font-weight:400;">per side</span></label>
-                            <div style="display:flex;justify-content:space-between;gap:6px;" id="mm-levels-grid">
-                                <button onclick="selectMMLevels(3)" class="mm-levels-btn" data-levels="3" style="width:42px;height:42px;border-radius:50%;background:#0a0e1a;border:2px solid #1e274066;color:#556;cursor:pointer;font-weight:800;font-size:15px;display:flex;align-items:center;justify-content:center;transition:all .2s;">3</button>
-                                <button onclick="selectMMLevels(5)" class="mm-levels-btn" data-levels="5" style="width:42px;height:42px;border-radius:50%;background:#0a0e1a;border:2px solid #1e274066;color:#556;cursor:pointer;font-weight:800;font-size:15px;display:flex;align-items:center;justify-content:center;transition:all .2s;">5</button>
-                                <button onclick="selectMMLevels(7)" class="mm-levels-btn" data-levels="7" style="width:42px;height:42px;border-radius:50%;background:radial-gradient(circle,#00d4ff20 0%,#00d4ff08 100%);border:2px solid #00d4ff;color:#00d4ff;cursor:pointer;font-weight:800;font-size:15px;display:flex;align-items:center;justify-content:center;transition:all .2s;box-shadow:0 0 10px #00d4ff30;">7</button>
-                                <button onclick="selectMMLevels(10)" class="mm-levels-btn" data-levels="10" style="width:42px;height:42px;border-radius:50%;background:#0a0e1a;border:2px solid #1e274066;color:#556;cursor:pointer;font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .2s;">10</button>
+                            <label style="color:#00d4ff;font-weight:700;font-size:11px;letter-spacing:.05em;display:block;margin-bottom:6px;">RUNGS</label>
+                            <div style="display:flex;gap:5px;" id="mm-levels-grid">
+                                <button onclick="selectMMLevels(3)" class="mm-levels-btn" data-levels="3" style="width:36px;height:36px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;">3</button>
+                                <button onclick="selectMMLevels(5)" class="mm-levels-btn" data-levels="5" style="width:36px;height:36px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;">5</button>
+                                <button onclick="selectMMLevels(7)" class="mm-levels-btn" data-levels="7" style="width:36px;height:36px;border-radius:50%;background:#00d4ff18;border:1px solid #00d4ff;color:#00d4ff;cursor:pointer;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;">7</button>
+                                <button onclick="selectMMLevels(10)" class="mm-levels-btn" data-levels="10" style="width:36px;height:36px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;">10</button>
                             </div>
                         </div>
                         <div>
-                            <label style="color:#00d4ff;font-weight:700;font-size:11px;letter-spacing:.05em;display:block;margin-bottom:8px;">BASE QTY <span style="color:#3a4560;font-size:9px;font-weight:400;">scales deeper</span></label>
+                            <label style="color:#00d4ff;font-weight:700;font-size:11px;letter-spacing:.05em;display:block;margin-bottom:6px;">QTY / RUNG</label>
                             <input type="number" id="mm-qty-per-level" min="1" max="100" value="5" oninput="updateMMPreview(); updateMMMaxDefault();"
-                                   style="width:100%;padding:10px;background:#0a0e1a;border:2px solid #00d4ff33;border-radius:50px;color:#00d4ff;font-size:18px;font-weight:800;text-align:center;outline:none;transition:all .2s;box-sizing:border-box;" onfocus="this.style.borderColor='#00d4ff';this.style.boxShadow='0 0 10px #00d4ff20'" onblur="this.style.borderColor='#00d4ff33';this.style.boxShadow='none'">
+                                   style="width:100%;padding:8px;background:#0a0e1a;border:1px solid #00d4ff44;border-radius:6px;color:#00d4ff;font-size:16px;font-weight:700;text-align:center;outline:none;transition:all .15s;box-sizing:border-box;" onfocus="this.style.borderColor='#00d4ff'" onblur="this.style.borderColor='#00d4ff44'">
                         </div>
                     </div>
 
-                    <!-- Loss Limit (segmented bar like Phantom depth) -->
-                    <div style="margin-bottom:14px;">
-                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                    <!-- Loss Limit -->
+                    <div style="margin-bottom:12px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
                             <label style="color:#ff4444;font-weight:700;font-size:11px;letter-spacing:.05em;">LOSS LIMIT</label>
                             <span id="mm-loss-label" style="color:#ff4444;font-weight:800;font-size:13px;">$5.00</span>
                         </div>
                         <input type="hidden" id="mm-loss-limit" value="500">
-                        <div style="display:flex;gap:0;border-radius:10px;overflow:hidden;border:1px solid rgba(255,68,68,0.25);">
-                            <button onclick="selectMMLossLimit(0)" data-loss="0" class="mm-loss-btn" style="flex:1;padding:10px 0;background:transparent;border:none;border-right:1px solid rgba(255,68,68,0.15);color:#5a6484;font-size:12px;font-weight:700;cursor:pointer;transition:all 0.2s;">OFF</button>
-                            <button onclick="selectMMLossLimit(100)" data-loss="100" class="mm-loss-btn" style="flex:1;padding:10px 0;background:transparent;border:none;border-right:1px solid rgba(255,68,68,0.15);color:#5a6484;font-size:12px;font-weight:700;cursor:pointer;transition:all 0.2s;">$1</button>
-                            <button onclick="selectMMLossLimit(200)" data-loss="200" class="mm-loss-btn" style="flex:1;padding:10px 0;background:transparent;border:none;border-right:1px solid rgba(255,68,68,0.15);color:#5a6484;font-size:12px;font-weight:700;cursor:pointer;transition:all 0.2s;">$2</button>
-                            <button onclick="selectMMLossLimit(500)" data-loss="500" class="mm-loss-btn mm-loss-active" style="flex:1;padding:10px 0;background:rgba(255,68,68,0.15);border:none;border-right:1px solid rgba(255,68,68,0.15);color:#ff4444;font-size:12px;font-weight:700;cursor:pointer;transition:all 0.2s;">$5</button>
-                            <button onclick="selectMMLossLimit(1000)" data-loss="1000" class="mm-loss-btn" style="flex:1;padding:10px 0;background:transparent;border:none;color:#5a6484;font-size:12px;font-weight:700;cursor:pointer;transition:all 0.2s;">$10</button>
+                        <div style="display:flex;gap:0;border-radius:8px;overflow:hidden;border:1px solid rgba(255,68,68,0.25);margin-bottom:6px;">
+                            <button onclick="selectMMLossLimit(0)" data-loss="0" class="mm-loss-btn" style="flex:1;padding:8px 0;background:transparent;border:none;border-right:1px solid rgba(255,68,68,0.12);color:#5a6484;font-size:11px;font-weight:700;cursor:pointer;transition:all .15s;">OFF</button>
+                            <button onclick="selectMMLossLimit(100)" data-loss="100" class="mm-loss-btn" style="flex:1;padding:8px 0;background:transparent;border:none;border-right:1px solid rgba(255,68,68,0.12);color:#5a6484;font-size:11px;font-weight:700;cursor:pointer;transition:all .15s;">$1</button>
+                            <button onclick="selectMMLossLimit(200)" data-loss="200" class="mm-loss-btn" style="flex:1;padding:8px 0;background:transparent;border:none;border-right:1px solid rgba(255,68,68,0.12);color:#5a6484;font-size:11px;font-weight:700;cursor:pointer;transition:all .15s;">$2</button>
+                            <button onclick="selectMMLossLimit(500)" data-loss="500" class="mm-loss-btn" style="flex:1;padding:8px 0;background:rgba(255,68,68,0.15);border:none;border-right:1px solid rgba(255,68,68,0.12);color:#ff4444;font-size:11px;font-weight:700;cursor:pointer;transition:all .15s;">$5</button>
+                            <button onclick="selectMMLossLimit(1000)" data-loss="1000" class="mm-loss-btn" style="flex:1;padding:8px 0;background:transparent;border:none;color:#5a6484;font-size:11px;font-weight:700;cursor:pointer;transition:all .15s;">$10</button>
                         </div>
-                        <div style="color:#555;font-size:9px;margin-top:4px;">Bot stops when cumulative P&L drops below limit</div>
+                        <div style="display:flex;align-items:center;gap:6px;">
+                            <span style="color:#555;font-size:9px;">Custom:</span>
+                            <input type="number" id="mm-loss-custom" min="0" max="10000" placeholder="cents" oninput="selectMMLossLimit(parseInt(this.value)||0)"
+                                   style="width:80px;padding:5px 8px;background:#0a0e1a;border:1px solid #ff444433;border-radius:6px;color:#ff4444;font-size:11px;font-weight:600;text-align:center;outline:none;box-sizing:border-box;" onfocus="this.style.borderColor='#ff4444'" onblur="this.style.borderColor='#ff444433'">
+                            <span style="color:#555;font-size:9px;">cents (0 = off)</span>
+                        </div>
                     </div>
 
-                    <!-- Auto-Scale toggle -->
-                    <div style="margin-bottom:14px;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;display:flex;align-items:center;justify-content:space-between;">
-                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                    <!-- Auto-Scale -->
+                    <div style="margin-bottom:12px;display:flex;align-items:center;gap:8px;">
+                        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;">
                             <input type="checkbox" id="mm-auto-scale" checked style="accent-color:#ff7043;width:14px;height:14px;" onchange="updateMMPreview()">
                             <span style="color:#ff7043;font-size:11px;font-weight:700;">Auto-Scale</span>
                         </label>
-                        <span style="color:#3a4560;font-size:9px;">Deeper rungs = more qty</span>
+                        <span style="color:#3a4560;font-size:9px;">deeper rungs = more qty</span>
                     </div>
 
                     <!-- Hidden fields -->
@@ -1180,9 +1184,7 @@
                     <input type="hidden" id="mm-smart-mode" value="1">
 
                     <!-- Ladder Preview -->
-                    <div id="mm-ladder-preview" style="margin-bottom:14px;padding:10px 12px;background:#060a14;border:1px solid #00d4ff22;border-radius:8px;font-size:11px;position:relative;overflow:hidden;">
-                        <div style="position:absolute;bottom:0;left:0;right:0;height:2px;background:linear-gradient(90deg,#00d4ff40,#ff704340);"></div>
-                    </div>
+                    <div id="mm-ladder-preview" style="margin-bottom:12px;padding:10px 12px;background:#060a14;border:1px solid #00d4ff22;border-radius:8px;font-size:11px;"></div>
 
                     <!-- Deploy -->
                     <button id="deploy-btn" onclick="deployMarketMaker()" style="width:100%;padding:14px;background:linear-gradient(135deg,#00d4ff 0%,#ff7043 100%);color:#000;border:none;border-radius:8px;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:.02em;">
@@ -3220,7 +3222,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260413163000"></script>
+    <script src="app.js?v=20260413164000"></script>
     <!-- Bottom status bar — always visible -->
     <div id="bottom-status-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#080c16;border-top:1px solid #1a2035;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;font-size:11px;">
         <span style="color:#3a4560;font-size:10px;letter-spacing:.03em;">hi irene</span>

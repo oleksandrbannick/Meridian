@@ -3974,9 +3974,9 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
         _fav_depth = round(_lob.get_total_depth(fav_side, 1)) if _lob and _lob.last_update_ts > 0 else 0
         _taker_timer = _phantom_taker_depth_tier(_fav_depth)
 
-        # ── Timer expired: jump to bid+1 (aggressive maker, not taker) ──
-        # If bid+1 == ask, this crosses the spread (taker). If spread > 1c, you're
-        # first in queue at bid+1 — better position without paying spread cost.
+        # ── Timer expired: cancel post_only order, repost at bid+1 as regular limit ──
+        # Regular limit (post_only=False) crosses the spread if bid+1 hits the ask,
+        # and can cross later if the ask drops to it. No special taker detection needed.
         if fav_bid > 0 and hedge_age >= _taker_timer and not bot.get('_taker_fired'):
             _target = fav_bid + 1
             if _target > fav_price:  # only if bid+1 is above current posted price
@@ -3986,10 +3986,32 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
                     fav_oid = bot.get('fav_order_id')
                     if fav_oid:
                         qty = bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1))
-                        amend_kwargs = {f'{fav_side}_price': _target}
+                        # Cancel the post_only maker order
                         api_rate_limiter.wait(priority=True)
-                        kalshi_client.amend_order(fav_oid, ticker=hedge_ticker, side=fav_side,
-                                                  count=qty, **amend_kwargs)
+                        try:
+                            kalshi_client.cancel_order(fav_oid)
+                        except Exception as _cancel_err:
+                            if '404' not in str(_cancel_err) and 'already' not in str(_cancel_err).lower():
+                                raise
+                        # Repost as regular limit order (can cross the spread)
+                        _filled_already = bot.get('fav_fill_qty', 0)
+                        _repost_qty = qty - _filled_already
+                        if _repost_qty > 0:
+                            price_key = 'yes_price' if fav_side == 'yes' else 'no_price'
+                            api_rate_limiter.wait(priority=True)
+                            _resp = kalshi_client.create_order(
+                                ticker=hedge_ticker, side=fav_side, action='buy',
+                                count=_repost_qty, **{price_key: _target}
+                            )
+                            _order = _resp.get('order', _resp) if isinstance(_resp, dict) else {}
+                            _new_oid = _order.get('order_id', '')
+                            if _new_oid:
+                                bot['fav_order_id'] = _new_oid
+                                bot.setdefault('_all_hedge_order_ids', []).append(fav_oid)
+                                if fav_side == 'yes':
+                                    bot['yes_order_id'] = _new_oid
+                                else:
+                                    bot['no_order_id'] = _new_oid
                         _is_taker = fav_ask > 0 and _target >= fav_ask
                         bot['fav_price'] = _target
                         bot['_taker_fired'] = True
@@ -11762,10 +11784,20 @@ def _handle_phantom(bot_id, bot, actions):
                 print(f'🔧 PHANTOM REPOST SKIP: {bot_id} already fully filled ({_already_filled}/{qty}) → fav_hedge_posted for completion')
                 save_state()
                 return
-            fav_resp, actual_fav_price = create_order_maker(
-                ticker=hedge_ticker, side=fav_side, action='buy',
-                count=_repost_qty, price=hedge_price
-            )
+            if bot.get('_taker_fired'):
+                # Taker mode: regular limit order (can cross the spread)
+                price_key = 'yes_price' if fav_side == 'yes' else 'no_price'
+                api_rate_limiter.wait(priority=True)
+                fav_resp = kalshi_client.create_order(
+                    ticker=hedge_ticker, side=fav_side, action='buy',
+                    count=_repost_qty, **{price_key: hedge_price}
+                )
+                actual_fav_price = hedge_price
+            else:
+                fav_resp, actual_fav_price = create_order_maker(
+                    ticker=hedge_ticker, side=fav_side, action='buy',
+                    count=_repost_qty, price=hedge_price
+                )
             bot['_partial_hedge_qty'] = _repost_qty
             fav_order_id = fav_resp['order']['order_id']
             bot['fav_order_id'] = fav_order_id

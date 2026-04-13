@@ -6439,10 +6439,10 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     <div style="position:absolute;left:${bePct}%;width:2px;height:100%;background:#ffaa00;z-index:2;"></div>
                     <div style="position:absolute;left:${combPct}%;width:8px;height:100%;background:${markerCol};border-radius:4px;z-index:3;transform:translateX(-4px);box-shadow:0 0 6px ${markerCol}80;"></div>
                 </div>
-                <div style="display:flex;justify-content:space-between;margin-top:2px;font-size:7px;font-weight:700;">
-                    <span style="color:#00ff88;">${origTargetCombined}c</span>
-                    <span style="color:#ffaa00;">100c</span>
-                    <span style="color:#ff4444;">${stopLoss}c</span>
+                <div style="position:relative;height:12px;margin-top:2px;font-size:7px;font-weight:700;">
+                    <span style="position:absolute;left:0;color:#00ff88;">${origTargetCombined}c</span>
+                    <span style="position:absolute;left:${bePct}%;transform:translateX(-50%);color:#ffaa00;">100c</span>
+                    <span style="position:absolute;right:0;color:#ff4444;">${stopLoss}c</span>
                 </div>
             </div>`;
         }
@@ -6611,7 +6611,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 <span style="background:${accentCol}15;color:${accentCol};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;letter-spacing:.03em;">${statusLabel}</span>
                 ${bot._velocity_gated ? '<span style="background:#ff444420;color:#ff4444;padding:1px 5px;border-radius:3px;font-size:8px;font-weight:800;letter-spacing:.04em;">VEL GATE</span>' : ''}
                 ${liveScoreHtml}
-                ${smartMode > 0 ? `<span style="color:#00d4ff;font-size:9px;font-weight:600;">${consLosses}/${smartMode}</span>` : ''}
+                ${smartMode > 0 ? `<span style="color:#00d4ff;font-size:9px;font-weight:600;">Smart</span>` : ''}
+                ${(bot.loss_limit_cents || 0) > 0 ? `<span style="color:#ff4444;font-size:9px;font-weight:600;">SL $${(bot.loss_limit_cents/100).toFixed(2)}</span>` : ''}
             </div>
             <div style="display:flex;align-items:center;gap:5px;flex-shrink:0;">
                 <span style="color:${pnlColor};font-weight:800;font-size:13px;">${pnlSign}${totalPnl}c</span>
@@ -9250,6 +9251,9 @@ async function apexMmModify(botId) {
     const _rungs = [3, 5, 7, 10];
     const _wBtnStyle = (active) => `width:42px;height:42px;border-radius:50%;background:${active ? 'radial-gradient(circle,#ff704320,#ff704308)' : '#0a0e1a'};border:2px solid ${active ? '#ff7043' : '#1e274066'};color:${active ? '#ff7043' : '#556'};cursor:pointer;font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .2s;box-shadow:${active ? '0 0 10px #ff704330' : 'none'};`;
     const _rBtnStyle = (active) => `width:42px;height:42px;border-radius:50%;background:${active ? 'radial-gradient(circle,#00d4ff20,#00d4ff08)' : '#0a0e1a'};border:2px solid ${active ? '#00d4ff' : '#1e274066'};color:${active ? '#00d4ff' : '#556'};cursor:pointer;font-weight:800;font-size:15px;display:flex;align-items:center;justify-content:center;transition:all .2s;box-shadow:${active ? '0 0 10px #00d4ff30' : 'none'};`;
+    const curLossLimit = bot.loss_limit_cents || 0;
+    const _lossLimits = [0, 100, 200, 500, 1000];
+    const _slBtnStyle = (active) => `padding:4px 10px;border-radius:50px;background:${active ? '#ff444420' : '#0a0e1a'};border:2px solid ${active ? '#ff4444' : '#1e274066'};color:${active ? '#ff4444' : '#556'};cursor:pointer;font-weight:800;font-size:11px;transition:all .2s;box-shadow:${active ? '0 0 10px #ff444420' : 'none'};`;
     const html = `
         <div style="background:#0f1419;border:1px solid #ff704330;border-radius:14px;padding:20px;max-width:320px;position:relative;overflow:hidden;">
             <div style="position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,#00d4ff,#ff7043);opacity:0.6;"></div>
@@ -9287,6 +9291,18 @@ async function apexMmModify(botId) {
                         style="width:100%;padding:8px;background:#0a0e1a;border:2px solid #00d4ff33;border-radius:50px;color:#00d4ff;font-size:16px;font-weight:800;text-align:center;outline:none;box-sizing:border-box;transition:all .2s;" onfocus="this.style.borderColor='#00d4ff';this.style.boxShadow='0 0 10px #00d4ff20'" onblur="this.style.borderColor='#00d4ff33';this.style.boxShadow='none'">
                 </div>
             </div>
+            <div style="height:1px;background:linear-gradient(90deg,transparent,#1e274066,transparent);margin-bottom:14px;"></div>
+            <div style="margin-bottom:14px;">
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
+                    <div style="width:3px;height:12px;background:linear-gradient(180deg,#ff4444,#ffaa00);border-radius:2px;"></div>
+                    <span style="color:#ff4444;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em;">Loss Limit</span>
+                    <span style="color:#556;font-size:9px;">(stop after losing)</span>
+                </div>
+                <div style="display:flex;gap:4px;flex-wrap:wrap;">
+                    ${_lossLimits.map(l => `<button onclick="document.getElementById('apex-edit-loss-limit').value=${l};document.querySelectorAll('.ae-sl-btn').forEach(b=>b.style.cssText='${_slBtnStyle(false)}');this.style.cssText='${_slBtnStyle(true)}'" class="ae-sl-btn" style="${_slBtnStyle(l === curLossLimit)}">${l === 0 ? 'OFF' : '$' + (l/100).toFixed(2)}</button>`).join('')}
+                </div>
+                <input id="apex-edit-loss-limit" type="hidden" value="${curLossLimit}">
+            </div>
             <div style="display:flex;gap:8px;">
                 <button onclick="apexMmModifySave('${botId}')" style="flex:1;background:linear-gradient(135deg,#00d4ff,#ff7043);color:#000;border:none;border-radius:50px;padding:10px;font-size:12px;font-weight:800;cursor:pointer;letter-spacing:.03em;box-shadow:0 4px 15px #ff704325;transition:all .2s;">Save</button>
                 <button onclick="document.getElementById('apex-mm-modify-modal').remove()" style="flex:1;background:#1a1f2a;color:#556;border:1px solid #1e2740;border-radius:50px;padding:10px;font-size:12px;cursor:pointer;transition:all .2s;">Cancel</button>
@@ -9311,11 +9327,12 @@ async function apexMmModifySave(botId) {
     const gap = Math.floor(width / 2);  // convert total width to start_gap
     const levels = Math.max(1, Math.min(15, parseInt(document.getElementById('apex-edit-levels')?.value) || 7));
     const qty = Math.max(1, Math.min(100, parseInt(document.getElementById('apex-edit-qty')?.value) || 10));
+    const lossLimit = Math.max(0, parseInt(document.getElementById('apex-edit-loss-limit')?.value) || 0);
     try {
         const resp = await fetch(`${API_BASE}/bot/apex-mm/edit/${botId}`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ start_gap: gap, qty_per_level: qty, levels: levels })
+            body: JSON.stringify({ start_gap: gap, qty_per_level: qty, levels: levels, loss_limit_cents: lossLimit })
         });
         const data = await resp.json();
         if (data.ok) {

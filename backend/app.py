@@ -19233,6 +19233,7 @@ def apex_mm_edit(bot_id):
     new_gap = payload.get('start_gap')
     new_qty = payload.get('qty_per_level')
     new_levels = payload.get('levels')
+    new_loss_limit = payload.get('loss_limit_cents')
     if new_gap is not None:
         new_gap = int(new_gap)
         if new_gap < 2 or new_gap > 20:
@@ -19245,7 +19246,11 @@ def apex_mm_edit(bot_id):
         new_levels = int(new_levels)
         if new_levels < 1 or new_levels > 15:
             return jsonify({'error': 'Levels must be 1-15'}), 400
-    if new_gap is None and new_qty is None and new_levels is None:
+    if new_loss_limit is not None:
+        new_loss_limit = int(new_loss_limit)
+        if new_loss_limit < 0 or new_loss_limit > 10000:
+            return jsonify({'error': 'Loss limit must be 0-10000'}), 400
+    if new_gap is None and new_qty is None and new_levels is None and new_loss_limit is None:
         return jsonify({'error': 'Nothing to change'}), 400
     changes = {}
     if new_gap is not None and new_gap != bot.get('start_gap'):
@@ -19258,6 +19263,9 @@ def apex_mm_edit(bot_id):
     if new_levels is not None and new_levels != bot.get('levels'):
         changes['levels'] = {'old': bot.get('levels'), 'new': new_levels}
         bot['levels'] = new_levels
+    if new_loss_limit is not None and new_loss_limit != bot.get('loss_limit_cents', 0):
+        changes['loss_limit_cents'] = {'old': bot.get('loss_limit_cents', 0), 'new': new_loss_limit}
+        bot['loss_limit_cents'] = new_loss_limit
     if not changes:
         return jsonify({'ok': True, 'applied_now': False, 'changes': {}})
     # Recalculate inventory limit BEFORE repost so the new limit is used

@@ -2424,6 +2424,7 @@ function createMarketRow(market, label) {
     const activeBotTypes = Object.keys(botTypes);
     // Shared icon row: active bots + recommendations share one flex-wrap line
     const iconRow = document.createElement('div');
+    iconRow.className = 'bot-pill-container';
     iconRow.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;margin-top:4px;';
     let hasIcons = false;
     if (activeBotTypes.length > 0) {
@@ -2491,23 +2492,7 @@ function createMarketRow(market, label) {
             });
         }
     }
-    // Phantom: clear fav/dog split, dog cheap enough for multi-rung ladder,
-    // arb math works, lowest rung won't hit 1¢ floor, AND spread tight enough for instant hedge
-    if (!botTypes.phantom) {
-        const dogPrice = Math.min(liq.yesBid, liq.noBid);
-        const favBid = Math.max(liq.yesBid, liq.noBid);
-        const hedgeRoom = 98 - dogPrice - (100 - favBid);
-        const lowestRung = dogPrice - 4;
-        const spread = liq.avgSpread;  // YES spread = NO spread on binary tickers
-        const dogSideLabel = liq.dogSide.toUpperCase();
-        const pq = liq.phantomQuality;
-        if (dogPrice >= 1 && favBid >= 1) {
-            const qualLabel = pq >= 70 ? '🟢' : pq >= 50 ? '🟡' : pq >= 30 ? '🟠' : '🔴';
-            const _phLabel = `${qualLabel}${pq}`;
-            const _phLabelColor = pq >= 70 ? '#00ff88' : pq >= 50 ? '#ffaa00' : pq >= 30 ? '#ff8800' : '#ff4444';
-            recoTypes.push({ type: 'phantom', label: _phLabel, labelColor: _phLabelColor, tip: `PPI ${pq}/100 · ${dogSideLabel} dog at ${dogPrice}¢ · ${hedgeRoom}¢ room · spread ${spread}¢` });
-        }
-    }
+    // Phantom recommendation removed — PPI handles market quality assessment at runtime
     const middleReco = (window._middleRecoMap || {})[market.ticker];
     if (middleReco && !botTypes.meridian) {
         recoTypes.push({ type: 'meridian', tip: `Meridian: ${middleReco.tip}` });
@@ -2527,7 +2512,9 @@ function createMarketRow(market, label) {
             iconRow.appendChild(pill);
         }
     }
-    if (hasIcons) labelDiv.appendChild(iconRow);
+    // Always append pill container so live refresh can populate it
+    labelDiv.appendChild(iconRow);
+    labelDiv.setAttribute('data-market-ticker', market.ticker);
     
     // Read all prices first for cross-referencing
     const yesBid = getPrice(market, 'yes_bid');
@@ -8473,8 +8460,62 @@ async function loadBots() {
         if (badge) badge.innerHTML = _buildAnchoredBadgeHTML();
         updateBotBuddy(activeBotCount, filledLegs);
         updateBotsBadge(activeBotCount + dogBotIds.length);
+        // Refresh market card bot pills without full re-render
+        _refreshMarketBotPills();
     } catch (error) {
         console.error('Error loading bots:', error);
+    }
+}
+
+// Lightweight pill refresh — rebuilds _botTypeMap and updates DOM pills
+function _refreshMarketBotPills() {
+    if (!window._lastBotsData) return;
+    const catLabel = { anchor_dog: 'phantom', anchor_ladder: 'phantom', ladder_arb: 'apex' };
+    const botMap = {};
+    const deadSt = new Set(['completed','stopped','cancelled']);
+    for (const bid in window._lastBotsData) {
+        const b = window._lastBotsData[bid];
+        const t = b.ticker || '';
+        if (!t) continue;
+        let label = catLabel[b.bot_category] || (b.type === 'middle' ? 'meridian' : (b.type === 'watch' ? 'scout' : null));
+        if (!label) continue;
+        if (!botMap[t]) botMap[t] = {};
+        const isDead = deadSt.has(b.status);
+        if (!botMap[t][label]) botMap[t][label] = { count: 0, allDead: true };
+        botMap[t][label].count++;
+        if (!isDead) botMap[t][label].allDead = false;
+        // Cross-market phantom hedge ticker
+        if (label === 'phantom' && b.cross_market && b.hedge_ticker && b.hedge_ticker !== t) {
+            const ht = b.hedge_ticker;
+            if (!botMap[ht]) botMap[ht] = {};
+            if (!botMap[ht].phantom) botMap[ht].phantom = { count: 0, allDead: true };
+            botMap[ht].phantom.count++;
+            if (!isDead) botMap[ht].phantom.allDead = false;
+        }
+    }
+    // Update existing pill containers in the DOM
+    const rows = document.querySelectorAll('[data-market-ticker]');
+    for (const row of rows) {
+        const ticker = row.getAttribute('data-market-ticker');
+        if (!ticker) continue;
+        let pillContainer = row.querySelector('.bot-pill-container');
+        if (!pillContainer) continue;
+        const types = botMap[ticker];
+        if (!types || Object.keys(types).length === 0) {
+            pillContainer.innerHTML = '';
+            continue;
+        }
+        let html = '';
+        const botOrder = ['apex','phantom','meridian','scout'];
+        for (const bt of botOrder) {
+            const info = types[bt];
+            if (!info) continue;
+            const c = (typeof BOT_COLORS !== 'undefined' ? BOT_COLORS[bt] : null) || '#ffaa00';
+            const dim = info.allDead;
+            const icon = bt === 'phantom' ? (dim ? '⏹' : '=') : (info.count > 1 ? info.count : '');
+            html += `<span style="display:inline-flex;align-items:center;gap:2px;padding:2px 6px;background:${c}${dim ? '11' : '22'};border:1px solid ${c}${dim ? '33' : '55'};border-radius:4px;font-size:9px;font-weight:700;color:${c};${dim ? 'opacity:0.5;' : ''}">${botIconImg(bt, 14)}${bt === 'phantom' ? ` <span style="font-size:8px;">${icon}</span>` : (icon ? icon : '')}</span>`;
+        }
+        pillContainer.innerHTML = html;
     }
 }
 

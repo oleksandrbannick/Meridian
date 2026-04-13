@@ -6561,7 +6561,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 <span class="arr" style="color:#445;font-size:8px;">&#9660;</span>
             </div>
             <div id="${historyId}" style="display:block;margin-top:4px;">
-                ${rtLog.length > 0 ? `<div style="color:#00d4ff;font-size:8px;font-weight:800;letter-spacing:1px;margin-bottom:2px;">RUNS</div>` +
+                ${rtLog.length > 0 ? `<div style="color:#00d4ff;font-size:8px;font-weight:800;letter-spacing:1px;margin-bottom:2px;padding-bottom:2px;border-bottom:1px solid #00d4ff20;">RUNS</div>` +
                     rtLog.map((rt, i) => {
                     const combCol = rt.combined < 99 ? '#00ff88' : rt.combined <= 100 ? '#ffaa00' : '#ff4444';
                     const pCol = rt.pnl >= 0 ? '#00ff88' : '#ff4444';
@@ -6574,7 +6574,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                         <span style="color:${pCol};font-weight:700;text-align:right;">${rt.pnl >= 0 ? '+' : ''}${rt.pnl}c</span>
                     </div>`;
                 }).join('') : ''}
-                ${exitLog.length > 0 ? `<div style="margin-top:6px;padding-top:4px;border-top:1px solid #1a0a0a;"><div style="color:#ff7043;font-size:8px;font-weight:800;letter-spacing:1px;margin-bottom:2px;">EXITS</div>` +
+                ${exitLog.length > 0 ? `<div style="margin-top:6px;padding-top:4px;border-top:1px solid #1a0a0a;"><div style="color:#ff7043;font-size:8px;font-weight:800;letter-spacing:1px;margin-bottom:2px;padding-bottom:2px;border-bottom:1px solid #ff704320;">EXITS</div>` +
                     exitLog.map((ex, i) => {
                         const pCol = ex.pnl >= 0 ? '#00ff88' : '#ff4444';
                         const sideLabel = ex.type === 'arb_complete' ? 'ARB' : (ex.held_side === 'yes') ? 'YES' : 'NO';

@@ -6404,7 +6404,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const targetCombined = avgCost + exitPrice;
         const combined = (liveCombined < 999 && exitPrice > 0) ? liveCombined : targetCombined;
         const profit = 100 - combined;
-        const profitCol = profit > 2 ? '#00ff88' : profit > 0 ? '#ffaa00' : '#ff4444';
+        const combinedCol = combined > 100 ? '#ff4444' : combined >= 99 ? '#ffaa00' : '#00ff88';
         const slThreshold = _apexStopLossThreshold(width, avgCost);
         const stopLoss = 100 + slThreshold;
         const origTarget = bot._exit_target_price || exitPrice;
@@ -6483,8 +6483,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         positionBarHtml = `<div style="margin-bottom:8px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
                 <div style="display:flex;align-items:center;gap:8px;">
-                    <span style="color:${profitCol};font-weight:800;font-size:16px;">${profit >= 0 ? '+' : ''}${profit}c</span>
-                    <span style="color:#556;font-size:9px;">${combined}c combined</span>
+                    <span style="color:${combinedCol};font-weight:800;font-size:16px;">${combined}c</span>
                     ${walkBadge}
                 </div>
                 ${skewSec > 0 ? `<span style="color:#445;font-size:9px;">${timeStr}</span>` : ''}

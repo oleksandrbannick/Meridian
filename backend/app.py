@@ -11730,7 +11730,10 @@ def _handle_phantom(bot_id, bot, actions):
             _already_filled = bot.get('fav_fill_qty', 0)
             _repost_qty = qty - _already_filled
             if _repost_qty <= 0:
-                # Fully filled — shouldn't be here, let completion path handle it
+                # Fully filled — move to fav_hedge_posted so completion path runs
+                bot['status'] = 'fav_hedge_posted'
+                print(f'🔧 PHANTOM REPOST SKIP: {bot_id} already fully filled ({_already_filled}/{qty}) → fav_hedge_posted for completion')
+                save_state()
                 return
             fav_resp, actual_fav_price = create_order_maker(
                 ticker=hedge_ticker, side=fav_side, action='buy',

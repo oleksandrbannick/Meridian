@@ -11504,9 +11504,30 @@ def _handle_phantom(bot_id, bot, actions):
             save_state()
             return
 
-        # ── Qty recommendation (display only — no auto-shrink) ──
-        # Auto-shrink disabled: was too aggressive on thin books (15% of 40 = 6).
-        # Recommendation shown on card as visual guide. User sizes manually.
+        # ── Qty auto-cap: shrink to MAX if qty exceeds max safe for current liquidity ──
+        # Only caps at MAX (generous 25-50% ceiling), NOT rec (aggressive 15-40%).
+        # Only reduce, never raise. Only when unfilled.
+        if dog_filled == 0:
+            _lob_qty = _local_orderbooks.get(ticker) or _local_orderbooks.get(bot.get('hedge_ticker', ''))
+            if _lob_qty and _lob_qty.last_update_ts > 0 and (now - _lob_qty.last_update_ts) < 30:
+                _fav_ba_qty = _lob_qty.get_book_analysis(fav_side)
+                _max_cap = _qty_max(_fav_ba_qty)
+                if _max_cap > 0 and qty > _max_cap:
+                    _old_qty = qty
+                    bot['quantity'] = _max_cap
+                    if dog_order_id:
+                        try:
+                            api_write_limiter.wait()
+                            kalshi_client.amend_order(dog_order_id, count=_max_cap)
+                        except Exception as e:
+                            print(f'⚠ QTY CAP AMEND FAILED: {bot_id} {e}')
+                    print(f'📉 QTY CAP: {bot_id} {_old_qty}→{_max_cap}x (fav L1={_fav_ba_qty.get("top1Qty",0)}, max={_max_cap})')
+                    bot_log('PHANTOM_QTY_CAP', bot_id, {
+                        'old_qty': _old_qty, 'new_qty': _max_cap,
+                        'fav_l1': _fav_ba_qty.get('top1Qty', 0),
+                    })
+                    qty = _max_cap
+                    save_state()
 
         # Repost: adaptive gap-based (instant when bid drifts) + 3-min timer fallback
         DOG_REPOST_MINUTES = REPOST_AFTER_MINUTES  # 3 min fallback

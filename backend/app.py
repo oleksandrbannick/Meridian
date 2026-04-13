@@ -5562,28 +5562,13 @@ def _refresh_milestones_cache():
 
 def _is_milestone_live(info: dict) -> bool:
     """Determine if a tennis match is live from milestone data.
-    Uses status if reliable, falls back to start_date for ATP/Challenger
-    where Kalshi often leaves status as 'not_started' during live play."""
+    Uses status field only — 'live' means live, anything else means not live.
+    The start_date fallback was removed because it incorrectly marked
+    unsettled matches as live when start_date was in the past."""
     if not info:
         return False
     status = info.get('status', '')
-    if status == 'live':
-        return True
-    if status == 'ended':
-        return False
-    # status is 'not_started' but might be wrong — check start_date
-    start_date = info.get('start_date', '')
-    if start_date:
-        try:
-            from datetime import datetime, timezone
-            sd = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
-            now = datetime.now(timezone.utc)
-            # Match started (start_date in the past) → likely live
-            if sd <= now:
-                return True
-        except Exception:
-            pass
-    return False
+    return status == 'live'
 
 
 def _get_milestone_status(event_ticker: str):

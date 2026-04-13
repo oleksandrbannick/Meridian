@@ -7062,7 +7062,7 @@ function _renderWatchBotCard(bot, botId, container, gameScores) {
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 ${orderFilled && unrealizedPnl !== 0 ? `<span style="color:${unrealColor};font-size:11px;font-weight:700;">${unrealizedPnl > 0 ? '+' : ''}${unrealizedPnl}¢</span>` : ''}
-                ${!isStopped ? `<button onclick="scoutModify('${botId}')" style="background:#6366f122;color:#818cf8;border:1px solid #6366f144;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Modify</button>` : ''}
+                ${!isStopped ? `<button onclick="scoutModify('${botId}')" style="background:#ffd74022;color:#ffd740;border:1px solid #ffd74044;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Edit</button>` : ''}
                 ${!isStopped ? `<button onclick="stopBot('${botId}')" style="background:#ff880022;color:#ff8800;border:1px solid #ff880044;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
                 ${!isStopped ? `<button onclick="releaseBot('${botId}')" style="background:#4488ff22;color:#4488ff;border:1px solid #4488ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Release</button>` : ''}
                 <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
@@ -7083,6 +7083,24 @@ function _renderWatchBotCard(bot, botId, container, gameScores) {
             </div>
             <span style="color:${orderFilled?'#00ff88':(fillQty>0?'#ffaa00':'#8892a6')};font-weight:700;font-size:10px;">${fillQty}/${watchQty}${orderFilled?' ✓':''}</span>
         </div>
+        ${!isStopped && orderFilled && curBidNum > 0 && (sl > 0 || tp > 0) ? (() => {
+            const pills = [];
+            if (sl > 0) {
+                const distSL = curBidNum - (entry - sl);
+                const slUrgent = distSL <= 2;
+                const slWarn = distSL <= 5;
+                const slClr = slUrgent ? '#ff4444' : slWarn ? '#ff8800' : '#ff666688';
+                pills.push('<span style="color:' + slClr + ';font-weight:700;">' + (slUrgent ? '⚠ ' : '') + distSL + '¢ to SL</span>');
+            }
+            if (tp > 0) {
+                const distTP = (entry + tp) - curBidNum;
+                const tpClose = distTP <= 2;
+                const tpNear = distTP <= 5;
+                const tpClr = tpClose ? '#00ff88' : tpNear ? '#ffd740' : '#ffd74088';
+                pills.push('<span style="color:' + tpClr + ';font-weight:700;">' + (tpClose ? '✦ ' : '') + distTP + '¢ to TP</span>');
+            }
+            return '<div style="display:flex;align-items:center;justify-content:center;gap:12px;padding:3px 8px;background:#ffd74008;border:1px solid #ffd74015;border-radius:4px;font-size:10px;">' + pills.join('<span style="color:#1e2740;">│</span>') + '</div>';
+        })() : ''}
         ${bot.fair_value_cents ? (() => {
             const fv = bot.fair_value_cents;
             const edgeVal = fv - entry;
@@ -8987,22 +9005,36 @@ async function scoutModify(botId) {
     const entry = bot.entry_price || 0;
 
     const html = `
-        <div style="background:#0f1419;border:1px solid #6366f144;border-radius:12px;padding:20px;max-width:320px;">
-            <div style="color:#818cf8;font-weight:700;font-size:13px;margin-bottom:12px;">Modify Scout</div>
-            <div style="color:#8892a6;font-size:11px;margin-bottom:8px;">Entry: ${entry}¢ · ${bot.side?.toUpperCase()} × ${bot.quantity}</div>
-            <div style="margin-bottom:10px;">
-                <label style="color:#8892a6;font-size:10px;">Stop Loss (¢ below entry, 0=none)</label>
-                <input id="scout-sl" type="number" value="${curSL}" min="0" max="99" style="width:100%;background:#1a2540;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 10px;font-size:13px;margin-top:2px;">
-                <div style="color:#ff6666;font-size:10px;margin-top:2px;">${curSL > 0 ? 'Triggers at ' + (entry - curSL) + '¢' : 'No stop loss'}</div>
-            </div>
+        <div style="background:#0f1419;border:1px solid #ffd74030;border-radius:14px;padding:20px;max-width:320px;position:relative;overflow:hidden;">
+            <div style="position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,#00ff88,#ffd740);opacity:0.6;"></div>
+            <div style="color:#ffd740;font-weight:800;font-size:13px;margin-bottom:4px;letter-spacing:.03em;">◎ Edit Scout</div>
+            <div style="color:#8892a6;font-size:11px;margin-bottom:12px;">Entry: ${entry}¢ · ${bot.side?.toUpperCase()} × ${bot.quantity}</div>
             <div style="margin-bottom:14px;">
-                <label style="color:#8892a6;font-size:10px;">Take Profit (¢ above entry, 0=none)</label>
-                <input id="scout-tp" type="number" value="${curTP}" min="0" max="99" style="width:100%;background:#1a2540;color:#fff;border:1px solid #333;border-radius:6px;padding:6px 10px;font-size:13px;margin-top:2px;">
-                <div style="color:#00ff88;font-size:10px;margin-top:2px;">${curTP > 0 ? 'Triggers at ' + (entry + curTP) + '¢' : 'No take profit'}</div>
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+                    <div style="width:3px;height:12px;background:#ff6666;border-radius:2px;"></div>
+                    <span style="color:#ff6666;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em;">Stop Loss</span>
+                    <span style="color:#556;font-size:9px;">(¢ below entry, 0=none)</span>
+                </div>
+                <input id="scout-sl" type="number" value="${curSL}" min="0" max="99"
+                    style="width:100%;padding:8px;background:#0a0e1a;border:2px solid #ffd74033;border-radius:50px;color:#fff;font-size:16px;font-weight:800;text-align:center;outline:none;box-sizing:border-box;transition:all .2s;"
+                    onfocus="this.style.borderColor='#ffd740';this.style.boxShadow='0 0 10px #ffd74020'" onblur="this.style.borderColor='#ffd74033';this.style.boxShadow='none'">
+                <div id="scout-sl-hint" style="color:#ff6666;font-size:10px;margin-top:4px;text-align:center;">${curSL > 0 ? 'Triggers at ' + (entry - curSL) + '¢' : 'No stop loss'}</div>
+            </div>
+            <div style="height:1px;background:linear-gradient(90deg,transparent,#1e274066,transparent);margin-bottom:14px;"></div>
+            <div style="margin-bottom:14px;">
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+                    <div style="width:3px;height:12px;background:#00ff88;border-radius:2px;"></div>
+                    <span style="color:#00ff88;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em;">Take Profit</span>
+                    <span style="color:#556;font-size:9px;">(¢ above entry, 0=none)</span>
+                </div>
+                <input id="scout-tp" type="number" value="${curTP}" min="0" max="99"
+                    style="width:100%;padding:8px;background:#0a0e1a;border:2px solid #ffd74033;border-radius:50px;color:#fff;font-size:16px;font-weight:800;text-align:center;outline:none;box-sizing:border-box;transition:all .2s;"
+                    onfocus="this.style.borderColor='#ffd740';this.style.boxShadow='0 0 10px #ffd74020'" onblur="this.style.borderColor='#ffd74033';this.style.boxShadow='none'">
+                <div id="scout-tp-hint" style="color:#00ff88;font-size:10px;margin-top:4px;text-align:center;">${curTP > 0 ? 'Triggers at ' + (entry + curTP) + '¢' : 'No take profit'}</div>
             </div>
             <div style="display:flex;gap:8px;">
-                <button onclick="scoutModifySave('${botId}')" style="flex:1;background:#6366f1;color:#fff;border:none;border-radius:6px;padding:8px;font-size:12px;font-weight:700;cursor:pointer;">Save</button>
-                <button onclick="document.getElementById('scout-modify-modal').remove()" style="flex:1;background:#333;color:#fff;border:none;border-radius:6px;padding:8px;font-size:12px;cursor:pointer;">Cancel</button>
+                <button onclick="scoutModifySave('${botId}')" style="flex:1;background:linear-gradient(135deg,#00ff88,#ffd740);color:#000;border:none;border-radius:50px;padding:10px;font-size:12px;font-weight:800;cursor:pointer;letter-spacing:.03em;box-shadow:0 4px 15px #ffd74025;transition:all .2s;">Save</button>
+                <button onclick="document.getElementById('scout-modify-modal').remove()" style="flex:1;background:#1a1f2a;color:#556;border:1px solid #1e2740;border-radius:50px;padding:10px;font-size:12px;cursor:pointer;transition:all .2s;">Cancel</button>
             </div>
         </div>`;
 
@@ -9022,11 +9054,11 @@ async function scoutModify(botId) {
     const tpInput = document.getElementById('scout-tp');
     slInput?.addEventListener('input', () => {
         const v = parseInt(slInput.value) || 0;
-        slInput.parentElement.querySelector('div').textContent = v > 0 ? 'Triggers at ' + (entry - v) + '¢' : 'No stop loss';
+        document.getElementById('scout-sl-hint').textContent = v > 0 ? 'Triggers at ' + (entry - v) + '¢' : 'No stop loss';
     });
     tpInput?.addEventListener('input', () => {
         const v = parseInt(tpInput.value) || 0;
-        tpInput.parentElement.querySelector('div').textContent = v > 0 ? 'Triggers at ' + (entry + v) + '¢' : 'No take profit';
+        document.getElementById('scout-tp-hint').textContent = v > 0 ? 'Triggers at ' + (entry + v) + '¢' : 'No take profit';
     });
 }
 

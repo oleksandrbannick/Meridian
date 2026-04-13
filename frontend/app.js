@@ -7095,7 +7095,7 @@ function _renderWatchBotCard(bot, botId, container, gameScores) {
     item.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;flex:1;min-width:0;">
-                ${getBotIconSVG('scout', '#00ff88', 18)}
+                ${botIconSvg('scout', 18)}
                 <span style="color:#00ff88;font-weight:800;font-size:9px;letter-spacing:.1em;opacity:0.8;">SCOUT</span>
                 <a href="#" onclick="navigateToMarket('${ticker.toUpperCase().split('-').slice(0,2).join('-')}');return false;" style="color:#e8eaed;font-weight:700;font-size:13px;text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="View in Markets tab">${watchDisplayName}</a>
                 ${watchScoreBadge}

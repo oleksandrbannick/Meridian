@@ -2723,14 +2723,10 @@ def load_state():
                     if _bot.get(_flag):
                         _bot[_flag] = False
                         _any_cleared = True
-                # Clear stale old order IDs — on restart, WS reconnection can replay
-                # fills for old orders and trigger phantom hedges for positions that
-                # don't exist. Keep ONLY the current dog_order_id.
-                _old_ids = _bot.get('_all_dog_order_ids', [])
-                _cur_oid = _bot.get('dog_order_id')
-                if len(_old_ids) > 1 or (_old_ids and _cur_oid and _old_ids != [_cur_oid]):
-                    _bot['_all_dog_order_ids'] = [_cur_oid] if _cur_oid else []
-                    _any_cleared = True
+                # Keep old order IDs for startup fill recovery — pruning them before
+                # fill recovery causes missed fills to become undetectable orphans.
+                # WS ghost fills are handled by the verify-before-hedge path instead.
+                # Pruning happens AFTER fill recovery in _run_startup().
                 # DON'T blindly reset fill counts — check Kalshi position instead
                 # Old code reset to 0 and hoped monitor would re-detect, but that
                 # wiped real fills from old order IDs that got cleared above.
@@ -2741,6 +2737,21 @@ def load_state():
                             if _lv.get('fill_qty', 0) > 0:
                                 _lv['fill_qty'] = 0
                                 _any_cleared = True
+                # Apex MM: detect phantom inventory (net > 0 but avg_cost = 0)
+                if _bot.get('type') == 'apex_mm':
+                    _ny = _bot.get('net_yes', 0)
+                    _nn = _bot.get('net_no', 0)
+                    _ay = _bot.get('avg_yes_cost', 0)
+                    _an = _bot.get('avg_no_cost', 0)
+                    if (_ny > 0 and _ay == 0) or (_nn > 0 and _an == 0):
+                        print(f'🔧 APEX MM PHANTOM INV: {_bid[:40]} net_yes={_ny} avg={_ay} net_no={_nn} avg={_an} → clearing phantom')
+                        _bot['net_yes'] = 0
+                        _bot['net_no'] = 0
+                        _bot['avg_yes_cost'] = 0
+                        _bot['avg_no_cost'] = 0
+                        _bot['total_yes_cost'] = 0
+                        _bot['total_no_cost'] = 0
+                        _any_cleared = True
                 if _any_cleared:
                     _transient_cleared += 1
                     print(f'🔧 STARTUP FIX: {_bid[:40]} cleared stuck thread flags + stale order IDs')
@@ -20385,6 +20396,17 @@ def _run_startup():
         except Exception as _re:
             print(f'⚠ Startup fill recovery failed: {_re}')
 
+    # ── Post-recovery: prune _all_dog_order_ids now that fill recovery is done ──
+    # This prevents WS reconnection from replaying old fills as ghost hedges
+    for _bid, _bot in active_bots.items():
+        if _bot.get('bot_category') != 'anchor_dog':
+            continue
+        _old_ids = _bot.get('_all_dog_order_ids', [])
+        _cur_oid = _bot.get('dog_order_id')
+        if len(_old_ids) > 1 or (_old_ids and _cur_oid and _old_ids != [_cur_oid]):
+            _bot['_all_dog_order_ids'] = [_cur_oid] if _cur_oid else []
+    save_state()
+
     # ── Validate bot order IDs against Kalshi — clear stale ones before orphan sweep ──
     if kalshi_client:
         try:
@@ -20549,10 +20571,53 @@ def _run_startup():
                     }
                     print(f'⚠ ORPHANED POSITION: {ticker} {side.upper()} {orphaned_qty}/{kalshi_qty} contracts (${exposure:.2f} exposure)')
 
+            # ── Auto-recover: assign orphans to matching phantom bots & trigger hedge ──
+            _auto_recovered = 0
+            for _orph_ticker, _orph_info in list(_orphaned_positions.items()):
+                _orph_side = _orph_info['side']
+                _orph_qty = _orph_info['orphaned_qty']
+                # Find a matching phantom bot on this ticker with matching dog_side
+                _match_bot = None
+                _match_bid = None
+                for _bid, _bot in active_bots.items():
+                    if (_bot.get('bot_category') == 'anchor_dog'
+                            and _bot.get('ticker') == _orph_ticker
+                            and _bot.get('dog_side') == _orph_side
+                            and _bot.get('status') in ('dog_anchor_posted', 'waiting_repeat')):
+                        _match_bot = _bot
+                        _match_bid = _bid
+                        break
+                if _match_bot:
+                    _qty = min(_orph_qty, _match_bot.get('quantity', 1))
+                    print(f'🔧 STARTUP ORPHAN RECOVERY: {_match_bid} — assigning {_qty} {_orph_side.upper()} orphan fills → triggering hedge')
+                    _match_bot['dog_fill_qty'] = _qty
+                    if _orph_side == 'yes':
+                        _match_bot['yes_fill_qty'] = _qty
+                    else:
+                        _match_bot['no_fill_qty'] = _qty
+                    _match_bot['_hedge_fired'] = True
+                    _match_bot['dog_filled_at'] = time.time()
+                    _match_bot['status'] = 'dog_filled'
+                    # Cancel current dog order if resting
+                    _cur_oid = _match_bot.get('dog_order_id')
+                    if _cur_oid:
+                        threading.Thread(target=_safe_cancel, args=(_cur_oid, f'orphan_recovery_{_match_bid}'), daemon=True).start()
+                    # Fire hedge
+                    _hedge_worker_queue.put((_execute_phantom_hedge, (_match_bid,)))
+                    del _orphaned_positions[_orph_ticker]
+                    _auto_recovered += 1
+                    save_state()
+                    _audit('STARTUP_ORPHAN_RECOVERY', _match_bid, {
+                        'ticker': _orph_ticker, 'side': _orph_side, 'qty': _qty,
+                        'orphaned_qty': _orph_qty,
+                    })
+
+            if _auto_recovered:
+                print(f'🔧 Auto-recovered {_auto_recovered} orphan(s) → hedge triggered')
+
             if _orphaned_positions:
                 tickers = ', '.join(_orphaned_positions.keys())
-                print(f'⚠ {len(_orphaned_positions)} orphaned position(s) on startup: {tickers}')
-                # Don't push notification — orphan popup handles this, and data may be stale
+                print(f'⚠ {len(_orphaned_positions)} unresolved orphaned position(s) on startup: {tickers}')
             else:
                 print('✅ No orphaned positions')
         except Exception as e:

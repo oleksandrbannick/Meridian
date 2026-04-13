@@ -1421,6 +1421,19 @@
                         </div>
                         <div style="color:#555;font-size:9px;margin-top:3px;">After completion or sellback, re-anchors dog at smart price from orderbook</div>
                     </div>
+                    <!-- Qty Override -->
+                    <div id="anchor-qty-override-row" style="margin-bottom:12px;">
+                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:6px 10px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;">
+                            <input type="checkbox" id="anchor-qty-override" onchange="toggleQtyOverride(this.checked)" style="accent-color:#ff8800;">
+                            <span style="color:#ff8800;font-size:11px;font-weight:600;">Override Qty Cap</span>
+                            <span style="color:#555;font-size:9px;">— not recommended</span>
+                        </label>
+                        <div id="anchor-qty-override-info" style="display:none;margin-top:4px;padding:6px 10px;background:#ff880008;border:1px solid #ff880022;border-radius:6px;">
+                            <div style="color:#ff4444;font-size:9px;font-weight:700;">⚠ QTY OVERRIDE ENABLED</div>
+                            <div style="color:#ff8800;font-size:9px;">Bot will cap at max safe qty instead of recommended. Higher market impact risk.</div>
+                            <div id="anchor-qty-override-max" style="color:#ffaa00;font-size:10px;font-weight:700;margin-top:2px;"></div>
+                        </div>
+                    </div>
                     <!-- Preview -->
                     <div id="anchor-preview" style="margin-bottom:12px;background:#060a14;border:1px solid #ff66aa22;border-radius:8px;padding:10px;">
                         <div id="anchor-preview-content">
@@ -3223,7 +3236,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260413221500"></script>
+    <script src="app.js?v=20260413223000"></script>
     <!-- Bottom status bar — always visible -->
     <div id="bottom-status-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#080c16;border-top:1px solid #1a2035;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;font-size:11px;">
         <span style="color:#3a4560;font-size:10px;letter-spacing:.03em;">hi irene</span>

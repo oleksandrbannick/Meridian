@@ -9879,6 +9879,7 @@ def create_anchor_bot():
             'consecutive_losses':  0,
             'anchor_depth':        anchor_depth,
             'auto_depth':          auto_depth,
+            'qty_override':        bool(data.get('qty_override', False)),
             'fav_shave':           fav_shave,
             'fav_walk_count':      0,
             'fav_last_walk_at':    None,
@@ -11504,13 +11505,14 @@ def _handle_phantom(bot_id, bot, actions):
             save_state()
             return
 
-        # ── Qty cap: auto-shrink if order exceeds rec for current liquidity ──
-        # Only reduce, never raise. Only when unfilled. Targets rec qty (conservative).
+        # ── Qty cap: auto-shrink if order exceeds safe limit for current liquidity ──
+        # Only reduce, never raise. Only when unfilled.
+        # qty_override: cap at max (aggressive) instead of rec (conservative)
         if dog_filled == 0:
             _lob_qty = _local_orderbooks.get(ticker) or _local_orderbooks.get(bot.get('hedge_ticker', ''))
             if _lob_qty and _lob_qty.last_update_ts > 0 and (now - _lob_qty.last_update_ts) < 30:
                 _fav_ba_qty = _lob_qty.get_book_analysis(fav_side)
-                _rec_cap = _qty_rec(_fav_ba_qty)
+                _rec_cap = _qty_max(_fav_ba_qty) if bot.get('qty_override') else _qty_rec(_fav_ba_qty)
                 if _rec_cap > 0 and qty > _rec_cap:
                     _old_qty = qty
                     bot['quantity'] = _rec_cap

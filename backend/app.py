@@ -767,11 +767,10 @@ def get_markets():
         
         # Filter out stale/postponed markets
         now = datetime.now(timezone.utc)
-        # Use US-Eastern-equivalent time for ticker date comparison.
-        # Kalshi ticker dates use US game dates (EDT/EST). UTC rolls over
-        # at 7pm EDT, which would hide all evening games as "yesterday".
-        # Using a -5h offset (EDT) keeps today's games visible all evening.
-        _us_now = now - timedelta(hours=5)
+        # Use Arizona time for ticker date comparison.
+        # Kalshi ticker dates use US game dates. UTC rolls over mid-evening
+        # in the US, which would hide all tonight's games as "yesterday".
+        _us_now = now.astimezone(AZ_TZ)
         _today_day = int(_us_now.strftime('%d'))
         _today_mon = _us_now.strftime('%b').upper()
         _today_yr = _us_now.strftime('%y')

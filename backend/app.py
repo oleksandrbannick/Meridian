@@ -11725,10 +11725,17 @@ def _handle_phantom(bot_id, bot, actions):
             return
 
         try:
+            # Account for partial fills — only repost remaining qty
+            _already_filled = bot.get('fav_fill_qty', 0)
+            _repost_qty = qty - _already_filled
+            if _repost_qty <= 0:
+                # Fully filled — shouldn't be here, let completion path handle it
+                return
             fav_resp, actual_fav_price = create_order_maker(
                 ticker=hedge_ticker, side=fav_side, action='buy',
-                count=qty, price=hedge_price
+                count=_repost_qty, price=hedge_price
             )
+            bot['_partial_hedge_qty'] = _repost_qty
             fav_order_id = fav_resp['order']['order_id']
             bot['fav_order_id'] = fav_order_id
             bot['fav_price'] = actual_fav_price

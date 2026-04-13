@@ -19418,6 +19418,13 @@ def get_pnl():
     lifetime_mid = _compute_pnl_bucket(lifetime_trades, 'middle')
     lifetime_dog_trades = [t for t in lifetime_trades if t.get('bot_category') in ('anchor_dog', 'anchor_ladder')]
     lifetime_dog = _compute_pnl_bucket(lifetime_dog_trades)
+    lifetime_dog_contracts = sum(t.get('quantity', 1) for t in lifetime_dog_trades)
+    # Monthly contracts (current calendar month, all bot types for rebate tracking)
+    _this_month = datetime.now(AZ_TZ).strftime('%Y-%m')
+    monthly_all_trades = [t for t in lifetime_trades if _trade_day_key(t).startswith(_this_month)]
+    monthly_contracts = sum(t.get('quantity', 1) for t in monthly_all_trades)
+    monthly_dog_trades = [t for t in monthly_all_trades if t.get('bot_category') in ('anchor_dog', 'anchor_ladder')]
+    monthly_dog_contracts = sum(t.get('quantity', 1) for t in monthly_dog_trades)
     arb_d    = _compute_pnl_bucket(today_trades, 'arb')
     bet_d    = _compute_pnl_bucket(today_trades, 'bet')
     mid_d    = _compute_pnl_bucket(today_trades, 'middle')
@@ -19487,6 +19494,10 @@ def get_pnl():
         'lifetime_dog_net_cents':  lifetime_dog['net_cents'],
         'lifetime_dog_wins':       lifetime_dog['completed_bots'],
         'lifetime_dog_losses':     lifetime_dog['stopped_bots'],
+        'lifetime_dog_contracts':  lifetime_dog_contracts,
+        'monthly_dog_contracts':   monthly_dog_contracts,
+        'monthly_contracts':       monthly_contracts,
+        'monthly_label':           datetime.now(AZ_TZ).strftime('%b %Y'),
         # Category breakdown (today)
         'arb_net_cents':    arb_d['net_cents'],
         'arb_profit_cents': arb_d['gross_profit_cents'],

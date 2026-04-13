@@ -13290,14 +13290,14 @@ function renderDogStatsAndDepth(trades, pnl) {
 
     // ── Stats panel ──
     if (statsPanel) {
-        // Always compute ALL stats from the trades array (respects all active filters)
+        // ── Always compute filtered stats from the trades array ──
         const netPnl = trades.reduce((s,t) => s + (t.profit_cents||0) - (t.loss_cents||0), 0);
         const wins = trades.filter(t => (t.profit_cents||0) - (t.loss_cents||0) > 0).length;
         const losses = trades.filter(t => (t.profit_cents||0) - (t.loss_cents||0) < 0).length;
         const totalTrades = wins + losses;
         const winRate = totalTrades > 0 ? Math.round(wins / totalTrades * 100) : 0;
         const avgProfit = totalTrades > 0 ? (netPnl / totalTrades).toFixed(1) : '—';
-        const totalContracts = trades.reduce((s, t) => s + (t.quantity || 1), 0);
+        const filteredContracts = trades.reduce((s, t) => s + (t.quantity || 1), 0);
         const hedgeTrades = trades.filter(t => t.raw_hedge_ms != null);
         const avgHedgeMs = hedgeTrades.length > 0 ? (hedgeTrades.reduce((s,t) => s + t.raw_hedge_ms, 0) / hedgeTrades.length).toFixed(1) : '—';
         const hfTrades = trades.filter(t => t.hedge_fill_latency_ms != null && t.hedge_fill_latency_ms < 300000);
@@ -13307,17 +13307,33 @@ function renderDogStatsAndDepth(trades, pnl) {
         const pnlCol = netPnl >= 0 ? '#ffaa00' : '#ff4444';
         const avgCol = parseFloat(avgProfit) >= 0 ? '#ffaa00' : '#ff4444';
 
-        // Build smart label from active filters
+        // ── Anchor stats from /api/pnl (always visible, never filtered) ──
+        const lifetimePnl = pnl.lifetime_dog_net_cents || 0;
+        const lifetimeWins = pnl.lifetime_dog_wins || 0;
+        const lifetimeLosses = pnl.lifetime_dog_losses || 0;
+        const lifetimeContracts = pnl.lifetime_dog_contracts || 0;
+        const monthlyContracts = pnl.monthly_dog_contracts || 0;
+        const monthlyLabel = pnl.monthly_label || 'This Month';
+        const monthlyGoal = 300000;
+        const monthlyPct = monthlyGoal > 0 ? Math.min(100, Math.round(monthlyContracts / monthlyGoal * 100)) : 0;
+        const lifetimePnlCol = lifetimePnl >= 0 ? '#ffaa00' : '#ff4444';
+
+        // ── Build smart label from active filters ──
         const hasDateFilter = selectedHistoryDays.length > 0;
         const hasSportFilter = _phantomActiveSport !== 'all';
         const hasDepthFilter = _phantomActiveDepth !== 'all';
         const hasAnyFilter = hasDateFilter || hasSportFilter || hasDepthFilter;
-        let filterLabel = 'Lifetime';
+        let filterLabel = '';
         if (hasAnyFilter) {
             const parts = [];
             if (hasDateFilter) {
-                const uniqueMonths = [...new Set(selectedHistoryDays.map(d => d.substring(0, 7)))];
-                parts.push(uniqueMonths.length === 1 ? new Date(uniqueMonths[0] + '-01').toLocaleDateString('en', {month:'short',year:'numeric'}) : `${selectedHistoryDays.length} days`);
+                if (selectedHistoryDays.length === 1) {
+                    const d = new Date(selectedHistoryDays[0] + 'T12:00:00');
+                    parts.push(d.toLocaleDateString('en', {month:'short', day:'numeric'}));
+                } else {
+                    const uniqueMonths = [...new Set(selectedHistoryDays.map(d => d.substring(0, 7)))];
+                    parts.push(uniqueMonths.length === 1 ? new Date(uniqueMonths[0] + '-01').toLocaleDateString('en', {month:'short',year:'numeric'}) : `${selectedHistoryDays.length} days`);
+                }
             }
             if (hasSportFilter) parts.push(_phantomActiveSport);
             if (hasDepthFilter) parts.push(_phantomActiveDepth + '¢');
@@ -13359,15 +13375,18 @@ function renderDogStatsAndDepth(trades, pnl) {
             ${sub ? `<div style="color:#555;font-size:10px;margin-top:2px;">${sub}</div>` : ''}
         </div>`;
 
-        statsPanel.innerHTML = totalTrades === 0 && !hasAnyFilter
+        statsPanel.innerHTML = lifetimeWins + lifetimeLosses === 0 && !hasAnyFilter
             ? '<p style="color:#555;text-align:center;font-size:12px;">No Phantom trades yet.</p>'
             : `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;">
-                ${_bub(`${filterLabel} P&L`, `${netPnl>=0?'+':''}$${(netPnl/100).toFixed(2)}`, `${wins}W / ${losses}L`, pnlCol)}
+                ${_bub('Lifetime P&L', `${lifetimePnl>=0?'+':''}$${(lifetimePnl/100).toFixed(2)}`, `${lifetimeWins}W / ${lifetimeLosses}L`, lifetimePnlCol)}
+                ${hasAnyFilter ? _bub(`${filterLabel} P&L`, `${netPnl>=0?'+':''}$${(netPnl/100).toFixed(2)}`, `${wins}W / ${losses}L`, pnlCol) : ''}
                 ${dDNet !== null ? _bub('Today P&L', `${dDNet>=0?'+':''}$${(dDNet/100).toFixed(2)}`, `${dDWins}W / ${dDLosses}L today`, dDCol) : ''}
-                ${_bub('Win Rate', `${winRate}%`, `${wins}W / ${losses}L`, '#ffaa00')}
+                ${_bub('Win Rate', `${winRate}%`, `${wins}W / ${losses}L · ${hasAnyFilter ? filterLabel : 'lifetime'}`, '#ffaa00')}
                 ${_bub('Avg Profit', avgProfit === '—' ? '—' : `${parseFloat(avgProfit)>=0?'+':''}${avgProfit}¢`, `${totalTrades} trades`, avgCol)}
                 ${_bub('Trades', totalTrades, `${wins}W / ${losses}L`, '#ffaa00')}
-                ${_bub('Contracts', totalContracts.toLocaleString(), filterLabel, '#ff66aa')}
+                ${_bub(`${monthlyLabel}`, monthlyContracts.toLocaleString(), `${monthlyPct}% of 300k goal`, monthlyPct >= 100 ? '#00ff88' : '#ff66aa')}
+                ${_bub('Lifetime', lifetimeContracts.toLocaleString(), 'contracts', '#ff66aa')}
+                ${hasAnyFilter ? _bub(`${filterLabel}`, filteredContracts.toLocaleString(), 'contracts', '#ff66aa') : ''}
                 ${_bub('Hedge Speed', avgHedgeMs === '—' ? '—' : `${avgHedgeMs}ms`, `${hedgeTrades.length} samples`, '#ffaa00')}
                 ${_bub('Hedge Fill', fmtFillTime(avgHedgeFillS), `${hfTrades.length} samples`, '#ff66aa')}
             </div>`;

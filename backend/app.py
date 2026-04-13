@@ -17744,6 +17744,12 @@ def add_runs(bot_id):
             bot['dog_filled_at'] = None
             bot['_all_dog_order_ids'] = []
         save_state()
+        bot_log('SMART_RESTART', bot_id, {
+            'prev_status': bot.get('status'),
+            'consecutive_losses_reset': True,
+            'smart_stopped_reset': True,
+            'repeats_done': bot.get('repeats_done', 0),
+        })
         print(f'🔄 SMART RESTART: {bot_id} → waiting_repeat')
         return jsonify({'success': True, 'mode': 'smart_restart'})
 

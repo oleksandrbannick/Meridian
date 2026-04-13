@@ -7936,14 +7936,48 @@ def _apex_mm_cycle_reset(bot_id, bot):
                 break
         if _kalshi_pos != 0:
             # Kalshi says we're holding — sync bot state and abort
+            _held_side = 'yes' if _kalshi_pos > 0 else 'no'
+            _held_qty = abs(_kalshi_pos)
             if _kalshi_pos > 0:
-                bot['net_yes'] = abs(_kalshi_pos)
+                bot['net_yes'] = _held_qty
                 bot['net_no'] = 0
             else:
-                bot['net_no'] = abs(_kalshi_pos)
+                bot['net_no'] = _held_qty
                 bot['net_yes'] = 0
-            print(f'🚨 CYCLE RESET ABORTED (kalshi check): {bot_id} kalshi_pos={_kalshi_pos} — not actually flat')
-            bot_log('APEX_MM_CYCLE_KALSHI_ABORT', bot_id, {'kalshi_pos': _kalshi_pos})
+            # Reconstruct cost basis from order fill prices if avg was zeroed
+            if bot.get(f'avg_{_held_side}_cost', 0) == 0:
+                _orders_key = f'{_held_side}_orders'
+                _total_cost = 0
+                _total_qty = 0
+                for _pr_str, _lvl in bot.get(_orders_key, {}).items():
+                    _fq = _lvl.get('fill_qty', 0)
+                    if _fq > 0:
+                        _total_cost += int(_pr_str) * _fq
+                        _total_qty += _fq
+                if _total_qty > 0:
+                    bot[f'avg_{_held_side}_cost'] = round(_total_cost / _total_qty)
+                    bot[f'total_{_held_side}_cost'] = _total_cost
+                    print(f'🔧 CYCLE RESET COST RECONSTRUCT: {bot_id} {_held_side} avg={bot[f"avg_{_held_side}_cost"]}c from {_total_qty} order fills')
+                else:
+                    # Fallback: use fill_log entries for this side
+                    _fl_cost = 0
+                    _fl_qty = 0
+                    for _fl in reversed(bot.get('_fill_log', [])):
+                        if _fl.get('is_exit'):
+                            continue
+                        if _fl.get('side') == _held_side:
+                            _fl_cost += _fl.get('price', 0) * _fl.get('qty', 0)
+                            _fl_qty += _fl.get('qty', 0)
+                            if _fl_qty >= _held_qty:
+                                break
+                    if _fl_qty > 0:
+                        bot[f'avg_{_held_side}_cost'] = round(_fl_cost / _fl_qty)
+                        bot[f'total_{_held_side}_cost'] = _fl_cost
+                        print(f'🔧 CYCLE RESET COST RECONSTRUCT (fill_log): {bot_id} {_held_side} avg={bot[f"avg_{_held_side}_cost"]}c from {_fl_qty} fills')
+                    else:
+                        print(f'⚠ CYCLE RESET: {bot_id} — cannot reconstruct {_held_side} cost basis, avg=0')
+            print(f'🚨 CYCLE RESET ABORTED (kalshi check): {bot_id} kalshi_pos={_kalshi_pos} avg_{_held_side}={bot.get(f"avg_{_held_side}_cost",0)}c')
+            bot_log('APEX_MM_CYCLE_KALSHI_ABORT', bot_id, {'kalshi_pos': _kalshi_pos, f'avg_{_held_side}_cost': bot.get(f'avg_{_held_side}_cost', 0)})
             _fill_side = 'yes' if _kalshi_pos > 0 else 'no'
             threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _fill_side), daemon=True).start()
             save_state()

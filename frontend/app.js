@@ -8842,7 +8842,7 @@ async function showBotDetail(botId) {
         const _linkColor = isPhantom ? '#ff66aa' : '#00d4ff';
         html += `<div style="text-align:center;font-size:10px;color:#555;margin-top:4px;">
             <a href="#" onclick="navigateToMarket('${(bot.ticker||'').toUpperCase().split('-').slice(0,2).join('-')}');closeBotDetail();return false;" style="color:${_linkColor};">View in Meridian</a>
-            · <a href="https://kalshi.com/markets/${(bot.ticker||'').split('-')[0]}/${bot.ticker||''}" target="_blank" style="color:#8892a6;">Kalshi ↗</a>
+            · <a href="https://kalshi.com/markets/${(bot.ticker||'').split('-')[0]}/${(bot.ticker||'').split('-').slice(0,-1).join('-')}" target="_blank" style="color:#8892a6;">Kalshi ↗</a>
         </div>`;
 
         content.innerHTML = html;

@@ -3966,9 +3966,19 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
         _fav_depth = round(_lob.get_total_depth(fav_side, 1)) if _lob and _lob.last_update_ts > 0 else 0
         _taker_timer = _phantom_taker_depth_tier(_fav_depth)
 
-        if fav_ask > 0 and hedge_age >= _taker_timer and not bot.get('_taker_fired'):
+        # Allow re-taker on partial fills: if taker fired but didn't fully fill, reset for another try
+        if bot.get('_taker_fired') and bot.get('fav_fill_qty', 0) > 0:
+            _total_qty = bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1))
+            if bot.get('fav_fill_qty', 0) < _total_qty:
+                bot['_taker_fired'] = False  # partial fill — allow re-taker for remaining qty
+                posted_at = time.time()  # reset timer for the remaining contracts
+                bot['fav_posted_at'] = posted_at
+                hedge_age = 0
+
+        _fav_spread = (fav_ask - fav_bid) if fav_ask > 0 and fav_bid > 0 else 0
+        if fav_ask > 0 and hedge_age >= _taker_timer and not bot.get('_taker_fired') and _fav_spread <= 1:
             combined_at_ask = dog_price + fav_ask
-            # No threshold — timer expired, cross the spread unconditionally
+            # No threshold — timer expired, cross the spread (only if spread is tight)
             if not _phantom_drop_lock.acquire(blocking=False):
                 return
             try:
@@ -3995,6 +4005,13 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
             finally:
                 _phantom_drop_lock.release()
             return
+
+        # Timer expired but spread too wide — log periodically
+        if fav_ask > 0 and hedge_age >= _taker_timer and not bot.get('_taker_fired') and _fav_spread > 1:
+            _last_wide = bot.get('_taker_wide_log_at', 0)
+            if time.time() - _last_wide >= 10:
+                print(f'⏳ PHANTOM TAKER SKIP (wide spread): {bot_id} spread={_fav_spread}¢ (bid={fav_bid} ask={fav_ask}) age={int(hedge_age)}s')
+                bot['_taker_wide_log_at'] = time.time()
 
         # Only snap if bid is ABOVE posted price (we're behind the market)
         if fav_bid <= fav_price:

@@ -1389,14 +1389,21 @@ def _safe_cancel(order_id, context=''):
             err_str = str(e)
             if '404' in err_str:
                 # Order gone — check if it FILLED before disappearing
+                # Retry once after brief delay: Kalshi order API can lag behind
+                # WS fill events, causing real fills to appear as 0 on first check
                 _fills = 0
-                try:
-                    api_read_limiter.wait()
-                    _resp = kalshi_client.get_order(order_id)
-                    _ord = _resp.get('order', _resp) if isinstance(_resp, dict) else {}
-                    _fills = _parse_fill_count(_ord)
-                except Exception:
-                    pass
+                for _fill_check in range(2):
+                    try:
+                        api_read_limiter.wait()
+                        _resp = kalshi_client.get_order(order_id)
+                        _ord = _resp.get('order', _resp) if isinstance(_resp, dict) else {}
+                        _fills = _parse_fill_count(_ord)
+                        if _fills > 0:
+                            break
+                        if _fill_check == 0:
+                            time.sleep(0.3)  # brief wait for API consistency
+                    except Exception:
+                        break
                 if _fills > 0:
                     print(f'🚨 {context}: cancel 404 but order had {_fills} fills!')
                     bot_log('SAFE_CANCEL_404_FILLS', context, {
@@ -7311,6 +7318,50 @@ def _apex_mm_pull_all(bot_id, bot, reason):
             elif cr and cr != '404':
                 cancelled += 1
             level['oid'] = None
+
+    # ── Verify late fills against Kalshi position — prevent phantom inventory ──
+    # pull_all can detect fills on one side (via 404-with-fills) but miss the
+    # offsetting fills on the other side (API lag on _safe_cancel's get_order).
+    # Without this check, bot accumulates one-sided phantom inventory.
+    _net_yes = bot.get('net_yes', 0)
+    _net_no = bot.get('net_no', 0)
+    if _net_yes > 0 or _net_no > 0:
+        ticker = bot.get('ticker', '')
+        try:
+            if api_read_limiter.try_wait():
+                _pos_resp = kalshi_client.get_positions(ticker=ticker)
+                _pos_list = _pos_resp.get('market_positions', _pos_resp.get('positions', []))
+                _kalshi_net = 0
+                for _p in _pos_list:
+                    if _p.get('ticker') == ticker:
+                        _kalshi_net = _parse_position_qty(_p)
+                        break
+                _kalshi_yes = max(0, _kalshi_net)
+                _kalshi_no = max(0, -_kalshi_net)
+                _clamped = False
+                if _net_yes > _kalshi_yes:
+                    print(f'🛡️ PULL CLAMP: {bot_id} bot_yes={_net_yes} kalshi_yes={_kalshi_yes} — clamping')
+                    bot['net_yes'] = _kalshi_yes
+                    if _kalshi_yes == 0:
+                        bot['avg_yes_cost'] = 0
+                        bot['total_yes_cost'] = 0
+                    _clamped = True
+                if _net_no > _kalshi_no:
+                    print(f'🛡️ PULL CLAMP: {bot_id} bot_no={_net_no} kalshi_no={_kalshi_no} — clamping')
+                    bot['net_no'] = _kalshi_no
+                    if _kalshi_no == 0:
+                        bot['avg_no_cost'] = 0
+                        bot['total_no_cost'] = 0
+                    _clamped = True
+                if _clamped:
+                    bot_log('APEX_MM_PULL_CLAMP', bot_id, {
+                        'old_yes': _net_yes, 'old_no': _net_no,
+                        'kalshi_yes': _kalshi_yes, 'kalshi_no': _kalshi_no,
+                        'kalshi_net': _kalshi_net,
+                    }, level='WARN')
+        except Exception as _pe:
+            print(f'⚠ PULL position verify failed: {bot_id} {_pe}')
+
     bot['status'] = 'mm_depth_pulled'
     bot['_pull_count'] = bot.get('_pull_count', 0) + 1
     bot['_last_pull_at'] = now
@@ -7421,7 +7472,50 @@ def _apex_mm_repost_ladder(bot_id, bot):
     net_yes = bot.get('net_yes', 0)
     net_no = bot.get('net_no', 0)
 
-    # If holding inventory, repost with skew. Otherwise symmetric.
+    # If holding inventory, verify against Kalshi before trusting.
+    # pull_all can add phantom inventory from 404-with-fills that were already netted.
+    if net_yes > 0 or net_no > 0:
+        try:
+            if api_read_limiter.try_wait():
+                _pos_resp = kalshi_client.get_positions(ticker=ticker)
+                _pos_list = _pos_resp.get('market_positions', _pos_resp.get('positions', []))
+                _kalshi_net = 0
+                for _p in _pos_list:
+                    if _p.get('ticker') == ticker:
+                        _kalshi_net = _parse_position_qty(_p)
+                        break
+                _kalshi_yes = max(0, _kalshi_net)
+                _kalshi_no = max(0, -_kalshi_net)
+                if _kalshi_net == 0 and (net_yes > 0 or net_no > 0):
+                    print(f'🛡️ REPOST PHANTOM CLEAR: {bot_id} kalshi=0 but bot Y={net_yes} N={net_no} — clearing, symmetric repost')
+                    bot['net_yes'] = 0
+                    bot['net_no'] = 0
+                    bot['avg_yes_cost'] = 0
+                    bot['avg_no_cost'] = 0
+                    bot['total_yes_cost'] = 0
+                    bot['total_no_cost'] = 0
+                    net_yes = 0
+                    net_no = 0
+                    bot_log('APEX_MM_REPOST_PHANTOM_CLEAR', bot_id, {
+                        'old_yes': net_yes, 'old_no': net_no, 'kalshi_net': _kalshi_net,
+                    }, level='WARN')
+                elif _kalshi_net != 0:
+                    # Clamp bot inventory to Kalshi reality
+                    if net_yes > _kalshi_yes:
+                        bot['net_yes'] = _kalshi_yes
+                        if _kalshi_yes == 0:
+                            bot['avg_yes_cost'] = 0
+                            bot['total_yes_cost'] = 0
+                        net_yes = _kalshi_yes
+                    if net_no > _kalshi_no:
+                        bot['net_no'] = _kalshi_no
+                        if _kalshi_no == 0:
+                            bot['avg_no_cost'] = 0
+                            bot['total_no_cost'] = 0
+                        net_no = _kalshi_no
+        except Exception as _pe:
+            print(f'⚠ REPOST position verify failed: {bot_id} {_pe}')
+
     if net_yes > 0 or net_no > 0:
         # Let skew_reprice handle it on next tick
         bot['midpoint'] = midpoint
@@ -7615,6 +7709,25 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
             if 'filled' in err_str.lower() or 'complete' in err_str.lower():
                 # Exit order already filled during amend — WS handler will catch it
                 print(f'⚡ APEX MM EXIT FILLED DURING AMEND: {bot_id} — WS handler will process')
+            elif '404' in err_str:
+                # Exit order gone (filled by WS or cancelled) — clear stale OID and recreate
+                print(f'🔧 APEX MM EXIT 404: {bot_id} {exit_side} exit gone — clearing OID, creating new')
+                bot[f'_{exit_side}_exit_oid'] = None
+                try:
+                    resp, actual_price = create_order_maker(ticker, exit_side, 'buy', net_held, exit_price)
+                    _new_oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''
+                    if _new_oid:
+                        bot[f'_{exit_side}_exit_oid'] = _new_oid
+                        bot.setdefault('_all_placed_order_ids', []).append(_new_oid)
+                        bot['_exit_fill_qty'] = 0
+                        bot['_exit_posted_at'] = time.time()
+                        bot['_exit_walk_count'] = 0
+                        bot['_exit_walk_started'] = 0
+                        print(f'📊 APEX MM EXIT RECREATED: {bot_id} {exit_side.upper()} @{actual_price}c x{net_held} (oid={_new_oid[:12]})')
+                    else:
+                        print(f'⚠ APEX MM EXIT RECREATE FAILED: {bot_id} no order_id')
+                except Exception as _re:
+                    print(f'⚠ APEX MM EXIT RECREATE ERROR: {bot_id} {_re}')
             else:
                 print(f'⚠ APEX MM AMEND EXIT ERROR: {bot_id} {e}')
 
@@ -7906,6 +8019,15 @@ def _apex_mm_cycle_reset(bot_id, bot):
                 pass
         bot[f'_{side}_exit_oid'] = None
 
+    # Snapshot cost basis BEFORE cancelling orders — reconstruction from order dicts
+    # fails after we clear level['oid'] and fill_qty. fill_log is more reliable.
+    _cost_snapshot = {}
+    for _snap_side in ('yes', 'no'):
+        _snap_avg = bot.get(f'avg_{_snap_side}_cost', 0)
+        _snap_total = bot.get(f'total_{_snap_side}_cost', 0)
+        if _snap_avg > 0:
+            _cost_snapshot[_snap_side] = {'avg': _snap_avg, 'total': _snap_total}
+
     # Cancel remaining entry orders — check for fills, verify against Kalshi position
     _late_fills = 0
     for side_key in ('yes_orders', 'no_orders'):
@@ -8012,20 +8134,13 @@ def _apex_mm_cycle_reset(bot_id, bot):
             else:
                 bot['net_no'] = _held_qty
                 bot['net_yes'] = 0
-            # Reconstruct cost basis from order fill prices if avg was zeroed
+            # Reconstruct cost basis — try snapshot first (most reliable), then fill_log
             if bot.get(f'avg_{_held_side}_cost', 0) == 0:
-                _orders_key = f'{_held_side}_orders'
-                _total_cost = 0
-                _total_qty = 0
-                for _pr_str, _lvl in bot.get(_orders_key, {}).items():
-                    _fq = _lvl.get('fill_qty', 0)
-                    if _fq > 0:
-                        _total_cost += int(_pr_str) * _fq
-                        _total_qty += _fq
-                if _total_qty > 0:
-                    bot[f'avg_{_held_side}_cost'] = round(_total_cost / _total_qty)
-                    bot[f'total_{_held_side}_cost'] = _total_cost
-                    print(f'🔧 CYCLE RESET COST RECONSTRUCT: {bot_id} {_held_side} avg={bot[f"avg_{_held_side}_cost"]}c from {_total_qty} order fills')
+                _snap = _cost_snapshot.get(_held_side)
+                if _snap and _snap['avg'] > 0:
+                    bot[f'avg_{_held_side}_cost'] = _snap['avg']
+                    bot[f'total_{_held_side}_cost'] = _snap['avg'] * _held_qty
+                    print(f'🔧 CYCLE RESET COST RECONSTRUCT (snapshot): {bot_id} {_held_side} avg={_snap["avg"]}c')
                 else:
                     # Fallback: use fill_log entries for this side
                     _fl_cost = 0

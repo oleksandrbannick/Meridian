@@ -22,19 +22,21 @@ if [ "$CURRENT" = "$LAST_DEPLOYED" ]; then
     exit 0
 fi
 
-# Check if server is mid-hedge before restarting
-ACTIVE_HEDGES=$(curl -s --max-time 3 http://localhost:5001/api/bot/list 2>/dev/null | python3 -c "
+# Check if ANY bots are running — never auto-restart with active bots
+# User does manual restarts when bots are running (can check hedges first)
+ACTIVE_BOTS=$(curl -s --max-time 3 http://localhost:5001/api/bot/list 2>/dev/null | python3 -c "
 import json,sys
 try:
-    bots = json.load(sys.stdin)
+    data = json.load(sys.stdin)
+    bots = data.get('bots', data)
     if isinstance(bots, dict): bots = list(bots.values())
-    hedging = [b for b in bots if b.get('status') in ('dog_filled','fav_hedge_posted')]
-    print(len(hedging))
-except: print(0)
-" 2>/dev/null || echo "0")
+    active = [b for b in bots if isinstance(b, dict) and b.get('status') not in ('completed','cancelled')]
+    print(len(active))
+except: print('error')
+" 2>/dev/null || echo "error")
 
-if [ "$ACTIVE_HEDGES" != "0" ] && [ "$ACTIVE_HEDGES" != "" ]; then
-    echo "[$(date)] Skipping deploy — $ACTIVE_HEDGES active hedges"
+if [ "$ACTIVE_BOTS" != "0" ]; then
+    echo "[$(date)] Skipping deploy — $ACTIVE_BOTS active bots (manual restart required)"
     exit 0
 fi
 

@@ -14125,16 +14125,16 @@ async function loadPositions() {
                     <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;">
                         <span class="side-badge ${pos.side}">${pos.side.toUpperCase()}</span>
                         <div style="flex:1;min-width:0;">
-                            <div style="color:#fff;font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${pos.title}</div>
-                            <div style="color:#555;font-size:10px;margin-top:2px;">${pos.ticker}</div>
+                            <a href="#" onclick="navigateToMarket('${pos.ticker.toUpperCase().split('-').slice(0,2).join('-')}');return false;" style="color:#fff;font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;text-decoration:none;" title="View in Markets tab">${pos.title}</a>
+                            <a href="#" onclick="navigateToMarket('${pos.ticker.toUpperCase().split('-').slice(0,2).join('-')}');return false;" style="color:#555;font-size:10px;margin-top:2px;display:block;text-decoration:none;" title="View in Markets tab">${pos.ticker}</a>
                         </div>
                     </div>
                     <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
                         ${isWatched
-                            ? `<span style="color:#9966ff;font-size:11px;font-weight:600;">👁 Watched</span>`
+                            ? `<span style="color:#ffd740;font-size:11px;font-weight:600;">◎ Scout Active</span>`
                             : `<button onclick="openWatchModal('${pos.ticker}','${pos.side}',${pos.quantity},${bid})"
-                                     class="btn" style="background:#9966ff22;color:#9966ff;border:1px solid #9966ff44;padding:5px 12px;font-size:11px;font-weight:600;">
-                                👁 Watch
+                                     class="btn" style="background:#ffd74022;color:#ffd740;border:1px solid #ffd74044;padding:5px 12px;font-size:11px;font-weight:600;">
+                                ◎ Assign Scout
                               </button>`
                         }
                     </div>

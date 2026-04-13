@@ -13222,6 +13222,11 @@ def _handle_apex(bot_id, bot, actions):
             # Below 75 — recover
             bot['_drift_pulled'] = False
             print(f'📊 APEX MM DRIFT CLEAR: {bot_id} max_bid={_drift_max}c — allowing recovery')
+        # Clear stale side pauses when flat — pauses are for inventory management,
+        # meaningless when holding nothing. Prevents one-sided repost after recovery.
+        if bot.get('net_yes', 0) == 0 and bot.get('net_no', 0) == 0:
+            bot['_yes_side_paused'] = False
+            bot['_no_side_paused'] = False
         if _apex_depth_recovered(ticker, bot, obi_threshold=APEX_MM_RECOVER_OBI):
             _apex_mm_repost_ladder(bot_id, bot)
         return

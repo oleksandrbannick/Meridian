@@ -7647,6 +7647,14 @@ def _apex_mm_walk_up(bot_id, bot):
     if age < SOAK_SECONDS and live_combined <= 100:
         return  # still in soak and not underwater — hold for fill at target
 
+    # ── BREATHING GUARD: bid is close to target — reset soak, keep waiting ──
+    # If exit bid is within 2c of target, the market hasn't moved away — be patient
+    _target_dist = abs(live_exit_bid - target_price) if live_exit_bid > 0 else 999
+    if _target_dist <= 2 and live_combined <= 100:
+        if age >= SOAK_SECONDS:
+            bot['_exit_soak_start'] = now  # reset soak — still close, keep waiting
+        return
+
     # ── SNAP-BACK: bid improved, follow it down for better fill ──
     if live_exit_bid < current_price - 1:
         snap_price = max(1, live_exit_bid)

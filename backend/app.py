@@ -7819,8 +7819,12 @@ def _apex_mm_walk_up(bot_id, bot):
             try:
                 price_kwarg = {f'{exit_side}_price': snap_price}
                 api_rate_limiter.wait()
-                kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
+                _amend_resp = kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
                                           count=net_held, action='buy', **price_kwarg)
+                _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
+                _new_oid = _amend_ord.get('order_id', '')
+                if _new_oid and _new_oid != exit_oid:
+                    bot[f'_{exit_side}_exit_oid'] = _new_oid
                 bot['_exit_price'] = snap_price
                 bot['_wall_parked'] = False
                 if snap_price <= target_price:
@@ -7831,6 +7835,9 @@ def _apex_mm_walk_up(bot_id, bot):
             except Exception as e:
                 if 'filled' in str(e).lower():
                     print(f'⚡ APEX MM SNAP-BACK FILLED (soak): {bot_id}')
+                elif '404' in str(e) or 'not found' in str(e).lower():
+                    print(f'⚠ APEX MM SNAP-BACK 404 (soak): {bot_id} exit order gone — reposting')
+                    bot[f'_{exit_side}_exit_oid'] = None
         return  # hold position during soak — don't snap UP past target
 
     # ── BREATHING GUARD: bid within 2c of target — extend soak once ──
@@ -7846,8 +7853,12 @@ def _apex_mm_walk_up(bot_id, bot):
         try:
             price_kwarg = {f'{exit_side}_price': snap_price}
             api_rate_limiter.wait()
-            kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
+            _amend_resp = kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
                                       count=net_held, action='buy', **price_kwarg)
+            _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
+            _new_oid = _amend_ord.get('order_id', '')
+            if _new_oid and _new_oid != exit_oid:
+                bot[f'_{exit_side}_exit_oid'] = _new_oid
             bot['_exit_price'] = snap_price
             bot['_wall_parked'] = False
             if snap_price <= target_price:
@@ -7858,19 +7869,25 @@ def _apex_mm_walk_up(bot_id, bot):
         except Exception as e:
             if 'filled' in str(e).lower():
                 print(f'⚡ APEX MM SNAP-BACK FILLED: {bot_id}')
+            elif '404' in str(e) or 'not found' in str(e).lower():
+                print(f'⚠ APEX MM SNAP-BACK 404: {bot_id} exit order gone — reposting')
+                bot[f'_{exit_side}_exit_oid'] = None
         return
 
-    # ── GREEN ZONE: combined <= 99c → snap toward bid, but NEVER above target ──
-    # Target is the profit-maximizing price. If bid is above target, you're the
-    # cheapest buyer in the book — highest fill probability. Stay at target.
-    # Only snap up TO target (if currently below it), never past it.
-    _green_snap = min(live_exit_bid, target_price)  # cap at target
+    # ── GREEN ZONE: combined <= 99c → snap to bid for fill ──
+    # Soak already protected target for 15-25s. After soak, go to bid to
+    # actually get filled — sitting below bid means sellers fill others first.
+    _green_snap = live_exit_bid  # go to bid, no cap — soak protected target
     if live_combined <= 99 and _green_snap > current_price:
         try:
             price_kwarg = {f'{exit_side}_price': _green_snap}
             api_rate_limiter.wait()
-            kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
+            _amend_resp = kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
                                       count=net_held, action='buy', **price_kwarg)
+            _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
+            _new_oid = _amend_ord.get('order_id', '')
+            if _new_oid and _new_oid != exit_oid:
+                bot[f'_{exit_side}_exit_oid'] = _new_oid
             old_price = current_price
             bot['_exit_price'] = _green_snap
             bot['_wall_parked'] = False
@@ -7880,11 +7897,14 @@ def _apex_mm_walk_up(bot_id, bot):
             bot_log('APEX_MM_SNAP_PROFIT', bot_id, {
                 'old': old_price, 'new': _green_snap, 'bid': live_exit_bid,
                 'combined': _snap_combined, 'profit': 100 - _snap_combined,
-                'target': target_price, 'capped': _green_snap < live_exit_bid,
+                'target': target_price,
             })
         except Exception as e:
             if 'filled' in str(e).lower():
                 print(f'⚡ APEX MM SNAP-PROFIT FILLED: {bot_id}')
+            elif '404' in str(e) or 'not found' in str(e).lower():
+                print(f'⚠ APEX MM SNAP-PROFIT 404: {bot_id} exit order gone — reposting')
+                bot[f'_{exit_side}_exit_oid'] = None
             else:
                 print(f'⚠ APEX MM SNAP-PROFIT FAIL: {bot_id} {e}')
         return
@@ -7894,8 +7914,12 @@ def _apex_mm_walk_up(bot_id, bot):
         try:
             price_kwarg = {f'{exit_side}_price': wall_price}
             api_rate_limiter.wait()
-            kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
+            _amend_resp = kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
                                       count=net_held, action='buy', **price_kwarg)
+            _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
+            _new_oid = _amend_ord.get('order_id', '')
+            if _new_oid and _new_oid != exit_oid:
+                bot[f'_{exit_side}_exit_oid'] = _new_oid
             old_price = current_price
             bot['_exit_price'] = wall_price
             bot['_exit_walk_count'] = bot.get('_exit_walk_count', 0) + (wall_price - old_price)
@@ -7910,6 +7934,9 @@ def _apex_mm_walk_up(bot_id, bot):
         except Exception as e:
             if 'filled' in str(e).lower():
                 print(f'⚡ APEX MM WALL FILLED: {bot_id}')
+            elif '404' in str(e) or 'not found' in str(e).lower():
+                print(f'⚠ APEX MM WALL 404: {bot_id} exit order gone — reposting')
+                bot[f'_{exit_side}_exit_oid'] = None
             else:
                 print(f'⚠ APEX MM WALL FAIL: {bot_id} {e}')
         return

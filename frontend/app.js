@@ -5670,6 +5670,18 @@ function selectMMLevels(n) {
     updateMMPreview();
 }
 
+function selectMMLossLimit(cents) {
+    document.getElementById('mm-loss-limit').value = cents;
+    const label = document.getElementById('mm-loss-label');
+    if (label) label.textContent = cents === 0 ? 'OFF' : '$' + (cents / 100).toFixed(2);
+    document.querySelectorAll('.mm-loss-btn').forEach(btn => {
+        const v = parseInt(btn.dataset.loss);
+        const sel = v === cents;
+        btn.style.background = sel ? 'rgba(255,68,68,0.15)' : 'transparent';
+        btn.style.color = sel ? '#ff4444' : '#5a6484';
+    });
+}
+
 function updateMMMaxDefault() {
     const levels = parseInt(document.getElementById('mm-levels')?.value) || 7;
     const qty = parseInt(document.getElementById('mm-qty-per-level')?.value) || 10;
@@ -5734,19 +5746,19 @@ async function deployMarketMaker() {
     const levels = parseInt(document.getElementById('mm-levels')?.value) || 7;
     const spacing = parseInt(document.getElementById('mm-spacing')?.value) || 1;
     const qtyPerLevel = parseInt(document.getElementById('mm-qty-per-level')?.value) || 10;
-    const invLimit = levels * qtyPerLevel * 2;  // auto: total scaled ladder qty (generous cap)
-    const smartChecked = document.getElementById('mm-smart-mode')?.checked;
+    const invLimit = levels * qtyPerLevel * 2;
     const autoScale = document.getElementById('mm-auto-scale')?.checked ?? true;
-    const smartLimit = smartChecked ? 2 : 0;
+    const lossLimitCents = parseInt(document.getElementById('mm-loss-limit')?.value) || 0;
     const width = _mmSelectedWidth;
+    const lossStr = lossLimitCents > 0 ? `Loss limit: $${(lossLimitCents/100).toFixed(2)}` : 'No loss limit';
 
-    if (!confirm(`Deploy Market Maker\n\nMarket: ${ticker}\nMin Width: ${width}¢ · Levels: ${levels} · Qty: ${qtyPerLevel}/level\nMax one-side: ${invLimit} contracts\n${smartLimit ? `Smart: stop after ${smartLimit} losing round trips` : 'No smart mode'}\n\nContinue?`)) return;
+    if (!confirm(`Deploy Apex MM\n\nMarket: ${ticker}\nWidth: ${width}¢ · ${levels} rungs · ${qtyPerLevel}x/rung\n${lossStr}\n\nContinue?`)) return;
 
     const deployBtn = document.getElementById('deploy-btn');
     if (deployBtn) { deployBtn.disabled = true; deployBtn.textContent = 'Deploying...'; }
     closeModal();
     if (!autoMonitorInterval) toggleAutoMonitor();
-    showNotification(`Deploying MM on ${ticker}...`);
+    showNotification(`Deploying Apex MM on ${ticker}...`);
 
     try {
         const resp = await fetch(`${API_BASE}/bot/ladder-arb`, {
@@ -5757,8 +5769,8 @@ async function deployMarketMaker() {
                 qty_per_level: qtyPerLevel,
                 inventory_limit: invLimit,
                 auto_scale: autoScale,
-                loss_limit_cents: 0,
-                smart_mode: smartLimit,
+                loss_limit_cents: lossLimitCents,
+                smart_mode: lossLimitCents > 0 ? true : false,
             }),
         });
         const data = await resp.json();
@@ -6397,10 +6409,9 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const exitBidLive = exitSide === 'YES' ? liveYesBid : liveNoBid;
         const exitAskLive = exitSide === 'YES' ? liveYesAsk : liveNoAsk;
         const heldBidLive = longSide === 'YES' ? liveYesBid : liveNoBid;
-        // Live combined
-        const liveBuyOpp = (exitAskLive > 0) ? avgCost + exitAskLive : 999;
-        const liveSellHeld = (heldBidLive > 0) ? avgCost + (100 - heldBidLive) : 999;
-        const liveCombined = Math.min(liveBuyOpp, liveSellHeld);
+        // Live combined — exit order is posted at bid (maker), so use bid not ask
+        const liveExitAtBid = (exitBidLive > 0) ? avgCost + exitBidLive : 999;
+        const liveCombined = liveExitAtBid;
         const targetCombined = avgCost + exitPrice;
         const combined = (liveCombined < 999 && exitPrice > 0) ? liveCombined : targetCombined;
         const profit = 100 - combined;

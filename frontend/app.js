@@ -6336,7 +6336,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const midpoint = bot.midpoint || 0;
     const pullCount = bot._pull_count || 0;
     const consLosses = bot.consecutive_losses || 0;
-    const smartMode = bot.smart_mode || 0;
+    const smartMode = bot.smart_mode ? (typeof bot.smart_mode === 'number' ? bot.smart_mode : 2) : 0;
     const width = (bot.start_gap || 0) * 2;
     const liveYesBid = bot.live_yes_bid || 0;
     const liveNoBid = bot.live_no_bid || 0;

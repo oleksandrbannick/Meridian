@@ -4011,9 +4011,17 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 return
 
         # Snap target: bid+1 if in bid+1 mode, otherwise bid
-        snap_target = (fav_bid + 1) if bot.get('_taker_fired') else fav_bid
+        # In bid+1 mode, the live bid INCLUDES our order (we ARE bid+1).
+        # So if bid == fav_price - 1, we're already correctly positioned — skip.
+        # Only move if the underlying bid actually changed.
+        if bot.get('_taker_fired'):
+            if fav_bid == fav_price - 1 or fav_bid == fav_price:
+                continue  # we're at bid+1 or bid caught up to us, stay put
+            snap_target = fav_bid + 1
+        else:
+            snap_target = fav_bid
 
-        # Skip if already at target (no change needed)
+        # Skip if already at target
         if snap_target == fav_price:
             continue
 
@@ -12342,7 +12350,13 @@ def _handle_phantom(bot_id, bot, actions):
         bot['_no_fav_bid_count'] = 0
 
         # Walk target: bid+1 if in bid+1 mode, otherwise bid
-        new_fav_price = (current_fav_bid + 1) if bot.get('_taker_fired') else current_fav_bid
+        # In bid+1 mode, bid includes our order — if bid == price-1, we're correct
+        if bot.get('_taker_fired'):
+            if current_fav_bid == current_fav_price - 1 or current_fav_bid == current_fav_price:
+                return  # already at bid+1, no move needed
+            new_fav_price = current_fav_bid + 1
+        else:
+            new_fav_price = current_fav_bid
 
         if new_fav_price <= 0:
             return

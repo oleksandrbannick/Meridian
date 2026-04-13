@@ -5866,6 +5866,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     }
     const _isSettled = bot._smart_stop_reason === 'final' || bot._market_settled_at > 0;
     const _isCompletedRuns = bot._stop_reason === 'completed runs';
+    // Phantom phase colors: amber=waiting, blue=hedging, green=done, red=error/stopped
+    const _phAmber = '#ffaa00', _phBlue = '#00aaff', _phGreen = '#00ff88', _phRed = '#ff4444';
     const statusMap = {
         'dog_anchor_posted': '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
         'dog_filled': '👻 FILLED — HEDGING', 'ladder_filled_no_fav': '👻 FILLED — HEDGING',
@@ -5875,12 +5877,12 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
         'awaiting_settlement': '⏳ AWAITING SETTLEMENT',
     };
     const borderMap = {
-        'dog_anchor_posted': '#ffaa00', 'ladder_posted': '#ffaa00',
-        'dog_filled': '#ff8800', 'ladder_filled_no_fav': '#ff8800',
-        'fav_hedge_posted': bot._game_over_holding ? '#818cf8' : bot._taker_fired ? '#ff66aa' : '#00aaff', 'waiting_repeat': bot._just_completed ? '#00ff88' : bot._flip_pending ? '#ffaa00' : '#aa66ff',
-        'completed': _isSettled ? '#ffaa00' : _isAwaitingSettlement ? '#818cf8' : _isDeathZone ? '#ff4444' : _isSmartStopped ? '#00e5ff' : '#00ff88',
-        'stopped': _isDeathZone ? '#ff4444' : _isSmartStopped ? '#00e5ff' : (bot._pending_sells?.length ? '#ffaa00' : '#ff4444'),
-        'awaiting_settlement': '#818cf8',
+        'dog_anchor_posted': _phAmber, 'ladder_posted': _phAmber,
+        'dog_filled': _phRed, 'ladder_filled_no_fav': _phRed,
+        'fav_hedge_posted': bot._game_over_holding ? _phAmber : _phBlue, 'waiting_repeat': bot._just_completed ? _phGreen : _phAmber,
+        'completed': _isSettled ? _phGreen : _isAwaitingSettlement ? _phAmber : _isDeathZone ? _phRed : _isSmartStopped ? _phRed : _phGreen,
+        'stopped': bot._pending_sells?.length ? _phAmber : _phRed,
+        'awaiting_settlement': _phAmber,
     };
     const borderCol = borderMap[status] || '#ffaa00';
     const statusLabel = statusMap[status] || status;
@@ -7965,7 +7967,7 @@ async function loadBots() {
                 const heldN = bot.awaiting_qty_no  || 0;
                 const awaitMin = bot.awaiting_since ? Math.round((Date.now()/1000 - bot.awaiting_since) / 60) : 0;
                 const heldDesc = [heldY > 0 ? `YES ×${heldY}` : '', heldN > 0 ? `NO ×${heldN}` : ''].filter(Boolean).join(' · ') || 'contracts held';
-                stopLossInfo = `<div style="background:#818cf811;border:1px solid #818cf844;border-radius:5px;padding:6px 10px;font-size:10px;color:#818cf8;margin-top:6px;">
+                stopLossInfo = `<div style="background:#ffaa0011;border:1px solid #ffaa0033;border-radius:5px;padding:6px 10px;font-size:10px;color:#ffaa00;margin-top:6px;">
                     ⏳ <strong>AWAITING SETTLEMENT</strong> — market closed, position held on Kalshi<br>
                     <span style="color:#aaa;">${heldDesc}</span> <span style="color:#555;">· waiting ${awaitMin}m</span>
                     <br><span style="color:#555;font-size:9px;">Will auto-resolve when Kalshi settles the market</span>
@@ -8019,7 +8021,7 @@ async function loadBots() {
                 const settleLine = unhedgedQty > 0
                     ? `${unhedgedQty} contract${unhedgedQty > 1 ? 's' : ''} riding to settlement`
                     : `Fully hedged — waiting for market to settle`;
-                stopLossInfo = `<div style="background:#818cf811;border:1px solid #818cf844;border-radius:5px;padding:6px 10px;font-size:10px;color:#818cf8;margin-top:6px;">
+                stopLossInfo = `<div style="background:#ffaa0011;border:1px solid #ffaa0033;border-radius:5px;padding:6px 10px;font-size:10px;color:#ffaa00;margin-top:6px;">
                     <div style="margin-bottom:4px;">
                         ⏳ <strong>HOLDING TILL SETTLEMENT</strong> — game over
                     </div>
@@ -8044,7 +8046,8 @@ async function loadBots() {
                 const estPnl = typeof totalCost === 'number' ? (100 - totalCost) * qty : '?';
                 const pnlColor = typeof estPnl === 'number' ? (estPnl >= 0 ? '#00ff88' : '#ff4444') : '#555';
                 const sellbackAttempts = bot._sellback_attempts || 0;
-                stopLossInfo = `<div style="background:${isFavPosted ? '#00aaff11' : '#00ff8811'};border:1px solid ${isFavPosted ? '#00aaff33' : '#00ff8833'};border-radius:5px;padding:6px 8px;font-size:10px;color:${isFavPosted ? '#00aaff' : '#00ff88'};margin-top:6px;">
+                const _hBoxCol = isFavPosted ? _phBlue : _phRed;
+                stopLossInfo = `<div style="background:${_hBoxCol}11;border:1px solid ${_hBoxCol}33;border-radius:5px;padding:6px 8px;font-size:10px;color:${_hBoxCol};margin-top:6px;">
                     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;margin-bottom:3px;">
                         <span>✓ <strong>${dogSide}</strong> filled @ ${dogPrice}¢ — ${isFavPosted ? `<strong>${favSide}</strong> hedge @ ${favPrice}¢ ${favFillQty > 0 ? `(${favFillQty}/${qty} filled)` : 'posted'}` : 'posting fav hedge...'}</span>
                         <span style="color:${hedgeColor};font-weight:700;font-family:monospace;font-size:12px;">${Math.floor(hedgeLeft/60)}:${String(Math.floor(hedgeLeft%60)).padStart(2,'0')}</span>
@@ -8166,7 +8169,7 @@ async function loadBots() {
                 healthLabel = '🎯 ANCHORED';
                 anchoredHealthKey = 'waiting';
             } else if (bot._game_over_holding && bot.status === 'fav_hedge_posted') {
-                healthColor = '#818cf8';
+                healthColor = _phAmber;
                 healthLabel = '⏳ SETTLING';
                 anchoredHealthKey = 'holding';
             } else if (bot.status === 'dog_filled' || (bot.status === 'fav_hedge_posted' && !isAnchorLadder)) {
@@ -8176,16 +8179,16 @@ async function loadBots() {
                 const hedgeElapsed = dogFilledAt > 0 ? (Date.now()/1000 - dogFilledAt) : 0;
                 const hedgePctLeft = hedgeTimeout > 0 ? Math.max(0, hedgeTimeout - hedgeElapsed) / hedgeTimeout : 0;
                 if (hedgePctLeft <= 0.15) {
-                    healthColor = '#ff4444';
+                    healthColor = _phRed;
                     healthAnim = 'animation: dangerPulse 0.8s ease-in-out infinite;';
                     healthLabel = `🔴 ${Math.ceil(Math.max(0, hedgeTimeout - hedgeElapsed))}s`;
                     anchoredHealthKey = 'danger';
                 } else if (hedgePctLeft <= 0.40) {
-                    healthColor = '#ff8800';
+                    healthColor = _phRed;
                     healthLabel = `🟠 ${Math.ceil(Math.max(0, hedgeTimeout - hedgeElapsed))}s`;
                     anchoredHealthKey = 'warning';
                 } else {
-                    healthColor = '#00aaff';
+                    healthColor = _phBlue;
                     healthLabel = `🔵 HEDGING`;
                     anchoredHealthKey = 'holding';
                 }

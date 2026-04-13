@@ -4951,24 +4951,24 @@ function openBotModal(market, _side, _price) {
         : 'NO';
 
     document.getElementById('bot-market-prices').innerHTML = `
-        <div style="background:#060a14;border:1px solid #00ff8833;border-radius:6px;padding:8px 10px;">
+        <div style="background:#060a14;border:1px solid #00d4ff33;border-radius:6px;padding:8px 10px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                <span style="color:#00ff88;font-weight:700;font-size:11px;">${yesTeamLabel}</span>
+                <span style="color:#00d4ff;font-weight:700;font-size:11px;">${yesTeamLabel}</span>
                 <span style="color:#555;font-size:9px;">${yesSpread > 0 ? `spread ${yesSpread}¢` : ''}</span>
             </div>
             <div style="display:flex;justify-content:space-between;font-size:13px;">
-                <span style="color:#8892a6;">Bid <strong style="color:#00ff88;">${fmtPrice(yesBid)}</strong></span>
-                <span style="color:#8892a6;">Ask <strong style="color:#00ff88;">${fmtPrice(yesAsk)}</strong></span>
+                <span style="color:#8892a6;">Bid <strong style="color:#00d4ff;">${fmtPrice(yesBid)}</strong></span>
+                <span style="color:#8892a6;">Ask <strong style="color:#00d4ff;">${fmtPrice(yesAsk)}</strong></span>
             </div>
         </div>
-        <div style="background:#060a14;border:1px solid #ff444433;border-radius:6px;padding:8px 10px;">
+        <div style="background:#060a14;border:1px solid #ff704333;border-radius:6px;padding:8px 10px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                <span style="color:#ff4444;font-weight:700;font-size:11px;">${noTeamLabel}</span>
+                <span style="color:#ff7043;font-weight:700;font-size:11px;">${noTeamLabel}</span>
                 <span style="color:#555;font-size:9px;">${noSpread > 0 ? `spread ${noSpread}¢` : ''}</span>
             </div>
             <div style="display:flex;justify-content:space-between;font-size:13px;">
-                <span style="color:#8892a6;">Bid <strong style="color:#ff4444;">${fmtPrice(noBid)}</strong></span>
-                <span style="color:#8892a6;">Ask <strong style="color:#ff4444;">${fmtPrice(noAsk)}</strong></span>
+                <span style="color:#8892a6;">Bid <strong style="color:#ff7043;">${fmtPrice(noBid)}</strong></span>
+                <span style="color:#8892a6;">Ask <strong style="color:#ff7043;">${fmtPrice(noAsk)}</strong></span>
             </div>
         </div>
     `;
@@ -5094,24 +5094,24 @@ function refreshModalPriceCards() {
     }
 
     document.getElementById('bot-market-prices').innerHTML = `
-        <div style="background:#060a14;border:1px solid #00ff8833;border-radius:6px;padding:8px 10px;">
+        <div style="background:#060a14;border:1px solid #00d4ff33;border-radius:6px;padding:8px 10px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                <span style="color:#00ff88;font-weight:700;font-size:11px;">${yesTeamLabel}</span>
+                <span style="color:#00d4ff;font-weight:700;font-size:11px;">${yesTeamLabel}</span>
                 <span style="color:#555;font-size:9px;">${yesSpread > 0 ? `spread ${yesSpread}¢` : ''}</span>
             </div>
             <div style="display:flex;justify-content:space-between;font-size:13px;">
-                <span style="color:#8892a6;">Bid <strong style="color:#00ff88;">${fmtPrice(yesBid)}</strong></span>
-                <span style="color:#8892a6;">Ask <strong style="color:#00ff88;">${fmtPrice(yesAsk)}</strong></span>
+                <span style="color:#8892a6;">Bid <strong style="color:#00d4ff;">${fmtPrice(yesBid)}</strong></span>
+                <span style="color:#8892a6;">Ask <strong style="color:#00d4ff;">${fmtPrice(yesAsk)}</strong></span>
             </div>
         </div>
-        <div style="background:#060a14;border:1px solid #ff444433;border-radius:6px;padding:8px 10px;">
+        <div style="background:#060a14;border:1px solid #ff704333;border-radius:6px;padding:8px 10px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                <span style="color:#ff4444;font-weight:700;font-size:11px;">${noTeamLabel}</span>
+                <span style="color:#ff7043;font-weight:700;font-size:11px;">${noTeamLabel}</span>
                 <span style="color:#555;font-size:9px;">${noSpread > 0 ? `spread ${noSpread}¢` : ''}</span>
             </div>
             <div style="display:flex;justify-content:space-between;font-size:13px;">
-                <span style="color:#8892a6;">Bid <strong style="color:#ff4444;">${fmtPrice(noBid)}</strong></span>
-                <span style="color:#8892a6;">Ask <strong style="color:#ff4444;">${fmtPrice(noAsk)}</strong></span>
+                <span style="color:#8892a6;">Bid <strong style="color:#ff7043;">${fmtPrice(noBid)}</strong></span>
+                <span style="color:#8892a6;">Ask <strong style="color:#ff7043;">${fmtPrice(noAsk)}</strong></span>
             </div>
         </div>
     `;

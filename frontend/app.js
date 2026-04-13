@@ -6469,14 +6469,17 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 <div style="color:#334;font-size:7px;margin-top:1px;text-align:right;">${fillText}</div>
             </div>`;
         };
-        // Anchor fills from ladder
+        // Anchor fills from ladder — use netHeld when orders are cleared (mm_exiting)
         const anchorOrders = longSide === 'YES' ? (bot.yes_orders || {}) : (bot.no_orders || {});
         const anchorTotalFills = Object.values(anchorOrders).reduce((s, l) => s + (l.fill_qty || 0), 0);
         const anchorTotalQty = Object.values(anchorOrders).reduce((s, l) => s + (l.qty || (bot.base_qty || 10)), 0);
-        const anchorFp = anchorTotalQty > 0 ? Math.min(100, Math.round(anchorTotalFills / anchorTotalQty * 100)) : 0;
+        // When orders are cleared (exiting), show held qty as fills
+        const entryFills = anchorTotalFills > 0 ? anchorTotalFills : netHeld;
+        const entryTotal = anchorTotalQty > 0 ? anchorTotalQty : netHeld;
+        const anchorFp = entryTotal > 0 ? Math.min(100, Math.round(entryFills / entryTotal * 100)) : 0;
         const entryBidAsk = longSide === 'YES' ? [liveYesBid, liveYesAsk] : [liveNoBid, liveNoAsk];
         const exitBidAsk = exitSide === 'YES' ? [liveYesBid, liveYesAsk] : [liveNoBid, liveNoAsk];
-        const entryBox = _sideBox('ENTRY', entryBoxSide, `${avgCost}c`, `${netHeld}x held`, anchorFp, `${anchorTotalFills}/${anchorTotalQty}`, entryCol, entryBidAsk);
+        const entryBox = _sideBox('ENTRY', entryBoxSide, `${avgCost}c`, `${netHeld}x held`, anchorFp, `${entryFills}/${entryTotal}`, entryCol, entryBidAsk);
         const exitBox = _sideBox('EXIT', exitBoxSide, exitPrice > 0 ? `${exitPrice}c` : '--', exitPrice > 0 ? `${exitFillQty}/${exitTotalQty} filled` : 'pending', hedgeFp, `${exitFillQty}/${exitTotalQty}`, exitCol, exitBidAsk);
         // Order: YES always on left
         const leftBox = longSide === 'YES' ? entryBox : exitBox;
@@ -6563,7 +6566,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     const pCol = rt.pnl >= 0 ? '#00ff88' : '#ff4444';
                     return `<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:10px;${i > 0 ? 'border-top:1px solid #0f1520;' : ''}">
                         <span style="color:#00d4ff;">#${i+1}</span>
-                        <span><span style="color:#00ff88;">${rt.entry_price}</span><span style="color:#334;">·</span><span style="color:#ff4444;">${rt.exit_price}</span><span style="color:#334;">·</span><span style="color:${combCol};font-weight:700;">${rt.combined}c</span></span>
+                        <span><span style="color:#00d4ff;">${rt.entry_price}</span> <span style="color:#ff7043;">${rt.exit_price}</span> <span style="color:${combCol};font-weight:700;">${rt.combined}c</span></span>
                         <span style="color:#ff7043;">x${rt.qty}</span>
                         <span style="color:${pCol};font-weight:700;">${rt.pnl >= 0 ? '+' : ''}${rt.pnl}c</span>
                     </div>`;
@@ -6571,10 +6574,10 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 ${exitLog.length > 0 ? `<div style="margin-top:4px;padding-top:4px;border-top:1px solid #1a0a0a;">` +
                     exitLog.map((ex, i) => {
                         const pCol = ex.pnl >= 0 ? '#00ff88' : '#ff4444';
-                        const sideLabel = ex.type === 'arb_complete' ? 'ARB' : `SELL ${(ex.held_side || '').toUpperCase()}`;
-                        const sideCol = ex.type === 'arb_complete' ? '#ff6666' : ((ex.held_side === 'yes') ? '#00ff88' : '#ff4444');
-                        const heldCol = (ex.held_side === 'yes') ? '#00ff88' : '#ff4444';
-                        const exitCol = (ex.held_side === 'yes') ? '#ff4444' : '#00ff88';
+                        const sideLabel = ex.type === 'arb_complete' ? 'ARB EXIT' : `${(ex.held_side || '').toUpperCase()} EXIT`;
+                        const sideCol = ex.type === 'arb_complete' ? '#b388ff' : ((ex.held_side === 'yes') ? '#00d4ff' : '#ff7043');
+                        const heldCol = (ex.held_side === 'yes') ? '#00d4ff' : '#ff7043';
+                        const exitCol = (ex.held_side === 'yes') ? '#ff7043' : '#00d4ff';
                         const combPrice = ex.type === 'arb_complete' ? ex.held_avg + ex.exit_price : 0;
                         const combCol = combPrice > 0 ? (combPrice < 99 ? '#00ff88' : combPrice <= 100 ? '#ffaa00' : '#ff4444') : '';
                         return `<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:10px;${i > 0 ? 'border-top:1px solid #0f1520;' : ''}">

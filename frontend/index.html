@@ -1074,24 +1074,30 @@
                     <!-- Edge display (from OddsJam fair value) -->
                     <div id="straight-edge-display" style="margin-bottom:16px;"></div>
                     <!-- Stop-Loss / Take-Profit -->
-                    <div style="margin-bottom:16px;background:#060a14;border:1px solid #ffd74022;border-radius:8px;padding:12px;">
-                        <div style="color:#ffd740;font-size:11px;font-weight:700;margin-bottom:8px;letter-spacing:.04em;">🛡 RISK MANAGEMENT</div>
+                    <div style="margin-bottom:16px;background:#060a14;border:1px solid #ffd74022;border-radius:8px;padding:12px;position:relative;overflow:hidden;">
+                        <div style="position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,#ffd740,#00ff88);opacity:0.4;"></div>
+                        <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;">
+                            <div style="width:3px;height:12px;background:linear-gradient(180deg,#ffd740,#00ff88);border-radius:2px;"></div>
+                            <span style="color:#ffd740;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em;">🛡 Risk Management</span>
+                        </div>
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
                             <div>
-                                <label style="display:block;color:#8892a6;font-size:10px;margin-bottom:3px;">Stop-Loss (¢ drop)</label>
+                                <label style="display:block;color:#ff6666;font-size:10px;font-weight:700;margin-bottom:3px;">Stop-Loss (¢ drop)</label>
                                 <input type="number" id="straight-sl" min="0" max="30" value="5"
-                                    style="width:100%;padding:6px;background:#0a0e1a;border:1px solid #1e2740;border-radius:4px;color:#fff;font-size:13px;text-align:center;">
+                                    style="width:100%;padding:8px;background:#0a0e1a;border:2px solid #ffd74033;border-radius:50px;color:#fff;font-size:14px;font-weight:800;text-align:center;outline:none;box-sizing:border-box;transition:all .2s;"
+                                    onfocus="this.style.borderColor='#ffd740';this.style.boxShadow='0 0 10px #ffd74020'" onblur="this.style.borderColor='#ffd74033';this.style.boxShadow='none'">
                             </div>
                             <div>
-                                <label style="display:block;color:#8892a6;font-size:10px;margin-bottom:3px;">Take-Profit (¢ rise, 0=off)</label>
+                                <label style="display:block;color:#00ff88;font-size:10px;font-weight:700;margin-bottom:3px;">Take-Profit (¢ rise, 0=off)</label>
                                 <input type="number" id="straight-tp" min="0" max="50" value="0"
-                                    style="width:100%;padding:6px;background:#0a0e1a;border:1px solid #1e2740;border-radius:4px;color:#fff;font-size:13px;text-align:center;">
+                                    style="width:100%;padding:8px;background:#0a0e1a;border:2px solid #ffd74033;border-radius:50px;color:#fff;font-size:14px;font-weight:800;text-align:center;outline:none;box-sizing:border-box;transition:all .2s;"
+                                    onfocus="this.style.borderColor='#ffd740';this.style.boxShadow='0 0 10px #ffd74020'" onblur="this.style.borderColor='#ffd74033';this.style.boxShadow='none'">
                             </div>
                         </div>
                     </div>
                     <!-- Place order button -->
-                    <button onclick="placeStraightBet()" style="width:100%;padding:14px;background:linear-gradient(135deg,#00ff88 0%,#00cc6a 100%);color:#000;border:none;border-radius:8px;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:.02em;">
-                        💰 Place Limit Order
+                    <button onclick="placeStraightBet()" style="width:100%;padding:14px;background:linear-gradient(135deg,#00ff88 0%,#ffd740 100%);color:#000;border:none;border-radius:50px;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:.03em;box-shadow:0 4px 15px #ffd74025;transition:all .2s;">
+                        ◎ Place Limit Order
                     </button>
                 </div>
 
@@ -1569,47 +1575,65 @@
 
     <!-- Watch Position Modal -->
     <div class="modal" id="watch-modal">
-        <div class="modal-content" style="max-width:480px;border-top:3px solid #9966ff;">
+        <div class="modal-content" style="max-width:480px;border:1px solid #ffd74030;border-top:none;position:relative;overflow:hidden;">
+            <div style="position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#00ff88,#ffd740);"></div>
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
                 <div style="display:flex;align-items:center;gap:10px;">
-                    <div style="width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#9966ff,#7744dd);display:flex;align-items:center;justify-content:center;font-size:16px;">👁</div>
+                    <div style="width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#00ff88,#ffd740);display:flex;align-items:center;justify-content:center;font-size:16px;">◎</div>
                     <div>
-                        <div style="color:#fff;font-weight:700;font-size:14px;">Watch Position</div>
-                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.04em;">Auto Stop-Loss / Take-Profit</div>
+                        <div style="color:#ffd740;font-weight:800;font-size:14px;letter-spacing:.03em;">Assign Scout</div>
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.04em;">Stop-Loss / Take-Profit</div>
                     </div>
                 </div>
-                <button onclick="closeWatchModal()" style="background:none;border:1px solid #2a3550;color:#8892a6;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;">✕</button>
+                <button onclick="closeWatchModal()" style="background:none;border:1px solid #2a3550;color:#8892a6;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;" onmouseenter="this.style.borderColor='#ff4444';this.style.color='#ff4444'" onmouseleave="this.style.borderColor='#2a3550';this.style.color='#8892a6'">✕</button>
             </div>
-            <div id="watch-market-info" style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:12px 16px;margin-bottom:16px;"></div>
+            <div id="watch-market-info" style="background:#0a0e1a;border:1px solid #00ff8822;border-radius:8px;padding:12px 16px;margin-bottom:16px;"></div>
             <div id="watch-risk-warning"></div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
-                <div>
-                    <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Stop-Loss (¢ drop from entry)</label>
-                    <input type="number" id="watch-stop-loss" min="1" max="50" value="5"
-                           style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+            <div style="margin-bottom:16px;">
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;">
+                    <div style="width:3px;height:12px;background:linear-gradient(180deg,#ffd740,#00ff88);border-radius:2px;"></div>
+                    <span style="color:#ffd740;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em;">Risk Management</span>
                 </div>
-                <div>
-                    <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Take-Profit (¢ rise, 0 = off)</label>
-                    <input type="number" id="watch-take-profit" min="0" max="50" value="0"
-                           style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
-                </div>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px;">
-                <div>
-                    <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Entry Price (¢ you bought at)</label>
-                    <input type="number" id="watch-entry-price" min="1" max="99" value="50"
-                           style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
-                </div>
-                <div>
-                    <label style="display:block;color:#8892a6;font-size:11px;font-weight:600;margin-bottom:4px;">Contracts to watch</label>
-                    <input type="number" id="watch-quantity" min="1" value="1"
-                           style="width:100%;padding:8px 12px;background:#0a0e1a;border:1px solid #1e2740;border-radius:6px;color:#fff;font-size:14px;font-weight:600;text-align:center;">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                    <div>
+                        <label style="display:block;color:#ff6666;font-size:10px;font-weight:700;margin-bottom:4px;letter-spacing:.04em;">STOP-LOSS (¢ drop)</label>
+                        <input type="number" id="watch-stop-loss" min="0" max="50" value="5"
+                               style="width:100%;padding:8px;background:#0a0e1a;border:2px solid #ffd74033;border-radius:50px;color:#fff;font-size:16px;font-weight:800;text-align:center;outline:none;box-sizing:border-box;transition:all .2s;"
+                               onfocus="this.style.borderColor='#ffd740';this.style.boxShadow='0 0 10px #ffd74020'" onblur="this.style.borderColor='#ffd74033';this.style.boxShadow='none'">
+                    </div>
+                    <div>
+                        <label style="display:block;color:#00ff88;font-size:10px;font-weight:700;margin-bottom:4px;letter-spacing:.04em;">TAKE-PROFIT (¢ rise, 0=off)</label>
+                        <input type="number" id="watch-take-profit" min="0" max="50" value="0"
+                               style="width:100%;padding:8px;background:#0a0e1a;border:2px solid #ffd74033;border-radius:50px;color:#fff;font-size:16px;font-weight:800;text-align:center;outline:none;box-sizing:border-box;transition:all .2s;"
+                               onfocus="this.style.borderColor='#ffd740';this.style.boxShadow='0 0 10px #ffd74020'" onblur="this.style.borderColor='#ffd74033';this.style.boxShadow='none'">
+                    </div>
                 </div>
             </div>
-            <div style="padding:8px 12px;background:#060a14;border:1px solid #1e2740;border-radius:6px;font-size:11px;color:#6a7488;line-height:1.5;margin-bottom:16px;">
-                <strong style="color:#8892a6;">How it works:</strong> The bot monitors the current bid price for your position. If it drops below your entry minus the stop-loss, it <strong style="color:#ff4444;">market-sells</strong> to cut losses. If it rises above entry plus take-profit, it <strong style="color:#00ff88;">market-sells</strong> to lock gains.
+            <div style="height:1px;background:linear-gradient(90deg,transparent,#1e274066,transparent);margin-bottom:16px;"></div>
+            <div style="margin-bottom:20px;">
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;">
+                    <div style="width:3px;height:12px;background:linear-gradient(180deg,#00ff88,#ffd740);border-radius:2px;"></div>
+                    <span style="color:#00ff88;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em;">Position</span>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                    <div>
+                        <label style="display:block;color:#8892a6;font-size:10px;font-weight:700;margin-bottom:4px;letter-spacing:.04em;">ENTRY PRICE (¢)</label>
+                        <input type="number" id="watch-entry-price" min="1" max="99" value="50"
+                               style="width:100%;padding:8px;background:#0a0e1a;border:2px solid #00ff8833;border-radius:50px;color:#00ff88;font-size:16px;font-weight:800;text-align:center;outline:none;box-sizing:border-box;transition:all .2s;"
+                               onfocus="this.style.borderColor='#00ff88';this.style.boxShadow='0 0 10px #00ff8820'" onblur="this.style.borderColor='#00ff8833';this.style.boxShadow='none'">
+                    </div>
+                    <div>
+                        <label style="display:block;color:#8892a6;font-size:10px;font-weight:700;margin-bottom:4px;letter-spacing:.04em;">CONTRACTS</label>
+                        <input type="number" id="watch-quantity" min="1" value="1"
+                               style="width:100%;padding:8px;background:#0a0e1a;border:2px solid #1e274066;border-radius:50px;color:#fff;font-size:16px;font-weight:800;text-align:center;outline:none;box-sizing:border-box;transition:all .2s;"
+                               onfocus="this.style.borderColor='#ffd740';this.style.boxShadow='0 0 10px #ffd74020'" onblur="this.style.borderColor='#1e274066';this.style.boxShadow='none'">
+                    </div>
+                </div>
             </div>
-            <button onclick="confirmWatchPosition()" style="width:100%;padding:12px;background:linear-gradient(135deg,#9966ff,#7744dd);color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:800;cursor:pointer;">👁 Start Watching</button>
+            <div style="padding:8px 12px;background:#ffd74008;border:1px solid #ffd74015;border-radius:6px;font-size:11px;color:#6a7488;line-height:1.5;margin-bottom:16px;">
+                <strong style="color:#ffd740;">How it works:</strong> Scout monitors the bid for your position. If it drops below entry minus stop-loss, it <strong style="color:#ff4444;">market-sells</strong> to cut losses. If it rises above entry plus take-profit, it <strong style="color:#00ff88;">market-sells</strong> to lock gains.
+            </div>
+            <button onclick="confirmWatchPosition()" style="width:100%;padding:12px;background:linear-gradient(135deg,#00ff88,#ffd740);color:#000;border:none;border-radius:50px;font-size:14px;font-weight:800;cursor:pointer;letter-spacing:.03em;box-shadow:0 4px 15px #ffd74025;transition:all .2s;">◎ Assign Scout</button>
         </div>
     </div>
 
@@ -3205,7 +3229,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260413040000"></script>
+    <script src="app.js?v=20260413050000"></script>
     <!-- Bottom status bar — always visible -->
     <div id="bottom-status-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#080c16;border-top:1px solid #1a2035;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;font-size:11px;">
         <span style="color:#3a4560;font-size:10px;letter-spacing:.03em;">hi irene</span>

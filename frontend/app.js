@@ -14155,10 +14155,10 @@ function closeWatchModal() {
 async function confirmWatchPosition() {
     if (!watchTarget) return;
 
-    const entryPrice = parseInt(document.getElementById('watch-entry-price').value);
-    const quantity = parseInt(document.getElementById('watch-quantity').value);
-    const stopLoss = parseInt(document.getElementById('watch-stop-loss').value);
-    const takeProfit = parseInt(document.getElementById('watch-take-profit').value);
+    const entryPrice = parseInt(document.getElementById('watch-entry-price').value) || 0;
+    const quantity = parseInt(document.getElementById('watch-quantity').value) || 1;
+    const stopLoss = parseInt(document.getElementById('watch-stop-loss').value) || 0;
+    const takeProfit = parseInt(document.getElementById('watch-take-profit').value) || 0;
 
     // Risk warnings
     const warnings = [];

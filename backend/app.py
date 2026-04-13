@@ -18700,6 +18700,10 @@ def apex_mm_edit(bot_id):
         bot['levels'] = new_levels
     if not changes:
         return jsonify({'ok': True, 'applied_now': False, 'changes': {}})
+    # Recalculate inventory limit BEFORE repost so the new limit is used
+    _levels = bot.get('levels', 7)
+    _qty = bot.get('qty_per_level', 10)
+    bot['inventory_limit'] = sum(max(1, round(_qty * (1.0 + (i * 1.0 / max(1, _levels - 1))))) for i in range(_levels))
     status = bot.get('status', '')
     net_yes = bot.get('net_yes', 0)
     net_no = bot.get('net_no', 0)
@@ -18731,10 +18735,6 @@ def apex_mm_edit(bot_id):
             bot['midpoint'] = midpoint
             bot['status'] = 'market_making_active'
         applied_now = True
-    # Recalculate inventory limit
-    _levels = bot.get('levels', 7)
-    _qty = bot.get('qty_per_level', 10)
-    bot['inventory_limit'] = sum(max(1, round(_qty * (1.0 + (i * 1.0 / max(1, _levels - 1))))) for i in range(_levels))
     save_state()
     bot_log('APEX_MM_EDIT', bot_id, {'changes': changes, 'applied_now': applied_now, 'status': status})
     print(f'🔧 APEX MM EDIT: {bot_id} — {changes} (applied_now={applied_now})')

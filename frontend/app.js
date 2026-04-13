@@ -6527,16 +6527,16 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const fillPct = qty > 0 ? Math.min(100, Math.round(filled / qty * 100)) : 0;
         const barCol = isFull ? sideCol : '#ff7043';
         const textCol = isFull ? sideCol : active ? '#ff7043' : '#334';
-        const statusTag = isFull ? `<span style="color:${sideCol};font-size:7px;font-weight:800;letter-spacing:.04em;">FILLED</span>`
+        const statusTag = isFull ? `<span style="color:${sideCol};font-size:7px;font-weight:800;">FILLED</span>`
             : active ? `<span style="color:#ff7043;font-size:7px;font-weight:700;">LIVE</span>`
             : `<span style="color:#2a3040;font-size:7px;">OFF</span>`;
-        return `<div style="display:flex;align-items:center;gap:4px;padding:2px 0;">
-            <span style="color:${textCol};font-weight:700;font-size:11px;width:28px;text-align:right;">${price}c</span>
-            <div style="flex:1;height:4px;background:#0a1018;border-radius:2px;overflow:hidden;">
+        return `<div style="display:grid;grid-template-columns:32px 1fr 30px 36px;align-items:center;gap:3px;padding:2px 0;">
+            <span style="color:${textCol};font-weight:700;font-size:11px;text-align:right;">${price}c</span>
+            <div style="height:4px;background:#0a1018;border-radius:2px;overflow:hidden;">
                 <div style="width:${fillPct}%;height:100%;background:${barCol};border-radius:2px;transition:width .3s;"></div>
             </div>
-            <span style="color:${textCol};font-size:9px;font-weight:700;width:28px;text-align:right;">${filled}/${qty}</span>
-            <span style="width:28px;text-align:right;">${statusTag}</span>
+            <span style="color:${textCol};font-size:9px;font-weight:700;text-align:right;">${filled}/${qty}</span>
+            <span style="text-align:right;">${statusTag}</span>
         </div>`;
     };
 
@@ -11726,7 +11726,7 @@ async function loadHistoryStats() {
 
         const fillRate = s.arb_fill_rate || 0;
         const fillColor = fillRate >= 50 ? '#00ff88' : fillRate >= 25 ? '#ffaa00' : '#ff4444';
-        const netColor = s.arb_net_cents >= 0 ? '#00ff88' : '#ff4444';
+        const netColor = s.arb_net_cents >= 0 ? '#00d4ff' : '#ff4444';
         const netDollars = (s.arb_net_cents / 100).toFixed(2);
 
         // Format duration
@@ -11770,14 +11770,24 @@ async function loadHistoryStats() {
                 </div>
                 ${(() => {
                     const dNet = (pnl.arb_net_cents || 0);
-                    const dColor = dNet >= 0 ? '#00ff88' : '#ff4444';
+                    const dColor = dNet >= 0 ? '#00d4ff' : '#ff4444';
                     const dDollars = (dNet / 100).toFixed(2);
                     const dW = pnl.arb_wins || 0;
                     const dL = pnl.arb_losses || 0;
                     return `<div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
-                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Daily P&L <span style="font-size:8px;color:#555;">${pnl.day_key || ''}</span></div>
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Daily P&L</div>
                         <div style="color:${dColor};font-size:24px;font-weight:800;">${dNet >= 0 ? '+' : ''}$${dDollars}</div>
-                        <div style="color:#555;font-size:10px;margin-top:2px;">${dW}W / ${dL}L today (Apex)</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">${dW}W / ${dL}L today</div>
+                    </div>`;
+                })()}
+                ${(() => {
+                    const mCon = pnl.monthly_apex_contracts || 0;
+                    const lCon = pnl.lifetime_apex_contracts || 0;
+                    const mLabel = pnl.monthly_label || 'This Month';
+                    return `<div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #1e2740;">
+                        <div style="color:#8892a6;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${mLabel} Contracts</div>
+                        <div style="color:#00d4ff;font-size:24px;font-weight:800;">${mCon.toLocaleString()}</div>
+                        <div style="color:#555;font-size:10px;margin-top:2px;">Lifetime: ${lCon.toLocaleString()}</div>
                     </div>`;
                 })()}
             </div>

@@ -4656,10 +4656,15 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                         _cum[order_id] = _cum.get(order_id, 0) + count
 
                 # Add to inventory
+                _was_flat = bot.get(f'net_{matched_side}', 0) == 0
                 bot[f'net_{matched_side}'] = bot.get(f'net_{matched_side}', 0) + count
                 bot[f'total_{matched_side}_cost'] = bot.get(f'total_{matched_side}_cost', 0) + (matched_price * count)
                 total_qty = bot[f'net_{matched_side}']
                 bot[f'avg_{matched_side}_cost'] = round(bot[f'total_{matched_side}_cost'] / total_qty) if total_qty > 0 else 0
+                # Track when inventory was first acquired (for round-trip timing)
+                if _was_flat:
+                    bot[f'_{matched_side}_inv_since'] = time.time()
+                bot[f'_last_{matched_side}_fill_at'] = time.time()
 
                 print(f'📊 WS APEX MM FILL: {bot_id} {matched_side.upper()} +{count} @{matched_price}c → net_{matched_side}={bot[f"net_{matched_side}"]} avg={bot[f"avg_{matched_side}_cost"]}c')
 
@@ -8537,13 +8542,18 @@ def _apex_mm_record_round_trip(bot_id, bot, fill_side, fill_price, close_qty):
         bot[f'avg_{opposite}_cost'] = 0
         bot[f'total_{opposite}_cost'] = 0
 
+    # Compute round-trip hold time (time opposite side inventory was held)
+    _opp_inv_since = bot.get(f'_{opposite}_inv_since', 0)
+    _rt_hold_ms = round((time.time() - _opp_inv_since) * 1000) if _opp_inv_since > 0 else None
+    _rt_hold_s = round(_rt_hold_ms / 1000, 1) if _rt_hold_ms else None
+
     # Log round trip for card display
     bot.setdefault('_rt_log', []).append({
         'entry_side': opposite, 'entry_price': opp_avg,
         'exit_side': fill_side, 'exit_price': fill_price,
         'combined': opp_avg + fill_price, 'qty': close_qty,
         'gross': gross_pnl, 'fee': total_fee, 'pnl': net_pnl,
-        'ts': time.time(),
+        'ts': time.time(), 'hold_ms': _rt_hold_ms,
     })
 
     # Record trade
@@ -8560,6 +8570,8 @@ def _apex_mm_record_round_trip(bot_id, bot, fill_side, fill_price, close_qty):
         'net_pnl': net_pnl, 'fee_cents': total_fee,
         'timestamp': time.time(), 'fill_source': 'apex_mm',
         'round_trip_num': bot.get('round_trips_completed', 0),
+        'hold_time_ms': _rt_hold_ms,
+        'hold_time_s': _rt_hold_s,
     })
 
     bot_log('APEX_MM_ROUND_TRIP', bot_id, {
@@ -19430,6 +19442,11 @@ def get_pnl():
     monthly_contracts = sum(t.get('quantity', 1) for t in monthly_all_trades)
     monthly_dog_trades = [t for t in monthly_all_trades if t.get('bot_category') in ('anchor_dog', 'anchor_ladder')]
     monthly_dog_contracts = sum(t.get('quantity', 1) for t in monthly_dog_trades)
+    # Apex (ladder_arb) contract counts
+    lifetime_apex_trades = [t for t in lifetime_trades if t.get('bot_category') == 'ladder_arb']
+    lifetime_apex_contracts = sum(t.get('quantity', 1) for t in lifetime_apex_trades)
+    monthly_apex_trades = [t for t in monthly_all_trades if t.get('bot_category') == 'ladder_arb']
+    monthly_apex_contracts = sum(t.get('quantity', 1) for t in monthly_apex_trades)
     arb_d    = _compute_pnl_bucket(today_trades, 'arb')
     bet_d    = _compute_pnl_bucket(today_trades, 'bet')
     mid_d    = _compute_pnl_bucket(today_trades, 'middle')
@@ -19500,6 +19517,8 @@ def get_pnl():
         'lifetime_dog_wins':       lifetime_dog['completed_bots'],
         'lifetime_dog_losses':     lifetime_dog['stopped_bots'],
         'lifetime_dog_contracts':  lifetime_dog_contracts,
+        'lifetime_apex_contracts': lifetime_apex_contracts,
+        'monthly_apex_contracts':  monthly_apex_contracts,
         'monthly_dog_contracts':   monthly_dog_contracts,
         'monthly_contracts':       monthly_contracts,
         'monthly_label':           datetime.now(AZ_TZ).strftime('%b %Y'),

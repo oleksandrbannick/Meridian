@@ -3570,7 +3570,7 @@ function displayOrderbookLadder(orderbook) {
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;padding-top:6px;border-top:1px solid #1e274033;">
             <span style="color:#8892a6;font-size:9px;">Room: <span style="color:${roomCol};font-weight:700;">${hedgeRoom}¢</span> <span style="color:${roomCol};">${roomLabel}</span></span>
-            <span style="display:inline-flex;align-items:center;border:1px solid #1e2740;border-radius:4px;overflow:hidden;font-size:9px;font-weight:700;"><span style="padding:2px 5px;color:#00d4ff;background:#00d4ff10;">rec ${suggestedQty}</span><span style="padding:2px 5px;color:#ff8800;background:#ff880010;border-left:1px solid #1e2740;">max ${maxSafeQty}</span><span style="padding:2px 5px;color:${qtyTierCol};background:${qtyTierCol}08;border-left:1px solid #1e2740;">${qtyTier}</span></span>
+            <span style="display:inline-flex;align-items:center;border:1px solid #1e2740;border-radius:4px;overflow:hidden;font-size:9px;font-weight:700;"><span style="padding:2px 5px;color:#00ff88;background:#00ff8810;">rec ${suggestedQty}</span><span style="padding:2px 5px;color:#ff4444;background:#ff444410;border-left:1px solid #1e2740;">max ${maxSafeQty}</span><span style="padding:2px 5px;color:${qtyTierCol};background:${qtyTierCol}08;border-left:1px solid #1e2740;">${qtyTier}</span></span>
         </div>
     </div>`;
     const ladderEl = document.getElementById('orderbook-ladder');
@@ -4281,12 +4281,13 @@ function renderAnchorRungs(force) {
                 const _over = _mq && rung.qty > _mq;
                 const _qtyBorder = _over ? '#ff4444' : _warn ? '#ffaa00' : _ok && _rq ? '#00ff8844' : '#1e2740';
                 const _qtyCol = _over ? '#ff4444' : '#b2ff59';
-                return `<div style="display:flex;align-items:center;gap:0;background:#0a0e1a;border:1px solid ${_qtyBorder};border-radius:5px;overflow:hidden;">
-                    <span style="color:#8892a6;font-size:8px;padding:4px 5px;border-right:1px solid #1e2740;">QTY</span>
+                const _recCol = rung.qty <= _rq ? '#00ff88' : '#ff4444';
+                const _maxCol = '#ff4444'; // always red — hard ceiling, auto-capped
+                return `<div style="display:inline-flex;align-items:center;gap:0;background:#0a0e1a;border:1px solid ${_qtyBorder};border-radius:5px;overflow:hidden;">
                     <input type="number" min="1" max="9999" value="${rung.qty}" onchange="updateRungQty(0, this.value)"
                         onfocus="window._anchorInputFocused=true" onblur="window._anchorInputFocused=false"
-                        style="width:44px;padding:4px 4px;background:transparent;border:none;color:${_qtyCol};font-size:13px;font-weight:700;text-align:center;outline:none;">
-                    ${_rq ? `<span style="border-left:1px solid #1e2740;padding:4px 5px;font-size:8px;font-weight:700;color:#00ff88;background:#00ff8808;">${_rq}</span><span style="border-left:1px solid #1e2740;padding:4px 5px;font-size:8px;font-weight:700;color:${_over ? '#ff4444' : '#ffaa00'};background:${_over ? '#ff444408' : '#ffaa0008'};">${_mq}</span>` : ''}
+                        style="width:48px;padding:4px 4px;background:transparent;border:none;color:${_qtyCol};font-size:13px;font-weight:700;text-align:center;outline:none;">
+                    ${_rq ? `<span style="border-left:1px solid #1e2740;padding:4px 5px;font-size:8px;font-weight:700;color:${_recCol};background:${_recCol}10;">rec ${_rq}</span><span style="border-left:1px solid #1e2740;padding:4px 5px;font-size:8px;font-weight:700;color:${_maxCol};background:${_maxCol}10;">max ${_mq}</span>` : ''}
                 </div>`;
             })()}
             <span style="color:#555;font-size:9px;">${baseLabel} ${anchorBase}¢ <span style="color:#ffaa00;">−${offset}¢</span></span>
@@ -4422,7 +4423,7 @@ function updateAnchorPreview() {
                 (dd > 0 ? `<div style="margin-top:2px;color:#8892a6;font-size:9px;">` +
                 `dog ${dd.toLocaleString()} @ ${dogBid}¢ · fav ${fd.toLocaleString()} (${fpl}/lvl) @ ${favBid}¢${concNote}` +
                 `</div>` : '') +
-                `<div style="margin-top:3px;display:inline-flex;align-items:center;border:1px solid #1e2740;border-radius:4px;overflow:hidden;font-size:9px;font-weight:700;"><span style="padding:2px 5px;color:#00d4ff;background:#00d4ff10;">rec ${_obCache.suggestedQty || Math.floor(maxQty * 0.6)}</span><span style="padding:2px 5px;color:#ff8800;background:#ff880010;border-left:1px solid #1e2740;">max ${maxQty}</span></div>` +
+                `<div style="margin-top:3px;display:inline-flex;align-items:center;border:1px solid #1e2740;border-radius:4px;overflow:hidden;font-size:9px;font-weight:700;"><span style="padding:2px 5px;color:#00ff88;background:#00ff8810;">rec ${_obCache.suggestedQty || Math.floor(maxQty * 0.6)}</span><span style="padding:2px 5px;color:#ff4444;background:#ff444410;border-left:1px solid #1e2740;">max ${maxQty}</span></div>` +
                 `<div style="color:#555;font-size:8px;margin-top:2px;">Auto-caps to max if fav liquidity drops below your qty</div>` +
                 `</div>`;
         }
@@ -6171,7 +6172,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             return '';
         })()}
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;">
-            <span style="color:#ff66aa;font-weight:600;">Depth: ${bot.anchor_depth || targetWidth}¢${bot.auto_depth ? ' <span style="color:#64ffda;font-size:8px;">AUTO</span>' : ''}</span>${bot._rec_qty != null ? (() => { const _rq = bot._rec_qty, _mq = bot._max_qty || _rq; const _ok = qty <= _rq; const _over = qty > _mq; const _border = _ok ? '#00ff8833' : _over ? '#ff444433' : '#ffaa0033'; const _recCol = qty <= _rq ? '#00ff88' : '#ff4444'; const _maxCol = qty <= _mq ? '#00ff88' : '#ff4444'; return `<span style="display:inline-flex;align-items:center;border:1px solid ${_border};border-radius:4px;overflow:hidden;font-size:9px;font-weight:700;" title="Fav bid L1: ${bot._fav_bid_l1 || '?'} · Fav ask L1: ${bot._fav_ask_l1 || '?'}"><span style="padding:1px 5px;color:#b2ff59;background:#b2ff5910;">×${qty}</span><span style="padding:1px 5px;color:${_recCol};background:${_recCol}10;border-left:1px solid #1e2740;">rec ${_rq}</span><span style="padding:1px 5px;color:${_maxCol};background:${_maxCol}10;border-left:1px solid #1e2740;">max ${_mq}</span></span>`; })() : `<span style="color:#b2ff59;">×${qty}</span>`}${(() => {
+            <span style="color:#ff66aa;font-weight:600;">Depth: ${bot.anchor_depth || targetWidth}¢${bot.auto_depth ? ' <span style="color:#64ffda;font-size:8px;">AUTO</span>' : ''}</span>${bot._rec_qty != null ? (() => { const _rq = bot._rec_qty, _mq = bot._max_qty || _rq; const _ok = qty <= _rq; const _over = qty > _mq; const _border = _ok ? '#00ff8833' : _over ? '#ff444433' : '#ffaa0033'; const _recCol = qty <= _rq ? '#00ff88' : '#ff4444'; return `<span style="display:inline-flex;align-items:center;border:1px solid ${_border};border-radius:4px;overflow:hidden;font-size:9px;font-weight:700;" title="Fav bid L1: ${bot._fav_bid_l1 || '?'} · Fav ask L1: ${bot._fav_ask_l1 || '?'}"><span style="padding:1px 5px;color:#b2ff59;background:#b2ff5910;">×${qty}</span><span style="padding:1px 5px;color:${_recCol};background:${_recCol}10;border-left:1px solid #1e2740;">rec ${_rq}</span><span style="padding:1px 5px;color:#ff4444;background:#ff444410;border-left:1px solid #1e2740;">max ${_mq}</span></span>`; })() : `<span style="color:#b2ff59;">×${qty}</span>`}${(() => {
                 const _ppi = bot._live_ppi != null ? bot._live_ppi : bot._last_ppi;
                 if (_ppi != null) {
                     const _ppiCol = _ppi >= 90 ? '#00ff88' : _ppi >= 75 ? '#00ccff' : _ppi >= 55 ? '#ffaa00' : _ppi >= 35 ? '#ff8800' : '#ff4444';

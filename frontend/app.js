@@ -6051,22 +6051,18 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     const fd = bot._fav_depth || 0;
                     const tier = fd < 200 ? 'THIN' : fd < 500 ? 'MOD' : 'THICK';
                     const timerS = fd < 200 ? 10 : fd < 500 ? 15 : 30;
-                    const threshC = fd < 200 ? 98 : fd < 500 ? 99 : 100;
                     const elapsed = Math.max(0, Date.now()/1000 - bot.fav_posted_at);
                     const left = Math.max(0, timerS - elapsed);
                     const tierCol = tier === 'THIN' ? '#ff4444' : tier === 'MOD' ? '#ffaa00' : '#00ff88';
                     const combined = avgDogPrice + (favAsk || favBid || favPrice);
-                    const wouldFire = combined <= threshC && left <= 0;
                     const fdLabel = fd >= 1000 ? (fd/1000).toFixed(1) + 'K' : fd;
                     if (left > 0) {
                         return `<div style="color:${tierCol};font-size:9px;font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:6px;">
                             <span style="background:${tierCol}18;padding:1px 5px;border-radius:3px;">${tier} · ${fdLabel}</span>
-                            <span>taker in ${Math.ceil(left)}s @ ≤${threshC}¢</span>
+                            <span>taker in ${Math.ceil(left)}s</span>
                         </div>`;
-                    } else if (wouldFire) {
-                        return `<div style="color:#ff8800;font-size:9px;font-weight:700;margin-bottom:4px;">⚡ TAKER READY · ${tier} · combined ${combined}¢ ≤ ${threshC}¢</div>`;
                     } else {
-                        return `<div style="color:#ff4444;font-size:9px;font-weight:600;margin-bottom:4px;">⏳ ${tier} · ${fdLabel} · combined ${combined}¢ > ${threshC}¢</div>`;
+                        return `<div style="color:#ff8800;font-size:9px;font-weight:700;margin-bottom:4px;">⚡ TAKER READY · ${tier} · combined ${combined}¢</div>`;
                     }
                 })() : ''}
                 ${favPrice > 0 ? `

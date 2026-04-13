@@ -3902,12 +3902,11 @@ def _ws_phantom_drift_guard(ticker, yes_bid, no_bid):
 
 
 def _phantom_taker_depth_tier(fav_depth):
-    """Thin book = taker exit (nobody taking). Thick book = patient (fills coming).
-    Returns (timer_seconds, combined_threshold). Threshold = max combined you'll accept.
-    Higher threshold = willing to exit closer to breakeven (100¢)."""
-    if fav_depth < 200:    return (10, 98)    # THIN: exit fast, accept up to 2¢ loss
-    elif fav_depth < 500:  return (15, 99)    # MODERATE: more patience, exit before breakeven
-    else:                  return (30, 100)   # THICK: max patience, exit at breakeven if maker didn't fill
+    """Thin book = taker sooner (nobody lifting maker). Thick book = more patient (fills likely).
+    Returns timer_seconds only — no threshold. Once timer expires, cross the spread unconditionally."""
+    if fav_depth < 200:    return 10    # THIN: nobody taking, cross fast
+    elif fav_depth < 500:  return 15    # MODERATE: give maker a fair shot
+    else:                  return 30    # THICK: plenty of takers, be patient
 
 
 def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
@@ -3941,45 +3940,37 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
         # Read real-time fav depth at bid level (1 level = what the card shows)
         _lob = _local_orderbooks.get(hedge_ticker)
         _fav_depth = round(_lob.get_total_depth(fav_side, 1)) if _lob and _lob.last_update_ts > 0 else 0
-        _taker_timer, _taker_threshold = _phantom_taker_depth_tier(_fav_depth)
+        _taker_timer = _phantom_taker_depth_tier(_fav_depth)
 
         if fav_ask > 0 and hedge_age >= _taker_timer and not bot.get('_taker_fired'):
             combined_at_ask = dog_price + fav_ask
-            if combined_at_ask <= _taker_threshold:
-                # Cross the spread — maker fill isn't coming on this book
-                if not _phantom_drop_lock.acquire(blocking=False):
-                    return
-                try:
-                    fav_oid = bot.get('fav_order_id')
-                    if fav_oid:
-                        qty = bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1))
-                        amend_kwargs = {f'{fav_side}_price': fav_ask}
-                        api_rate_limiter.wait(priority=True)
-                        kalshi_client.amend_order(fav_oid, ticker=hedge_ticker, side=fav_side,
-                                                  count=qty, **amend_kwargs)
-                        bot['fav_price'] = fav_ask
-                        bot['_taker_fired'] = True
-                        bot['_fav_was_taker'] = True
-                        _depth_label = 'THIN' if _fav_depth < 200 else ('MOD' if _fav_depth < 500 else 'THICK')
-                        print(f'⚡ WS PHANTOM TAKER: {bot_id} fav→{fav_ask}¢ (ask, combined={combined_at_ask}¢, waited {int(hedge_age)}s, depth={_fav_depth} [{_depth_label}] timer={_taker_timer}s)')
-                        bot_log('PHANTOM_WS_TAKER', bot_id, {
-                            'fav_price': fav_ask, 'dog_price': dog_price,
-                            'combined': combined_at_ask, 'hedge_age_s': int(hedge_age),
-                            'was_price': fav_price,
-                            'fav_depth': _fav_depth, 'depth_tier': _depth_label,
-                            'taker_timer': _taker_timer, 'taker_threshold': _taker_threshold,
-                        })
-                        save_state()
-                finally:
-                    _phantom_drop_lock.release()
+            # No threshold — timer expired, cross the spread unconditionally
+            if not _phantom_drop_lock.acquire(blocking=False):
                 return
-            else:
-                # Near-miss: timer expired but combined too high — log periodically
-                _last_miss = bot.get('_taker_miss_log_at', 0)
-                if time.time() - _last_miss >= 5:
+            try:
+                fav_oid = bot.get('fav_order_id')
+                if fav_oid:
+                    qty = bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1))
+                    amend_kwargs = {f'{fav_side}_price': fav_ask}
+                    api_rate_limiter.wait(priority=True)
+                    kalshi_client.amend_order(fav_oid, ticker=hedge_ticker, side=fav_side,
+                                              count=qty, **amend_kwargs)
+                    bot['fav_price'] = fav_ask
+                    bot['_taker_fired'] = True
+                    bot['_fav_was_taker'] = True
                     _depth_label = 'THIN' if _fav_depth < 200 else ('MOD' if _fav_depth < 500 else 'THICK')
-                    print(f'⏳ PHANTOM TAKER WAITING: {bot_id} combined={combined_at_ask}¢ > {_taker_threshold}¢ (depth={_fav_depth} [{_depth_label}] age={int(hedge_age)}s)')
-                    bot['_taker_miss_log_at'] = time.time()
+                    print(f'⚡ WS PHANTOM TAKER: {bot_id} fav→{fav_ask}¢ (ask, combined={combined_at_ask}¢, waited {int(hedge_age)}s, depth={_fav_depth} [{_depth_label}] timer={_taker_timer}s)')
+                    bot_log('PHANTOM_WS_TAKER', bot_id, {
+                        'fav_price': fav_ask, 'dog_price': dog_price,
+                        'combined': combined_at_ask, 'hedge_age_s': int(hedge_age),
+                        'was_price': fav_price,
+                        'fav_depth': _fav_depth, 'depth_tier': _depth_label,
+                        'taker_timer': _taker_timer,
+                    })
+                    save_state()
+            finally:
+                _phantom_drop_lock.release()
+            return
 
         # Only snap if bid is ABOVE posted price (we're behind the market)
         if fav_bid <= fav_price:
@@ -11425,10 +11416,10 @@ def _handle_phantom(bot_id, bot, actions):
             bot['no_price'] = no_p
 
             pnl_cents = (100 - yes_p - no_p) * qty
-            # Always use maker fees for both legs — Kalshi often classifies limit-at-ask
-            # orders as maker (book shifted during ~24ms latency), and taker fee overcount
-            # was causing profitable trades to show as losses. 98¢ = breakeven baseline.
-            fee = kalshi_fee_cents(yes_p, no_p, qty)
+            # Dog is always maker. Fav uses taker fee if we crossed the spread.
+            _dog_fee = _kalshi_side_fee_cents(dog_price, qty)
+            _fav_fee = _kalshi_taker_side_fee_cents(actual_fav_price, qty) if bot.get('_fav_was_taker') else _kalshi_side_fee_cents(actual_fav_price, qty)
+            fee = _dog_fee + _fav_fee
             net_pnl = pnl_cents - fee
 
             # Compute hedge speed BEFORE recording trade so it's included
@@ -12869,7 +12860,7 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                 _kalshi_side_fee_cents(r['price'], r.get('fill_qty', 0))
                 for r in bot['rungs'] if r.get('fill_qty', 0) > 0
             )
-            _fav_fee = _kalshi_side_fee_cents(actual_fav_price, hedge_qty)
+            _fav_fee = _kalshi_taker_side_fee_cents(actual_fav_price, hedge_qty) if bot.get('_fav_was_taker') else _kalshi_side_fee_cents(actual_fav_price, hedge_qty)
             fee = _dog_fee + _fav_fee
             net_pnl = pnl_cents - fee
 

@@ -9879,7 +9879,6 @@ def create_anchor_bot():
             'consecutive_losses':  0,
             'anchor_depth':        anchor_depth,
             'auto_depth':          auto_depth,
-            'qty_override':        bool(data.get('qty_override', False)),
             'fav_shave':           fav_shave,
             'fav_walk_count':      0,
             'fav_last_walk_at':    None,

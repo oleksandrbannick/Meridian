@@ -4220,18 +4220,6 @@ function initAnchorDogPrices() {
 }
 
 
-function toggleQtyOverride(enabled) {
-    const info = document.getElementById('anchor-qty-override-info');
-    if (info) info.style.display = enabled ? '' : 'none';
-    if (enabled) {
-        const _dc = (window._obDepthCache || {})[(currentArbMarket || {}).ticker || ''];
-        const maxEl = document.getElementById('anchor-qty-override-max');
-        if (maxEl && _dc) {
-            maxEl.textContent = `Max safe qty: ${_dc.maxSafeQty || '?'} (fav bid L1: ${_dc.favBestBid || '?'})`;
-        }
-    }
-}
-
 function updateRungPrice(idx, val) {
     const v = parseInt(val);
     if (v >= 1 && v <= 50) {
@@ -4583,7 +4571,6 @@ async function deployAnchorBot() {
     if (!confirm(`👻 Deploy Phantom Bot${isCrossMode ? ' (Cross-Market)' : ''} — ${totalQty} contract${totalQty > 1 ? 's' : ''}\n\nMarket: ${currentArbMarket.ticker}\n  ${_anchorDogSide.toUpperCase()} @ ${_anchorRungs[0].price}¢ × ${_anchorRungs[0].qty}\nDepth floor: ${anchorDepth}¢\nHedge: snap to fav bid${crossLine}${repeatLine}\nInstant hedge on fill\nMaker-only (post_only=true)\n\nConfirm?`)) return;
 
     try {
-        const qtyOverride = !!document.getElementById('anchor-qty-override')?.checked;
         const body = {
             ticker: currentArbMarket.ticker,
             dog_price: _anchorRungs[0].price,
@@ -4594,7 +4581,6 @@ async function deployAnchorBot() {
             smart_mode: smartMode,
             anchor_depth: anchorDepth,
             auto_depth: !!window._phantomAutoDepth,
-            qty_override: qtyOverride,
         };
 
         // Add cross-market fields if active
@@ -6180,7 +6166,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             return '';
         })()}
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;">
-            <span style="color:#ff66aa;font-weight:600;">Depth: ${bot.anchor_depth || targetWidth}¢${bot.auto_depth ? ' <span style="color:#64ffda;font-size:8px;">AUTO</span>' : ''}</span><span style="color:#b2ff59;">×${qty}</span>${bot._rec_qty != null ? (() => { const _rq = bot._rec_qty, _mq = bot._max_qty || _rq, _ov = bot.qty_override; const _cap = _ov ? _mq : _rq; const _ok = qty <= _cap; const _col = _ok ? '#00ff88' : '#ff4444'; return `<span style="color:${_col};font-size:9px;font-weight:600;" title="Rec: ${_rq} · Max: ${_mq} · Fav bid L1: ${bot._fav_bid_l1 || '?'} · Fav ask L1: ${bot._fav_ask_l1 || '?'}">${_ok ? '✓' : '⚠'}${_ov ? 'max' : 'rec'}:${_cap}</span>`; })() : ''}${(() => {
+            <span style="color:#ff66aa;font-weight:600;">Depth: ${bot.anchor_depth || targetWidth}¢${bot.auto_depth ? ' <span style="color:#64ffda;font-size:8px;">AUTO</span>' : ''}</span><span style="color:#b2ff59;">×${qty}</span>${bot._rec_qty != null ? (() => { const _rq = bot._rec_qty, _mq = bot._max_qty || _rq; const _col = qty <= _rq ? '#00ff88' : qty <= _mq ? '#ffaa00' : '#ff4444'; const _icon = qty <= _rq ? '✓' : qty <= _mq ? '⚡' : '⚠'; return `<span style="color:${_col};font-size:9px;font-weight:600;" title="Rec: ${_rq} · Max: ${_mq} · Fav bid L1: ${bot._fav_bid_l1 || '?'} · Fav ask L1: ${bot._fav_ask_l1 || '?'}">${_icon}rec:${_rq}${qty > _rq ? ' max:' + _mq : ''}</span>`; })() : ''}${(() => {
                 const _ppi = bot._live_ppi != null ? bot._live_ppi : bot._last_ppi;
                 if (_ppi != null) {
                     const _ppiCol = _ppi >= 90 ? '#00ff88' : _ppi >= 75 ? '#00ccff' : _ppi >= 55 ? '#ffaa00' : _ppi >= 35 ? '#ff8800' : '#ff4444';

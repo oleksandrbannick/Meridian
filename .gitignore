@@ -66,5 +66,10 @@ instance/
 bin/
 nohup.out
 backend/data_backup.json
+backend/data.json
+backend/data_vps*.json
+backend/trades.jsonl
+backend/activity_log.jsonl
+backend/bot_audit.jsonl
 backend/check_tennis.py
 backend/check_games.py

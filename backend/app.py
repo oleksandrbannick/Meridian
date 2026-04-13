@@ -12334,8 +12334,8 @@ def _handle_phantom(bot_id, bot, actions):
         # Fav bid is back — reset no-bid counter
         bot['_no_fav_bid_count'] = 0
 
-        # Walk target: always bid, no cap
-        new_fav_price = current_fav_bid
+        # Walk target: bid+1 if in bid+1 mode, otherwise bid
+        new_fav_price = (current_fav_bid + 1) if bot.get('_taker_fired') else current_fav_bid
 
         if new_fav_price <= 0:
             return

@@ -7983,6 +7983,11 @@ def _apex_mm_cycle_reset(bot_id, bot):
     # Clear side pauses so fresh ladder replaces ALL orders (resets fill_qty)
     bot['_yes_side_paused'] = False
     bot['_no_side_paused'] = False
+    # Clear stale fill counts from previous cycle — prevents card showing "filled" when flat
+    for _sk in ('yes_orders', 'no_orders'):
+        for _lv in bot.get(_sk, {}).values():
+            _lv['fill_qty'] = 0
+            _lv['oid'] = None
     yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, scale=bot.get('auto_scale', True), inv_limit=bot.get('inventory_limit', 0))
     _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
     bot['midpoint'] = midpoint

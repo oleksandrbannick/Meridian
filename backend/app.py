@@ -767,11 +767,14 @@ def get_markets():
         
         # Filter out stale/postponed markets
         now = datetime.now(timezone.utc)
-        today_str = now.strftime('%d%b%y').upper()  # e.g. "12APR26"
-        # Build today's date components for ticker matching
-        _today_day = int(now.strftime('%d'))
-        _today_mon = now.strftime('%b').upper()  # APR
-        _today_yr = now.strftime('%y')  # 26
+        # Use US-Eastern-equivalent time for ticker date comparison.
+        # Kalshi ticker dates use US game dates (EDT/EST). UTC rolls over
+        # at 7pm EDT, which would hide all evening games as "yesterday".
+        # Using a -5h offset (EDT) keeps today's games visible all evening.
+        _us_now = now - timedelta(hours=5)
+        _today_day = int(_us_now.strftime('%d'))
+        _today_mon = _us_now.strftime('%b').upper()
+        _today_yr = _us_now.strftime('%y')
         _month_map = {'JAN':1,'FEB':2,'MAR':3,'APR':4,'MAY':5,'JUN':6,'JUL':7,'AUG':8,'SEP':9,'OCT':10,'NOV':11,'DEC':12}
         _today_ord = int(_today_yr) * 10000 + _month_map.get(_today_mon, 0) * 100 + _today_day
         before_filter = len(unique_markets)

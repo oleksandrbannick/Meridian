@@ -8942,6 +8942,7 @@ def _apex_mm_exit_tick(bot_id, bot):
                         'quantity': target, 'fee_cents': total_fee,
                         'profit_cents': max(0, pnl), 'loss_cents': abs(min(0, pnl)), 'net_pnl': pnl,
                         'timestamp': now, 'fill_source': 'apex_mm_exit',
+                        'game_phase': bot.get('game_phase', ''),
                     })
                     bot.setdefault('_exit_log', []).append({
                         'type': 'arb_complete', 'held_side': held_side, 'held_avg': held_avg,
@@ -8983,6 +8984,7 @@ def _apex_mm_exit_tick(bot_id, bot):
                         'quantity': target, 'fee_cents': total_fee,
                         'profit_cents': max(0, pnl), 'loss_cents': abs(min(0, pnl)), 'net_pnl': pnl,
                         'timestamp': now, 'fill_source': 'apex_mm_exit',
+                        'game_phase': bot.get('game_phase', ''),
                     })
                     bot.setdefault('_exit_log', []).append({
                         'type': 'sellback', 'held_side': side, 'held_avg': avg_cost,
@@ -9260,6 +9262,7 @@ def _apex_mm_record_round_trip(bot_id, bot, fill_side, fill_price, close_qty):
         'round_trip_num': bot.get('round_trips_completed', 0),
         'hold_time_ms': _rt_hold_ms,
         'hold_time_s': _rt_hold_s,
+        'game_phase': bot.get('game_phase', ''),
     })
 
     bot_log('APEX_MM_ROUND_TRIP', bot_id, {
@@ -14186,6 +14189,7 @@ def _handle_apex(bot_id, bot, actions):
                                 'quantity': net_qty, 'net_pnl': pnl,
                                 'profit_cents': max(0, pnl), 'loss_cents': abs(min(0, pnl)),
                                 'timestamp': now, 'fill_source': 'apex_mm_settlement',
+                                'game_phase': bot.get('game_phase', ''),
                             })
                             bot[f'net_{side}'] = 0
                             bot[f'avg_{side}_cost'] = 0
@@ -20287,6 +20291,7 @@ PNL_WIN_RESULTS = (
     'apex_rung',  # Apex 2.0 per-rung arb completion
     'apex_settled_win',  # apex: market settled in favor of hedge
     'mm_round_trip',  # apex MM: spread capture round-trip
+    'mm_arb_complete',  # apex MM: exit via buying opposite side
     'partial_arb',  # phantom ladder: partial hedge fill at ceiling (typically breakeven)
     'anchor_partial_arb',  # phantom: partial arb completion
     'anchor_race_fill',  # phantom: race condition partial hedge fill
@@ -20409,6 +20414,10 @@ def get_pnl():
     lifetime_apex_contracts = sum(t.get('quantity', 1) for t in lifetime_apex_trades)
     monthly_apex_trades = [t for t in monthly_all_trades if t.get('bot_category') == 'ladder_arb']
     monthly_apex_contracts = sum(t.get('quantity', 1) for t in monthly_apex_trades)
+    lifetime_apex = _compute_pnl_bucket(lifetime_apex_trades)
+    # Today's Apex MM trades
+    apex_today = [t for t in today_trades if t.get('bot_category') == 'ladder_arb']
+    apex_d = _compute_pnl_bucket(apex_today)
     arb_d    = _compute_pnl_bucket(today_trades, 'arb')
     bet_d    = _compute_pnl_bucket(today_trades, 'bet')
     mid_d    = _compute_pnl_bucket(today_trades, 'middle')
@@ -20480,6 +20489,9 @@ def get_pnl():
         'lifetime_dog_losses':     lifetime_dog['stopped_bots'],
         'lifetime_dog_contracts':  lifetime_dog_contracts,
         'lifetime_apex_contracts': lifetime_apex_contracts,
+        'lifetime_apex_net_cents': lifetime_apex['net_cents'],
+        'lifetime_apex_wins':      lifetime_apex['completed_bots'],
+        'lifetime_apex_losses':    lifetime_apex['stopped_bots'],
         'monthly_apex_contracts':  monthly_apex_contracts,
         'monthly_dog_contracts':   monthly_dog_contracts,
         'monthly_contracts':       monthly_contracts,
@@ -20506,6 +20518,10 @@ def get_pnl():
         'dog_loss_cents':   dog_d['gross_loss_cents'],
         'dog_wins':         dog_d['completed_bots'],
         'dog_losses':       dog_d['stopped_bots'],
+        # Apex MM category breakdown (today)
+        'apex_net_cents':    apex_d['net_cents'],
+        'apex_wins':         apex_d['completed_bots'],
+        'apex_losses':       apex_d['stopped_bots'],
         # Sport breakdown (today — all categories)
         'sport_pnl': {s: round(v/100, 2) for s, v in daily['sport_pnl'].items() if v != 0},
         # Apex sport breakdown (today — arb category only, in dollars)

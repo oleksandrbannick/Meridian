@@ -12180,10 +12180,13 @@ let _phantomActiveSport = 'all';   // Sport filter for Phantom history panels
 let _phantomActiveDepth = 'all';   // Depth floor filter for Phantom history panels
 let _phantomActivePeriod = 'all';  // Period filter within sport dropdown
 // _phantomActiveExit removed (ceiling exit system removed)
+let _apexMMActiveSport = 'all';   // Sport filter for Apex MM history
+let _apexMMActiveWidth = 'all';   // Width filter for Apex MM history
+let _apexMMActivePeriod = 'all';  // Period filter within Apex MM sport dropdown
 let historyViewMode = 'arb';  // 'arb' | 'bets' | 'middle' | 'dog'
 
 const HIST_MODES = {
-    arb:     { btn: 'histmode-arb',     sec: 'hist-arb-section',     color: '#00ff88' },
+    arb:     { btn: 'histmode-arb',     sec: 'hist-arb-section',     color: '#00d4ff' },
     bets:    { btn: 'histmode-bets',    sec: 'hist-bets-section',    color: '#ffaa00' },
     middle:  { btn: 'histmode-middle',  sec: 'hist-middle-section',  color: '#aa66ff' },
     dog:     { btn: 'histmode-dog',     sec: 'hist-dog-section',     color: '#ffaa00' },
@@ -12198,7 +12201,7 @@ function setHistoryMode(mode) {
         if (btn) { btn.style.background = active ? '#253555' : '#1a2540'; btn.style.color = active ? cfg.color : '#8892a6'; }
         if (sec) sec.style.display = active ? '' : 'none';
     }
-    if (mode === 'arb')     { loadHistoryStats(); loadPnLCalendar(); loadTradeHistoryList(); }
+    if (mode === 'arb')     { loadApexMMHistory(); }
     if (mode === 'bets')    { loadBetsHistory(); }
     if (mode === 'middle')  { loadMiddleHistory(); }
     if (mode === 'dog')     { loadDogHistory(); }
@@ -12934,6 +12937,605 @@ async function loadTradeHistory() {
     loadPnLCalendar();
     loadTradeHistoryList();
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// APEX MM HISTORY — Complete redesign
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function loadApexMMHistory() {
+    const calPanel   = document.getElementById('pnl-calendar-panel');
+    const statsPanel = document.getElementById('apex-mm-stats-panel');
+    const listEl     = document.getElementById('apex-mm-trade-list');
+    if (!listEl) return;
+
+    try {
+        const dateParam = selectedHistoryDays.length ? `&dates=${selectedHistoryDays.join(',')}` : '';
+        const [tradeResp, pnlResp] = await Promise.all([
+            fetch(`${API_BASE}/bot/history?limit=999999&category=ladder_arb${dateParam}`),
+            fetch(`${API_BASE}/pnl`),
+        ]);
+        const tradeData = await tradeResp.json();
+        const pnl = await pnlResp.json();
+
+        // Filter to Apex MM trades only
+        const trades = (tradeData.trades || []).filter(t =>
+            (t.fill_source || '').startsWith('apex_mm')
+        );
+
+        // Calendar
+        if (calPanel) {
+            try {
+                const calResp = await fetch(`${API_BASE}/pnl/calendar?category=arb`);
+                const calData = await calResp.json();
+                renderPnLCalendar(calPanel, calData.days || []);
+            } catch (_) { calPanel.innerHTML = ''; }
+        }
+
+        // Cache for filters
+        window._apexMMAllTrades = trades;
+        window._apexMMPnl = pnl;
+        _apexMMActiveSport = 'all';
+        _apexMMActiveWidth = 'all';
+        _apexMMActivePeriod = 'all';
+
+        // Render panels
+        renderApexMMStats(trades, pnl);
+        renderApexMMWidthBreakdown(trades);
+        renderApexMMSportBreakdown(trades);
+        renderApexMMSportDropdown(_apexMMActiveSport, trades);
+
+        // Trade cards
+        if (trades.length === 0) {
+            listEl.innerHTML = '<p style="color:#555;text-align:center;padding:24px;">No Apex MM trades yet.</p>';
+            return;
+        }
+        listEl.innerHTML = '<div id="apex-mm-card-list" style="display:flex;flex-direction:column;gap:10px;"></div>';
+        filterApexMMLog();
+    } catch (e) {
+        if (listEl) listEl.innerHTML = `<p style="color:#ff4444;">Failed: ${e.message}</p>`;
+    }
+}
+
+// ── Apex MM Stats Panel ──────────────────────────────────────────────────
+
+function renderApexMMStats(trades, pnl) {
+    const statsPanel = document.getElementById('apex-mm-stats-panel');
+    if (!statsPanel) return;
+
+    // Compute stats from filtered trades
+    const netPnl = trades.reduce((s, t) => s + (t.profit_cents || 0) - (t.loss_cents || 0), 0);
+    const wins = trades.filter(t => (t.profit_cents || 0) - (t.loss_cents || 0) > 0).length;
+    const losses = trades.filter(t => (t.profit_cents || 0) - (t.loss_cents || 0) < 0).length;
+    const totalTrades = wins + losses;
+    const winRate = totalTrades > 0 ? Math.round(wins / totalTrades * 100) : 0;
+    const avgProfit = totalTrades > 0 ? (netPnl / totalTrades).toFixed(1) : '—';
+    const filteredContracts = trades.reduce((s, t) => s + (t.quantity || 1), 0);
+
+    // Hold time
+    const holdTrades = trades.filter(t => t.hold_time_s != null);
+    const avgHoldS = holdTrades.length > 0 ? (holdTrades.reduce((s, t) => s + t.hold_time_s, 0) / holdTrades.length) : null;
+    const fmtHold = (s) => { if (s === null) return '—'; if (s < 60) return `${Math.round(s)}s`; if (s < 3600) return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`; return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`; };
+
+    // Snap rate
+    const snappableTrades = trades.filter(t => t.result === 'mm_round_trip');
+    const snappedCount = snappableTrades.filter(t => t.snapped === true).length;
+    const snapRate = snappableTrades.length > 0 ? Math.round(snappedCount / snappableTrades.length * 100) : 0;
+
+    const pnlCol = netPnl >= 0 ? '#00d4ff' : '#ff4444';
+    const avgCol = parseFloat(avgProfit) >= 0 ? '#00d4ff' : '#ff4444';
+
+    // Lifetime stats from /api/pnl (always visible, never filtered)
+    const lifetimePnl = pnl.lifetime_apex_net_cents || 0;
+    const lifetimeWins = pnl.lifetime_apex_wins || 0;
+    const lifetimeLosses = pnl.lifetime_apex_losses || 0;
+    const lifetimeContracts = pnl.lifetime_apex_contracts || 0;
+    const monthlyContracts = pnl.monthly_apex_contracts || 0;
+    const monthlyLabel = pnl.monthly_label || 'This Month';
+    const monthlyGoal = 300000;
+    const monthlyPct = monthlyGoal > 0 ? Math.min(100, Math.round(monthlyContracts / monthlyGoal * 100)) : 0;
+    const lifetimePnlCol = lifetimePnl >= 0 ? '#00d4ff' : '#ff4444';
+
+    // Smart label from active filters
+    const hasDateFilter = selectedHistoryDays.length > 0;
+    const hasSportFilter = _apexMMActiveSport !== 'all';
+    const hasWidthFilter = _apexMMActiveWidth !== 'all';
+    const hasAnyFilter = hasDateFilter || hasSportFilter || hasWidthFilter;
+    let filterLabel = '';
+    if (hasAnyFilter) {
+        const parts = [];
+        if (hasDateFilter) {
+            if (selectedHistoryDays.length === 1) {
+                const d = new Date(selectedHistoryDays[0] + 'T12:00:00');
+                parts.push(d.toLocaleDateString('en', { month: 'short', day: 'numeric' }));
+            } else {
+                const uniqueMonths = [...new Set(selectedHistoryDays.map(d => d.substring(0, 7)))];
+                parts.push(uniqueMonths.length === 1 ? new Date(uniqueMonths[0] + '-01').toLocaleDateString('en', { month: 'short', year: 'numeric' }) : `${selectedHistoryDays.length} days`);
+            }
+        }
+        if (hasSportFilter) parts.push(_apexMMActiveSport);
+        if (hasWidthFilter) parts.push(_apexMMActiveWidth + '¢ W');
+        filterLabel = parts.join(' · ');
+    }
+
+    // Today P&L from /api/pnl (only when no date filter)
+    const dNet = !hasDateFilter ? (pnl.apex_net_cents || 0) : null;
+    const dWins = !hasDateFilter ? (pnl.apex_wins || 0) : 0;
+    const dLosses = !hasDateFilter ? (pnl.apex_losses || 0) : 0;
+    const dCol = dNet !== null ? (dNet >= 0 ? '#00d4ff' : '#ff4444') : null;
+
+    const _bub = (label, value, sub, color) => `<div style="background:#0f1419;border-radius:8px;padding:14px;text-align:center;border:1px solid #00d4ff18;">
+        <div style="color:#00d4ff;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${label}</div>
+        <div style="color:${color};font-size:22px;font-weight:800;">${value}</div>
+        ${sub ? `<div style="color:#555;font-size:10px;margin-top:2px;">${sub}</div>` : ''}
+    </div>`;
+
+    statsPanel.innerHTML = lifetimeWins + lifetimeLosses === 0 && !hasAnyFilter
+        ? '<p style="color:#555;text-align:center;font-size:12px;">No Apex MM trades yet.</p>'
+        : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            ${_bub('Lifetime P&L', `${lifetimePnl >= 0 ? '+' : ''}$${(lifetimePnl / 100).toFixed(2)}`, `${lifetimeWins}W / ${lifetimeLosses}L`, lifetimePnlCol)}
+            ${hasAnyFilter ? _bub(`${filterLabel} P&L`, `${netPnl >= 0 ? '+' : ''}$${(netPnl / 100).toFixed(2)}`, `${wins}W / ${losses}L`, pnlCol) : _bub('Today P&L', `${(dNet || 0) >= 0 ? '+' : ''}$${((dNet || 0) / 100).toFixed(2)}`, `${dWins}W / ${dLosses}L today`, dCol || '#00d4ff')}
+            ${_bub('Win Rate', `${winRate}%`, `${hasAnyFilter ? filterLabel : 'lifetime'}`, '#00d4ff')}
+            ${_bub('Avg Profit', avgProfit === '—' ? '—' : `${parseFloat(avgProfit) >= 0 ? '+' : ''}${avgProfit}¢`, `${totalTrades} trades`, avgCol)}
+            ${_bub('Trades', totalTrades, `${wins}W / ${losses}L`, '#00d4ff')}
+            ${_bub(`${monthlyLabel}`, monthlyContracts.toLocaleString(), `${monthlyPct}% of 300k goal`, monthlyPct >= 100 ? '#00ff88' : '#ff8800')}
+            ${_bub('Lifetime', lifetimeContracts.toLocaleString(), 'contracts', '#ff8800')}
+            ${hasAnyFilter ? _bub(`${filterLabel}`, filteredContracts.toLocaleString(), 'contracts', '#ff8800') : _bub('Total Qty', (totalTrades > 0 ? Math.round(filteredContracts / totalTrades) : 0) + 'x avg', `${filteredContracts.toLocaleString()} contracts`, '#ff8800')}
+            ${_bub('Avg Hold', fmtHold(avgHoldS), `${holdTrades.length} round trips`, '#00d4ff')}
+            ${_bub('Snap Rate', `${snapRate}%`, `${snappedCount}/${snappableTrades.length} snapped`, snapRate > 50 ? '#ff4444' : snapRate > 25 ? '#ffaa00' : '#00ff88')}
+        </div>`;
+}
+
+// ── Apex MM Width Breakdown (filter cards) ────────────────────────────────
+
+function renderApexMMWidthBreakdown(allTrades) {
+    const widthPanel = document.getElementById('apex-mm-width-panel');
+    if (!widthPanel) return;
+
+    const widthMap = {};
+    allTrades.forEach(t => {
+        const w = t.rung_width || (t.combined_price ? 100 - t.combined_price : 0);
+        if (w <= 0) return;
+        if (!widthMap[w]) widthMap[w] = { width: w, wins: 0, losses: 0, net: 0, count: 0, holdTotal: 0, holdCount: 0 };
+        const net = (t.profit_cents || 0) - (t.loss_cents || 0);
+        widthMap[w].net += net;
+        widthMap[w].count++;
+        if (net > 0) widthMap[w].wins++;
+        else if (net < 0) widthMap[w].losses++;
+        if (t.hold_time_s != null) { widthMap[w].holdTotal += t.hold_time_s; widthMap[w].holdCount++; }
+    });
+    const widths = Object.values(widthMap).sort((a, b) => a.width - b.width);
+
+    widthPanel.innerHTML = widths.length === 0 ? '' : `
+        <h4 style="color:#ff8800;font-size:12px;font-weight:700;margin:0 0 10px 0;text-transform:uppercase;letter-spacing:.05em;">Width Performance${_apexMMActiveWidth !== 'all' ? ` · <span style="color:#ff8800;cursor:pointer;" onclick="selectApexMMWidth('all')">Clear ✕</span>` : ''}</h4>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;">
+            ${widths.map(d => {
+                const dCol = d.net >= 0 ? '#00ff88' : '#ff4444';
+                const total = d.wins + d.losses;
+                const avg = d.count > 0 ? (d.net / d.count).toFixed(1) : '0';
+                const isActive = _apexMMActiveWidth === d.width;
+                const borderCol = isActive ? '#ff8800' : 'rgba(0,212,255,0.09)';
+                const bgCol = isActive ? 'rgba(255,136,0,0.08)' : '#0f1419';
+                const avgHold = d.holdCount > 0 ? Math.round(d.holdTotal / d.holdCount) : null;
+                const holdStr = avgHold !== null ? (avgHold < 60 ? `${avgHold}s` : `${Math.floor(avgHold / 60)}m`) : '';
+                const _tierLabel = d.width <= 2 ? 'TIGHT' : d.width <= 4 ? 'STANDARD' : d.width <= 6 ? 'WIDE' : 'MAX';
+                const _tierCol = d.width <= 2 ? '#00ff88' : d.width <= 4 ? '#00d4ff' : d.width <= 6 ? '#ffaa00' : '#ff8800';
+                return `<div data-width="${d.width}" onclick="selectApexMMWidth(${d.width})" style="background:${bgCol};border-radius:8px;padding:10px;text-align:center;border:1px solid ${borderCol};cursor:pointer;transition:border-color 0.15s,background 0.15s;">
+                    <div style="color:#ff8800;font-size:14px;font-weight:800;">W${d.width}¢</div>
+                    <div style="color:${_tierCol};font-size:8px;font-weight:700;letter-spacing:.05em;margin-top:-2px;">${_tierLabel}</div>
+                    <div style="color:${dCol};font-size:13px;font-weight:700;">${d.net >= 0 ? '+' : ''}$${(d.net / 100).toFixed(2)}</div>
+                    <div style="color:#555;font-size:10px;">${d.wins}W/${d.losses}L${total > 0 ? ' · ' + Math.round(d.wins / total * 100) + '%' : ''}</div>
+                    ${holdStr ? `<div style="color:#3a4560;font-size:9px;margin-top:2px;">avg hold ${holdStr}</div>` : ''}
+                    <div style="color:#3a4560;font-size:9px;">${d.count} trades · avg ${avg}¢</div>
+                </div>`;
+            }).join('')}
+        </div>`;
+}
+
+// ── Apex MM Sport Breakdown (pills) ──────────────────────────────────────
+
+function renderApexMMSportBreakdown(allTrades) {
+    const sportPanel = document.getElementById('apex-mm-sport-panel');
+    if (!sportPanel) return;
+
+    const _si = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'NCAAF': '🏈', 'NCAAW': '🏀' };
+    const sportPnl = {};
+    allTrades.forEach(t => {
+        const s = t.sport || 'Other';
+        if (!sportPnl[s]) sportPnl[s] = { net: 0, wins: 0, losses: 0, count: 0 };
+        const n = (t.profit_cents || 0) - (t.loss_cents || 0);
+        sportPnl[s].net += n;
+        sportPnl[s].count++;
+        if (n > 0) sportPnl[s].wins++;
+        else if (n < 0) sportPnl[s].losses++;
+    });
+    const sportEntries = Object.entries(sportPnl).sort((a, b) => b[1].net - a[1].net);
+
+    if (sportEntries.length > 0) {
+        const headingScope = selectedHistoryDays.length > 0 ? '' : ' (Lifetime)';
+        sportPanel.innerHTML = `
+            <h4 style="color:#ff8800;font-size:12px;font-weight:700;margin:0 0 10px 0;text-transform:uppercase;letter-spacing:.05em;">By Sport${headingScope}${_apexMMActiveSport !== 'all' ? ` · <span style="color:#ff8800;cursor:pointer;" onclick="selectApexMMSport('all')">Clear filter ✕</span>` : ''}</h4>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;">
+                ${sportEntries.map(([sport, d]) => {
+                    const isActive = _apexMMActiveSport === sport;
+                    const col = d.net >= 0 ? '#00ff88' : '#ff4444';
+                    const icon = _si[sport] || '';
+                    const total = d.wins + d.losses;
+                    const wr = total > 0 ? Math.round(d.wins / total * 100) : 0;
+                    const borderCol = isActive ? '#ff8800' : 'rgba(0,212,255,0.09)';
+                    const bgCol = isActive ? '#ff880012' : '#0f1419';
+                    return `<div onclick="selectApexMMSport('${sport}')" style="background:${bgCol};border-radius:8px;padding:12px 16px;border:1px solid ${borderCol};text-align:center;min-width:100px;flex:1;cursor:pointer;transition:border-color 0.15s,background 0.15s;">
+                        <div style="font-size:16px;margin-bottom:2px;">${icon}</div>
+                        <div style="color:${isActive ? '#ff8800' : '#00d4ff'};font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${sport}</div>
+                        <div style="color:${col};font-size:18px;font-weight:800;">${d.net >= 0 ? '+' : ''}$${(d.net / 100).toFixed(2)}</div>
+                        <div style="color:#555;font-size:9px;margin-top:2px;">${d.wins}W/${d.losses}L · ${wr}%</div>
+                        <div style="color:#3a4560;font-size:9px;">${d.count} trades</div>
+                    </div>`;
+                }).join('')}
+            </div>`;
+    } else {
+        sportPanel.innerHTML = '';
+    }
+}
+
+// ── Apex MM Sport Dropdown (period/score/width drill-down) ─────────────
+
+function renderApexMMSportDropdown(sport, allTrades) {
+    const dropdown = document.getElementById('apex-mm-sport-dropdown');
+    if (!dropdown) return;
+    if (sport === 'all') { dropdown.style.display = 'none'; dropdown.innerHTML = ''; return; }
+    dropdown.style.display = '';
+
+    const sportTrades = allTrades.filter(t => (t.sport || 'Other') === sport);
+    if (sportTrades.length === 0) { dropdown.innerHTML = `<p style="color:#555;font-size:11px;">No ${sport} trades.</p>`; return; }
+
+    // Period breakdown
+    const periodMap = {};
+    sportTrades.forEach(t => {
+        const gc = t.game_context || {};
+        const p = gc.period || (t.game_phase === 'pregame' ? 0 : null);
+        if (p === null) return;
+        if (!periodMap[p]) periodMap[p] = { wins: 0, losses: 0, net: 0, count: 0 };
+        const n = (t.profit_cents || 0) - (t.loss_cents || 0);
+        periodMap[p].net += n;
+        periodMap[p].count++;
+        if (n > 0) periodMap[p].wins++;
+        else if (n < 0) periodMap[p].losses++;
+    });
+    const periodLabels = SPORT_PERIOD_LABELS[sport] || {};
+    const periods = Object.entries(periodMap).sort((a, b) => Number(a[0]) - Number(b[0]));
+
+    // Score diff breakdown
+    const diffBuckets = { '0-5': { wins: 0, losses: 0, net: 0, count: 0 }, '6-10': { wins: 0, losses: 0, net: 0, count: 0 }, '11-20': { wins: 0, losses: 0, net: 0, count: 0 }, '21+': { wins: 0, losses: 0, net: 0, count: 0 } };
+    sportTrades.forEach(t => {
+        const gc = t.game_context || {};
+        const diff = gc.score_diff;
+        if (diff === undefined || diff === null) return;
+        const bucket = diff <= 5 ? '0-5' : diff <= 10 ? '6-10' : diff <= 20 ? '11-20' : '21+';
+        const n = (t.profit_cents || 0) - (t.loss_cents || 0);
+        diffBuckets[bucket].net += n;
+        diffBuckets[bucket].count++;
+        if (n > 0) diffBuckets[bucket].wins++;
+        else if (n < 0) diffBuckets[bucket].losses++;
+    });
+
+    // Width breakdown within sport
+    const widthMap = {};
+    const scopedTrades = _apexMMActivePeriod !== 'all' ? sportTrades.filter(t => {
+        const gc = t.game_context || {};
+        return (gc.period || 0) === _apexMMActivePeriod;
+    }) : sportTrades;
+    scopedTrades.forEach(t => {
+        const w = t.rung_width || (t.combined_price ? 100 - t.combined_price : 0);
+        if (w <= 0) return;
+        if (!widthMap[w]) widthMap[w] = { width: w, wins: 0, losses: 0, net: 0, count: 0 };
+        const n = (t.profit_cents || 0) - (t.loss_cents || 0);
+        widthMap[w].net += n;
+        widthMap[w].count++;
+        if (n > 0) widthMap[w].wins++;
+        else if (n < 0) widthMap[w].losses++;
+    });
+    const widthEntries = Object.values(widthMap).sort((a, b) => a.width - b.width);
+
+    let html = '';
+
+    // Period cards
+    if (periods.length > 0) {
+        html += `<h4 style="color:#00d4ff;font-size:11px;font-weight:700;margin:0 0 8px 0;text-transform:uppercase;letter-spacing:.05em;">By Period</h4>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(80px,1fr));gap:6px;margin-bottom:16px;">
+            ${periods.map(([p, d]) => {
+                const pNum = Number(p);
+                const label = pNum === 0 ? 'Pre' : (periodLabels[pNum] || `P${pNum}`);
+                const isActive = _apexMMActivePeriod === pNum;
+                const col = d.net >= 0 ? '#00ff88' : '#ff4444';
+                const total = d.wins + d.losses;
+                return `<div onclick="selectApexMMPeriod(${pNum})" style="background:${isActive ? '#ff880012' : '#0f1419'};border-radius:6px;padding:8px;text-align:center;border:1px solid ${isActive ? '#ff8800' : '#00d4ff18'};cursor:pointer;transition:border-color 0.15s;">
+                    <div style="color:#00d4ff;font-size:10px;font-weight:700;">${label}</div>
+                    <div style="color:${col};font-size:13px;font-weight:700;">${d.net >= 0 ? '+' : ''}${d.net}¢</div>
+                    <div style="color:#555;font-size:9px;">${d.wins}W/${d.losses}L${total > 0 ? ' · ' + Math.round(d.wins / total * 100) + '%' : ''}</div>
+                </div>`;
+            }).join('')}
+        </div>`;
+    }
+
+    // Width by sport (scoped by period if selected)
+    if (widthEntries.length > 0) {
+        const scopeLabel = _apexMMActivePeriod !== 'all' ? ` (${periodLabels[_apexMMActivePeriod] || 'P' + _apexMMActivePeriod})` : '';
+        html += `<h4 style="color:#00d4ff;font-size:11px;font-weight:700;margin:0 0 8px 0;text-transform:uppercase;letter-spacing:.05em;">Width in ${sport}${scopeLabel}</h4>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:6px;margin-bottom:16px;">
+            ${widthEntries.map(d => {
+                const col = d.net >= 0 ? '#00ff88' : '#ff4444';
+                const total = d.wins + d.losses;
+                return `<div style="background:#0f1419;border-radius:6px;padding:8px;text-align:center;border:1px solid #00d4ff18;">
+                    <div style="color:#ff8800;font-size:12px;font-weight:800;">W${d.width}¢</div>
+                    <div style="color:${col};font-size:12px;font-weight:700;">${d.net >= 0 ? '+' : ''}$${(d.net / 100).toFixed(2)}</div>
+                    <div style="color:#555;font-size:9px;">${d.wins}W/${d.losses}L${total > 0 ? ' · ' + Math.round(d.wins / total * 100) + '%' : ''}</div>
+                    <div style="color:#3a4560;font-size:9px;">${d.count} trades</div>
+                </div>`;
+            }).join('')}
+        </div>`;
+    }
+
+    // Score diff
+    const diffEntries = Object.entries(diffBuckets).filter(([_, d]) => d.count > 0);
+    if (diffEntries.length > 0) {
+        html += `<h4 style="color:#00d4ff;font-size:11px;font-weight:700;margin:0 0 8px 0;text-transform:uppercase;letter-spacing:.05em;">By Score Diff</h4>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(80px,1fr));gap:6px;">
+            ${diffEntries.map(([label, d]) => {
+                const col = d.net >= 0 ? '#00ff88' : '#ff4444';
+                const diffColor = label === '0-5' ? '#00ff88' : label === '6-10' ? '#ffaa00' : label === '11-20' ? '#ff8800' : '#ff4444';
+                return `<div style="background:#0f1419;border-radius:6px;padding:8px;text-align:center;border:1px solid #00d4ff18;">
+                    <div style="color:${diffColor};font-size:10px;font-weight:700;">±${label}</div>
+                    <div style="color:${col};font-size:12px;font-weight:700;">${d.net >= 0 ? '+' : ''}${d.net}¢</div>
+                    <div style="color:#555;font-size:9px;">${d.wins}W/${d.losses}L</div>
+                </div>`;
+            }).join('')}
+        </div>`;
+    }
+
+    dropdown.innerHTML = html || `<p style="color:#555;font-size:11px;">No breakdown data for ${sport} yet.</p>`;
+}
+
+// ── Apex MM Filter Application ───────────────────────────────────────────
+
+function _applyApexMMFilters(trades) {
+    let f = trades;
+    if (_apexMMActiveSport !== 'all') f = f.filter(t => (t.sport || 'Other') === _apexMMActiveSport);
+    if (_apexMMActiveWidth !== 'all') f = f.filter(t => (t.rung_width || (t.combined_price ? 100 - t.combined_price : 0)) === _apexMMActiveWidth);
+    return f;
+}
+
+// ── Apex MM Trade Cards ──────────────────────────────────────────────────
+
+function filterApexMMLog() {
+    const container = document.getElementById('apex-mm-card-list');
+    if (!container) return;
+    const allTrades = window._apexMMAllTrades || [];
+    const filtered = _applyApexMMFilters(allTrades);
+
+    if (filtered.length === 0) {
+        container.innerHTML = '<p style="color:#555;text-align:center;padding:16px;">No trades match current filters.</p>';
+        return;
+    }
+
+    const _si = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'NCAAF': '🏈', 'NCAAW': '🏀' };
+
+    const cards = filtered.slice(0, 100).map(t => {
+        const pnl = t.net_pnl != null ? t.net_pnl : ((t.profit_cents || 0) - (t.loss_cents || 0));
+        const netCol = pnl > 0 ? '#00ff88' : pnl < 0 ? '#ff4444' : '#8892a6';
+        const teamName = formatBotDisplayName(t.ticker || '', t.spread_line || '');
+        const dt = new Date(t.timestamp * 1000);
+        const dateStr = dt.toLocaleDateString([], { month: 'short', day: 'numeric' });
+        const timeStr = dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const qty = t.quantity || 1;
+        const sport = t.sport || 'Other';
+        const sportEmoji = _si[sport] || '';
+        const width = t.rung_width || (t.combined_price ? 100 - t.combined_price : 0);
+
+        // Hold time
+        let holdStr = '';
+        if (t.hold_time_s != null) {
+            holdStr = t.hold_time_s < 60 ? `${Math.round(t.hold_time_s)}s` : `${Math.floor(t.hold_time_s / 60)}m ${Math.round(t.hold_time_s % 60)}s`;
+        } else if (t.hold_time_ms != null) {
+            holdStr = `${(t.hold_time_ms / 1000).toFixed(1)}s`;
+        }
+
+        // Result badge
+        let badge, badgeBg, badgeCol, icon;
+        if (t.result === 'mm_round_trip') {
+            badge = 'ROUND TRIP';
+            badgeCol = pnl >= 0 ? '#00ff88' : '#ff4444';
+            badgeBg = pnl >= 0 ? '#00ff8822' : '#ff444422';
+            icon = pnl >= 0 ? '💰' : '⛔';
+        } else if (t.result === 'mm_sellback') {
+            badge = 'SELLBACK';
+            badgeCol = pnl >= 0 ? '#00ff88' : '#ff8800';
+            badgeBg = pnl >= 0 ? '#00ff8822' : '#ff880022';
+            icon = '🚪';
+        } else if (t.result === 'mm_arb_complete') {
+            badge = 'ARB EXIT';
+            badgeCol = '#ff8800';
+            badgeBg = '#ff880022';
+            icon = '📤';
+        } else if ((t.result || '').startsWith('mm_settlement')) {
+            badge = 'SETTLED';
+            badgeCol = '#00d4ff';
+            badgeBg = '#00d4ff22';
+            icon = '🏁';
+        } else {
+            badge = t.result || 'UNKNOWN';
+            badgeCol = '#8892a6';
+            badgeBg = '#8892a622';
+            icon = '❓';
+        }
+
+        // Phase badge
+        const phase = t.game_phase || '';
+        const phaseBadge = phase ? `<span style="background:${phase === 'live' ? '#00ff8815' : '#8892a615'};color:${phase === 'live' ? '#00ff88' : '#8892a6'};padding:2px 7px;border-radius:4px;font-size:9px;font-weight:600;">${phase.toUpperCase()}</span>` : '';
+
+        // Build body based on result type
+        let bodyHtml = '';
+        if (t.result === 'mm_round_trip') {
+            const yp = t.yes_price || 0;
+            const np = t.no_price || 0;
+            const comb = t.combined_price || (yp + np);
+            const combCol = comb <= 98 ? '#00ff88' : comb <= 100 ? '#ffaa00' : '#ff4444';
+            const yesCol = '#00d4ff';
+            const noCol = '#ff6666';
+            bodyHtml = `
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+                    <div style="background:#0a0e16;border-radius:8px;padding:10px 12px;border:1px solid ${yesCol}18;">
+                        <div style="color:${yesCol};font-size:9px;font-weight:700;text-transform:uppercase;margin-bottom:5px;">YES</div>
+                        <div style="display:flex;align-items:baseline;gap:4px;">
+                            <span style="color:${yesCol};font-weight:800;font-size:16px;">${yp}¢</span>
+                        </div>
+                        <div style="color:#5a6484;font-size:10px;margin-top:2px;">x${qty} · $${((qty * yp) / 100).toFixed(2)}</div>
+                    </div>
+                    <div style="background:#0a0e16;border-radius:8px;padding:10px 12px;border:1px solid ${noCol}18;">
+                        <div style="color:${noCol};font-size:9px;font-weight:700;text-transform:uppercase;margin-bottom:5px;">NO</div>
+                        <div style="display:flex;align-items:baseline;gap:4px;">
+                            <span style="color:${noCol};font-weight:800;font-size:16px;">${np}¢</span>
+                        </div>
+                        <div style="color:#5a6484;font-size:10px;margin-top:2px;">Combined: <span style="color:${combCol};font-weight:700;">${comb}¢</span></div>
+                    </div>
+                </div>`;
+        } else if (t.result === 'mm_sellback') {
+            const heldSide = (t.held_side || t.sell_side || 'no').toUpperCase();
+            const sellPrice = t.sell_price || 0;
+            const avgCost = t.held_avg || 0;
+            bodyHtml = `
+                <div style="background:#0a0e16;border-radius:8px;padding:10px 12px;border:1px solid #ff880018;margin-bottom:8px;">
+                    <div style="color:#ff8800;font-size:9px;font-weight:700;text-transform:uppercase;margin-bottom:5px;">SOLD ${heldSide}</div>
+                    <div style="display:flex;gap:12px;align-items:baseline;">
+                        <span style="color:#fff;font-weight:800;font-size:16px;">${sellPrice}¢</span>
+                        <span style="color:#5a6484;font-size:10px;">cost ${avgCost}¢</span>
+                        <span style="color:${netCol};font-weight:700;font-size:12px;">${pnl >= 0 ? '+' : ''}${pnl}¢</span>
+                    </div>
+                    <div style="color:#5a6484;font-size:10px;margin-top:2px;">x${qty} contracts${t.fee_cents ? ` · fee ${t.fee_cents}¢` : ''}</div>
+                </div>`;
+        } else if (t.result === 'mm_arb_complete') {
+            const heldSide = (t.held_side || 'yes').toUpperCase();
+            const heldAvg = t.held_avg || 0;
+            const exitSide = (t.exit_side || (heldSide === 'YES' ? 'no' : 'yes')).toUpperCase();
+            const exitPrice = t.exit_price || 0;
+            const comb = t.combined_price || (heldAvg + exitPrice);
+            bodyHtml = `
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+                    <div style="background:#0a0e16;border-radius:8px;padding:10px 12px;border:1px solid #00d4ff18;">
+                        <div style="color:#00d4ff;font-size:9px;font-weight:700;text-transform:uppercase;margin-bottom:5px;">HELD ${heldSide}</div>
+                        <div style="color:#fff;font-weight:800;font-size:16px;">${heldAvg}¢</div>
+                        <div style="color:#5a6484;font-size:10px;margin-top:2px;">x${qty} · cost $${((qty * heldAvg) / 100).toFixed(2)}</div>
+                    </div>
+                    <div style="background:#0a0e16;border-radius:8px;padding:10px 12px;border:1px solid #ff880018;">
+                        <div style="color:#ff8800;font-size:9px;font-weight:700;text-transform:uppercase;margin-bottom:5px;">BOUGHT ${exitSide}</div>
+                        <div style="color:#fff;font-weight:800;font-size:16px;">${exitPrice}¢</div>
+                        <div style="color:#5a6484;font-size:10px;margin-top:2px;">Combined: ${comb}¢</div>
+                    </div>
+                </div>`;
+        } else {
+            // Settlement or unknown
+            bodyHtml = `<div style="background:#0a0e16;border-radius:8px;padding:10px 12px;border:1px solid #00d4ff18;margin-bottom:8px;">
+                <div style="color:#8892a6;font-size:11px;">x${qty} contracts → <strong style="color:${netCol};">${pnl >= 0 ? '+' : ''}${pnl}¢</strong>${t.fee_cents ? ` · fee ${t.fee_cents}¢` : ''}</div>
+            </div>`;
+        }
+
+        const botIdShort = (t.bot_id || '').slice(-12);
+
+        return `
+        <div style="background:#0f1419;border:1px solid ${pnl > 0 ? '#00ff8818' : pnl < 0 ? '#ff444418' : '#00d4ff15'};border-radius:12px;padding:14px 16px;border-left:3px solid ${netCol};">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <span style="font-size:20px;filter:drop-shadow(0 0 4px rgba(0,212,255,0.3));">${sportEmoji || icon}</span>
+                    <div>
+                        <div style="color:#e8ecf2;font-weight:700;font-size:14px;">${teamName}</div>
+                        <div style="display:flex;gap:5px;margin-top:3px;flex-wrap:wrap;">
+                            <span style="background:#00d4ff22;color:#00d4ff;padding:2px 7px;border-radius:4px;font-size:9px;font-weight:700;">△ APEX MM</span>
+                            <span style="background:${badgeBg};color:${badgeCol};padding:2px 7px;border-radius:4px;font-size:9px;font-weight:700;">${badge}</span>
+                            ${width > 0 ? `<span style="background:#ff880022;color:#ff8800;padding:2px 7px;border-radius:4px;font-size:9px;font-weight:700;">W${width}¢</span>` : ''}
+                            ${t.snapped ? `<span style="background:#ffaa0022;color:#ffaa00;padding:2px 7px;border-radius:4px;font-size:9px;font-weight:700;">SNAPPED</span>` : ''}
+                            ${phaseBadge}
+                        </div>
+                    </div>
+                </div>
+                <div style="text-align:right;">
+                    <div style="color:${netCol};font-weight:800;font-size:20px;text-shadow:0 0 8px ${netCol}33;">${pnl >= 0 ? '+' : ''}$${(Math.abs(pnl) / 100).toFixed(2)}</div>
+                    <div style="color:${netCol};font-size:10px;font-weight:600;opacity:0.7;">${pnl >= 0 ? '+' : ''}${pnl}¢</div>
+                </div>
+            </div>
+
+            ${bodyHtml}
+
+            <div style="display:flex;gap:10px;align-items:center;font-size:10px;padding-top:8px;border-top:1px solid #00d4ff12;flex-wrap:wrap;">
+                <span style="color:#3a4560;">${dateStr} ${timeStr}</span>
+                ${holdStr ? `<span style="color:#00d4ff;font-weight:700;">⏱ ${holdStr}</span>` : ''}
+                ${t.fee_cents && t.result === 'mm_round_trip' ? `<span style="color:#5a6484;">fee ${t.fee_cents}¢</span>` : ''}
+                ${t.round_trip_num ? `<span style="color:#5a6484;">RT #${t.round_trip_num}</span>` : ''}
+                <span style="color:#3a4560;font-size:9px;">${sport}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;margin-top:4px;padding-top:4px;border-top:1px solid #00d4ff08;">
+                <span style="color:#3a4560;font-size:9px;font-family:monospace;">${botIdShort}</span>
+                <button onclick="navigator.clipboard.writeText('${t.bot_id || ''}');this.textContent='✓';setTimeout(()=>this.textContent='📋',1000)" style="background:none;border:none;cursor:pointer;font-size:9px;padding:0;color:#3a4560;" title="Copy bot ID">📋</button>
+            </div>
+        </div>`;
+    }).join('');
+
+    container.innerHTML = cards;
+}
+
+// ── Apex MM Filter Toggle Functions ──────────────────────────────────────
+
+function selectApexMMSport(sport) {
+    if (sport === _apexMMActiveSport && sport !== 'all') sport = 'all';
+    _apexMMActiveSport = sport;
+    _apexMMActivePeriod = 'all';
+
+    const scrollY = window.scrollY;
+    const allTrades = window._apexMMAllTrades || [];
+    const filtered = _applyApexMMFilters(allTrades);
+
+    renderApexMMStats(filtered, window._apexMMPnl || {});
+    // Sport pills scoped by width filter
+    const widthScoped = _apexMMActiveWidth !== 'all' ? allTrades.filter(t => (t.rung_width || (t.combined_price ? 100 - t.combined_price : 0)) === _apexMMActiveWidth) : allTrades;
+    renderApexMMSportBreakdown(widthScoped);
+    renderApexMMSportDropdown(_apexMMActiveSport, allTrades);
+    filterApexMMLog();
+    window.scrollTo({ top: scrollY, behavior: 'instant' });
+}
+
+function selectApexMMWidth(width) {
+    if (width === _apexMMActiveWidth && width !== 'all') width = 'all';
+    _apexMMActiveWidth = width;
+
+    // In-place highlight update
+    document.querySelectorAll('#apex-mm-width-panel [data-width]').forEach(card => {
+        const w = Number(card.getAttribute('data-width'));
+        const isActive = w === _apexMMActiveWidth;
+        card.style.borderColor = isActive ? '#ff8800' : 'rgba(0,212,255,0.09)';
+        card.style.background = isActive ? 'rgba(255,136,0,0.08)' : '#0f1419';
+    });
+
+    const scrollY = window.scrollY;
+    const allTrades = window._apexMMAllTrades || [];
+    const filtered = _applyApexMMFilters(allTrades);
+
+    renderApexMMStats(filtered, window._apexMMPnl || {});
+    // Sport pills scoped by width filter
+    const widthScoped = _apexMMActiveWidth !== 'all' ? allTrades.filter(t => (t.rung_width || (t.combined_price ? 100 - t.combined_price : 0)) === _apexMMActiveWidth) : allTrades;
+    renderApexMMSportBreakdown(widthScoped);
+    renderApexMMSportDropdown(_apexMMActiveSport, allTrades);
+    filterApexMMLog();
+    window.scrollTo({ top: scrollY, behavior: 'instant' });
+}
+
+function selectApexMMPeriod(period) {
+    if (period === _apexMMActivePeriod && period !== 'all') period = 'all';
+    _apexMMActivePeriod = period;
+    const scrollY = window.scrollY;
+    const allTrades = window._apexMMAllTrades || [];
+    renderApexMMSportDropdown(_apexMMActiveSport, allTrades);
+    window.scrollTo({ top: scrollY, behavior: 'instant' });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 
 // ── Straight Bets history ───────────────────────────────────────────────────
 async function loadBetsHistory() {

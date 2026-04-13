@@ -6394,10 +6394,10 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const exitSide = netYes > netNo ? 'NO' : 'YES';
         const netHeld = Math.abs(netYes - netNo);
         const avgCost = netYes > netNo ? avgYesCost : avgNoCost;
-        const invPct = invLimit > 0 ? Math.min(100, Math.round(netHeld / invLimit * 100)) : 0;
-        // LIVE combined = cost to exit RIGHT NOW at market (same calc as stop-loss)
+        const exitBidLive = exitSide === 'YES' ? liveYesBid : liveNoBid;
         const exitAskLive = exitSide === 'YES' ? liveYesAsk : liveNoAsk;
         const heldBidLive = longSide === 'YES' ? liveYesBid : liveNoBid;
+        // Live combined
         const liveBuyOpp = (exitAskLive > 0) ? avgCost + exitAskLive : 999;
         const liveSellHeld = (heldBidLive > 0) ? avgCost + (100 - heldBidLive) : 999;
         const liveCombined = Math.min(liveBuyOpp, liveSellHeld);
@@ -6405,40 +6405,26 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const combined = (liveCombined < 999 && exitPrice > 0) ? liveCombined : targetCombined;
         const profit = 100 - combined;
         const profitCol = profit > 2 ? '#00ff88' : profit > 0 ? '#ffaa00' : '#ff4444';
-        const targetProfit = 100 - targetCombined;
         const slThreshold = _apexStopLossThreshold(width, avgCost);
         const stopLoss = 100 + slThreshold;
-        const slDist = stopLoss - combined;
+        const origTarget = bot._exit_target_price || exitPrice;
+        const origTargetCombined = avgCost + origTarget;
         const exitPostedAt = bot._exit_posted_at || 0;
         const skewSec = exitPostedAt > 0 ? Math.floor(nowSec - exitPostedAt) : 0;
         const timeStr = skewSec >= 60 ? `${Math.floor(skewSec/60)}m${skewSec%60}s` : `${skewSec}s`;
-        // Anchor fills = total fills on the held side from ladder
-        const anchorOrders = longSide === 'YES' ? (bot.yes_orders || {}) : (bot.no_orders || {});
-        const anchorTotalFills = Object.values(anchorOrders).reduce((s, l) => s + (l.fill_qty || 0), 0);
-        const anchorTotalQty = Object.values(anchorOrders).reduce((s, l) => s + (l.qty || (bot.base_qty || 10)), 0);
-        const anchorFp = anchorTotalQty > 0 ? Math.min(100, Math.round(anchorTotalFills / anchorTotalQty * 100)) : 0;
-        // Hedge fills
+        // Hedge fill progress
         const hedgeFp = exitTotalQty > 0 ? Math.min(100, Math.round(exitFillQty / exitTotalQty * 100)) : 0;
-        // Walk status
-        const walkCount = bot._exit_walk_count || 0;
-        const wallParked = bot._wall_parked || false;
-        const origTarget = bot._exit_target_price || exitPrice;
-        const origTargetCombined = avgCost + origTarget;
-        // Use posted combined (not live) for walk status — live fluctuates but posted is where we actually are
-        const postedCombined = avgCost + exitPrice;
-        let slBadge = '';
-        if (combined >= stopLoss) slBadge = '<span style="color:#ff4444;font-weight:800;animation:pulse 1.5s infinite;">SL</span> ';
-        else if (combined >= 100) slBadge = '<span style="color:#ff4444;font-weight:800;">SL</span> ';
-        let walkLabel = '';
+        // Walk status badge
+        let walkBadge = '';
         if (exitPrice > 0) {
-            if (combined >= stopLoss) walkLabel = `<span style="color:#ff4444;font-size:8px;font-weight:700;">STOP LOSS</span>`;
-            else if (combined > 100) walkLabel = `<span style="color:#ff4444;font-size:8px;font-weight:700;">PARKED</span>`;
-            else if (combined === 100) walkLabel = `<span style="color:#ffaa00;font-size:8px;font-weight:700;">WALL</span>`;
-            else if (combined <= 99 && exitPrice > origTarget) walkLabel = `<span style="color:#00ff88;font-size:8px;font-weight:700;">SNAP +${100 - combined}c</span>`;
-            else walkLabel = `<span style="color:#00ff88;font-size:8px;font-weight:700;">TARGET +${100 - combined}c</span>`;
+            if (combined >= stopLoss) walkBadge = `<span style="background:#ff444422;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;animation:pulse 1.5s infinite;">STOP LOSS</span>`;
+            else if (combined > 100) walkBadge = `<span style="background:#ff444422;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">PARKED</span>`;
+            else if (combined === 100) walkBadge = `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">WALL</span>`;
+            else if (exitPrice > origTarget) walkBadge = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">SNAPPED</span>`;
+            else walkBadge = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">TARGET</span>`;
         }
-        // Walk bar — full range from target to stop-loss
-        let walkBarHtml = '';
+        // Zone bar
+        let zoneBarHtml = '';
         if (exitPrice > 0) {
             const barMin = origTargetCombined;
             const barMax = stopLoss;
@@ -6446,62 +6432,68 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             const combPct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((combined - barMin) / barRange * 100))) : 0;
             const bePct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((100 - barMin) / barRange * 100))) : 50;
             const markerCol = combined <= origTargetCombined + 1 ? '#00ff88' : combined < 100 ? '#ffaa00' : '#ff4444';
-            walkBarHtml = `<div style="margin-top:8px;padding:8px 10px;background:#060a12;border:1px solid #1e274030;border-radius:8px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                    <span style="color:#8892a6;font-size:8px;font-weight:700;letter-spacing:.06em;">WALK</span>
-                    <span style="font-size:8px;">${walkLabel}</span>
-                    <span style="color:#556;font-size:8px;">${origTargetCombined}c → ${stopLoss}c</span>
-                </div>
-                <div style="position:relative;height:8px;background:#0a1018;border-radius:4px;overflow:hidden;">
+            zoneBarHtml = `<div style="margin-top:6px;">
+                <div style="position:relative;height:6px;background:#0a1018;border-radius:3px;overflow:hidden;">
                     <div style="position:absolute;left:0;width:${bePct}%;height:100%;background:linear-gradient(90deg,#00ff8818,#00ff8808);"></div>
                     <div style="position:absolute;left:${bePct}%;width:${100-bePct}%;height:100%;background:linear-gradient(90deg,#ff444410,#ff444420);"></div>
                     <div style="position:absolute;left:${bePct}%;width:2px;height:100%;background:#ffaa00;z-index:2;"></div>
                     <div style="position:absolute;left:${combPct}%;width:8px;height:100%;background:${markerCol};border-radius:4px;z-index:3;transform:translateX(-4px);box-shadow:0 0 6px ${markerCol}80;"></div>
                 </div>
-                <div style="display:flex;justify-content:space-between;margin-top:3px;font-size:7px;font-weight:700;">
+                <div style="display:flex;justify-content:space-between;margin-top:2px;font-size:7px;font-weight:700;">
                     <span style="color:#00ff88;">${origTargetCombined}c</span>
                     <span style="color:#ffaa00;">100c</span>
                     <span style="color:#ff4444;">${stopLoss}c</span>
                 </div>
             </div>`;
         }
+        // Entry side colors
+        const entryCol = longSide === 'YES' ? '#00d4ff' : '#ff7043';
+        const exitCol = longSide === 'YES' ? '#ff7043' : '#00d4ff';
+        // Build side-by-side boxes: entry on left, exit on right
+        const entryBoxSide = longSide;
+        const exitBoxSide = exitSide;
+        const _sideBox = (label, side, price, subtext, fillPct, fillText, col, bidAsk) => {
+            return `<div style="padding:8px 10px;background:${col}08;border:1px solid ${col}20;border-radius:6px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                    <span style="color:${col};font-size:9px;font-weight:800;">${side} ${label}</span>
+                    <span style="color:${col};font-size:12px;font-weight:800;">${price}</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
+                    <span style="color:#556;font-size:9px;">${subtext}</span>
+                    <span style="font-size:8px;"><span style="color:#00ff88;">${bidAsk[0]}</span><span style="color:#334;"> / </span><span style="color:#ff4444;">${bidAsk[1]}</span></span>
+                </div>
+                <div style="height:4px;background:#0a1018;border-radius:2px;overflow:hidden;">
+                    <div style="width:${fillPct}%;height:100%;background:${col};border-radius:2px;transition:width .3s;"></div>
+                </div>
+                <div style="color:#334;font-size:7px;margin-top:1px;text-align:right;">${fillText}</div>
+            </div>`;
+        };
+        // Anchor fills from ladder
+        const anchorOrders = longSide === 'YES' ? (bot.yes_orders || {}) : (bot.no_orders || {});
+        const anchorTotalFills = Object.values(anchorOrders).reduce((s, l) => s + (l.fill_qty || 0), 0);
+        const anchorTotalQty = Object.values(anchorOrders).reduce((s, l) => s + (l.qty || (bot.base_qty || 10)), 0);
+        const anchorFp = anchorTotalQty > 0 ? Math.min(100, Math.round(anchorTotalFills / anchorTotalQty * 100)) : 0;
+        const entryBidAsk = longSide === 'YES' ? [liveYesBid, liveYesAsk] : [liveNoBid, liveNoAsk];
+        const exitBidAsk = exitSide === 'YES' ? [liveYesBid, liveYesAsk] : [liveNoBid, liveNoAsk];
+        const entryBox = _sideBox('ENTRY', entryBoxSide, `${avgCost}c`, `${netHeld}x held`, anchorFp, `${anchorTotalFills}/${anchorTotalQty}`, entryCol, entryBidAsk);
+        const exitBox = _sideBox('EXIT', exitBoxSide, exitPrice > 0 ? `${exitPrice}c` : '--', exitPrice > 0 ? `${exitFillQty}/${exitTotalQty} filled` : 'pending', hedgeFp, `${exitFillQty}/${exitTotalQty}`, exitCol, exitBidAsk);
+        // Order: YES always on left
+        const leftBox = longSide === 'YES' ? entryBox : exitBox;
+        const rightBox = longSide === 'YES' ? exitBox : entryBox;
         positionBarHtml = `<div style="margin-bottom:8px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                <span style="color:${profitCol};font-weight:800;font-size:16px;">${profit >= 0 ? '+' : ''}${profit}c</span>
-                <span style="color:#556;font-size:9px;">live ${combined}c${targetCombined !== combined && exitPrice > 0 ? ` · target ${targetCombined}c (+${targetProfit}c)` : ''} · SL ${stopLoss}c</span>
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <span style="color:${profitCol};font-weight:800;font-size:16px;">${profit >= 0 ? '+' : ''}${profit}c</span>
+                    <span style="color:#556;font-size:9px;">${combined}c combined</span>
+                    ${walkBadge}
+                </div>
                 ${skewSec > 0 ? `<span style="color:#445;font-size:9px;">${timeStr}</span>` : ''}
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
-                <div style="padding:8px 10px;background:${longSide === 'YES' ? '#00d4ff08' : '#ff704308'};border:1px solid ${longSide === 'YES' ? '#00d4ff20' : '#ff704320'};border-radius:6px;">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                        <span style="color:${longSide === 'YES' ? '#00d4ff' : '#ff7043'};font-size:9px;font-weight:800;">YES ${longSide === 'YES' ? 'ENTRY' : 'EXIT'}</span>
-                        <span style="color:${longSide === 'YES' ? '#00d4ff' : '#ff7043'};font-size:10px;font-weight:700;">${longSide === 'YES' ? avgCost + 'c' : (exitPrice > 0 ? exitPrice + 'c' : '--')}</span>
-                    </div>
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
-                        <span style="color:#556;font-size:9px;">${longSide === 'YES' ? netHeld + 'x held' : (exitPrice > 0 ? exitFillQty + '/' + exitTotalQty + ' filled' : 'pending')}</span>
-                        <span style="font-size:8px;"><span style="color:#00ff88;">${liveYesBid}</span><span style="color:#334;"> / </span><span style="color:#ff4444;">${liveYesAsk}</span></span>
-                    </div>
-                    <div style="height:4px;background:#0a1018;border-radius:2px;overflow:hidden;">
-                        <div style="width:${longSide === 'YES' ? anchorFp : hedgeFp}%;height:100%;background:${longSide === 'YES' ? '#00d4ff' : '#ff7043'};border-radius:2px;transition:width .3s;"></div>
-                    </div>
-                    <div style="color:#334;font-size:7px;margin-top:1px;text-align:right;">${longSide === 'YES' ? anchorTotalFills + '/' + anchorTotalQty : exitFillQty + '/' + exitTotalQty}</div>
-                </div>
-                <div style="padding:8px 10px;background:${longSide === 'NO' ? '#00d4ff08' : '#ff704308'};border:1px solid ${longSide === 'NO' ? '#00d4ff20' : '#ff704320'};border-radius:6px;">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                        <span style="color:${longSide === 'NO' ? '#00d4ff' : '#ff7043'};font-size:9px;font-weight:800;">NO ${longSide === 'NO' ? 'ENTRY' : 'EXIT'}</span>
-                        <span style="color:${longSide === 'NO' ? '#00d4ff' : '#ff7043'};font-size:10px;font-weight:700;">${longSide === 'NO' ? avgCost + 'c' : (exitPrice > 0 ? exitPrice + 'c' : '--')}</span>
-                    </div>
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
-                        <span style="color:#556;font-size:9px;">${longSide === 'NO' ? netHeld + 'x held' : (exitPrice > 0 ? exitFillQty + '/' + exitTotalQty + ' filled' : 'pending')}</span>
-                        <span style="font-size:8px;">${longSide === 'NO' ? '' : slBadge}<span style="color:#00ff88;">${liveNoBid}</span><span style="color:#334;"> / </span><span style="color:#ff4444;">${liveNoAsk}</span></span>
-                    </div>
-                    <div style="height:4px;background:#0a1018;border-radius:2px;overflow:hidden;">
-                        <div style="width:${longSide === 'NO' ? anchorFp : hedgeFp}%;height:100%;background:${longSide === 'NO' ? '#00d4ff' : '#ff7043'};border-radius:2px;transition:width .3s;"></div>
-                    </div>
-                    <div style="color:#334;font-size:7px;margin-top:1px;text-align:right;">${longSide === 'NO' ? anchorTotalFills + '/' + anchorTotalQty : exitFillQty + '/' + exitTotalQty}</div>
-                </div>
+                ${leftBox}
+                ${rightBox}
             </div>
-            ${walkBarHtml}
+            ${zoneBarHtml}
         </div>`;
     }
 
@@ -6545,55 +6537,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const noLabel = noIsExit ? 'NO EXIT' : (hasInv && yesIsExit) ? 'NO ENTRY' : 'NO';
 
     // Exit panel replaces ladder column when exiting
-    const _buildExitPanel = (col, exitSide) => {
-        const exitBid = exitSide === 'yes' ? liveYesBid : liveNoBid;
-        const exitAsk = exitSide === 'yes' ? liveYesAsk : liveNoAsk;
-        const fp = exitTotalQty > 0 ? Math.min(100, Math.round(exitFillQty / exitTotalQty * 100)) : 0;
-        const targetPrice = bot._exit_target_price || exitPrice;
-        const heldAvg = bot._exit_avg_cost || (netYes > netNo ? avgYesCost : avgNoCost);
-        // Live combined = what it costs if exit fills at current bid
-        const liveComb = (exitBid > 0) ? heldAvg + exitBid : heldAvg + exitPrice;
-        // Posted combined = what it costs if exit fills at posted price
-        const postedComb = heldAvg + exitPrice;
-        const stopLoss = 100 + _apexStopLossThreshold(width, heldAvg);
-        const targetCombined = heldAvg + targetPrice;
-        const liveProfit = 100 - liveComb;
-        const liveProfitCol = liveProfit > 2 ? '#00ff88' : liveProfit > 0 ? '#ffaa00' : '#ff4444';
-        const postedProfit = 100 - postedComb;
-        const postedProfitCol = postedProfit > 2 ? '#00ff88' : postedProfit > 0 ? '#ffaa00' : '#ff4444';
-        // Zone bar: target → 100 (green) → SL (red) — use LIVE combined
-        const barMin = targetCombined;
-        const barMax = stopLoss;
-        const barRange = barMax - barMin;
-        const combPct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((liveComb - barMin) / barRange * 100))) : 0;
-        const bePct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((100 - barMin) / barRange * 100))) : 50;
-        return `<div style="padding:6px;">
-            <div style="text-align:center;margin-bottom:4px;">
-                <span style="color:${liveProfitCol};font-weight:800;font-size:18px;">${liveComb}c</span>
-                <span style="color:${liveProfitCol};font-weight:700;font-size:11px;margin-left:4px;">${liveProfit >= 0 ? '+' : ''}${liveProfit}c</span>
-            </div>
-            <div style="color:#556;font-size:9px;text-align:center;margin-bottom:2px;">${heldAvg}c + bid ${exitBid}c</div>
-            <div style="color:#334;font-size:8px;text-align:center;margin-bottom:6px;">posted <span style="color:${postedProfitCol};">${exitPrice}c</span> (${postedComb}c ${postedProfit >= 0 ? '+' : ''}${postedProfit}c)</div>
-            <div style="height:5px;background:#0a1018;border-radius:3px;overflow:hidden;margin-bottom:2px;">
-                <div style="width:${fp}%;height:100%;background:${col};border-radius:3px;transition:width .3s;"></div>
-            </div>
-            <div style="color:#556;font-size:8px;text-align:center;margin-bottom:6px;">${exitFillQty}/${exitTotalQty} filled</div>
-            <div style="position:relative;height:6px;background:#0a1018;border-radius:3px;overflow:hidden;">
-                <div style="position:absolute;left:0;width:${bePct}%;height:100%;background:#00ff8815;"></div>
-                <div style="position:absolute;left:${bePct}%;width:${100-bePct}%;height:100%;background:#ff444415;"></div>
-                <div style="position:absolute;left:${bePct}%;width:1px;height:100%;background:#ffaa00;z-index:2;"></div>
-                <div style="position:absolute;left:${combPct}%;width:5px;height:100%;background:${liveProfitCol};border-radius:2px;z-index:3;transform:translateX(-2px);"></div>
-            </div>
-            <div style="display:flex;justify-content:space-between;margin-top:2px;font-size:7px;font-weight:700;">
-                <span style="color:#00ff88;">${targetCombined}c</span>
-                <span style="color:#ffaa00;">100c</span>
-                <span style="color:#ff4444;">${stopLoss}c</span>
-            </div>
-        </div>`;
-    };
-    const hasInventory = netYes > 0 || netNo > 0;
-    if (!isCompleted && hasInventory && yesIsExit && exitPrice > 0) yesLadder = _buildExitPanel('#00ff88', 'yes');
-    if (!isCompleted && hasInventory && noIsExit && exitPrice > 0) noLadder = _buildExitPanel('#ff4444', 'no');
+    // Exit panel removed — position boxes above + normal ladder below is cleaner
 
     // ── SECTION 4: Collapsible history ──
     const historyId = `apex-hist-${botId.replace(/[^a-zA-Z0-9]/g, '')}`;

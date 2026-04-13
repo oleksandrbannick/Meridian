@@ -1463,6 +1463,33 @@ def get_live_orderbook(ticker):
         })
 
 
+def _qty_tier(fav):
+    """3-tier participation rate based on fav L1 TOB with spoof shield."""
+    tob = fav.get('top1Qty', 0)
+    total = fav.get('totalDepth', 0)
+    # Spoof shield: L1 > 80% of total depth = no structural support
+    spoofed = total > 0 and tob > total * 0.80
+    if spoofed or tob < 500:
+        return 1  # THIN
+    if tob < 5000:
+        return 2  # STANDARD
+    return 3      # DEEP
+
+def _qty_rec(fav):
+    tob = fav.get('top1Qty', 0)
+    if tob <= 0: return 1
+    tier = _qty_tier(fav)
+    rate = {1: 0.15, 2: 0.25, 3: 0.40}[tier]
+    return min(99, max(1, int(tob * rate)))
+
+def _qty_max(fav):
+    tob = fav.get('top1Qty', 0)
+    if tob <= 0: return 1
+    tier = _qty_tier(fav)
+    rate = {1: 0.25, 2: 0.40, 3: 0.50}[tier]
+    return min(99, max(1, int(tob * rate)))
+
+
 @app.route('/api/depth-rec/<ticker>', methods=['GET'])
 def get_depth_rec(ticker):
     """Compute phantom depth floor recommendation from live LocalOrderbook.
@@ -1507,7 +1534,9 @@ def get_depth_rec(ticker):
         'fav_depth': fav_analysis['totalDepth'],
         'dog_bid': _dog_bid,
         'fav_bid': _fav_bid,
-        'max_safe_qty': min(50, max(1, fav_analysis['top1Qty'] // 3)) if fav_analysis['top1Qty'] > 0 else 1,
+        'fav_tob': fav_analysis['top1Qty'],
+        'suggested_qty': _qty_rec(fav_analysis),
+        'max_safe_qty': _qty_max(fav_analysis),
         'age_ms': round(age_s * 1000),
     })
 

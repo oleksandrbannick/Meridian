@@ -3294,6 +3294,7 @@ function displayOrderbookLadder(orderbook) {
         if (!bestBid) return { totalQty: 0, levels: 0, gaps: 0, perLevel: 0, top3Qty: 0, top1Qty: 0, wallByDepth: {} };
         let top3Qty = 0, top3Count = 0;
         let top1Qty = 0; // largest single level — detects concentrated walls
+        let bestBidQty = 0; // qty at exactly the best bid price (Level 1 TOB)
         // Wall analysis: contracts between bid and bid-N for each depth level
         // Levels with <10 contracts are dust — a whale blows through them instantly
         const MIN_REAL_QTY = 10;
@@ -3305,6 +3306,7 @@ function displayOrderbookLadder(orderbook) {
             levels++;
             if (qty >= MIN_REAL_QTY) filledCents.add(price);  // dust levels = effective gaps
             if (qty > top1Qty) top1Qty = qty;
+            if (price === bestBid) bestBidQty = qty;
             if (top3Count < 3) { top3Qty += qty; top3Count++; }
         }
         // Build wall: how many contracts sit between bid and bid-depth (exclusive of bid-depth)
@@ -3322,7 +3324,7 @@ function displayOrderbookLadder(orderbook) {
             if (!filledCents.has(c)) gaps++;
         }
         const perLevel = levels > 0 ? Math.round(totalQty / levels) : 0;
-        return { totalQty, levels, gaps, perLevel, top3Qty, top1Qty, wallByDepth };
+        return { totalQty, levels, gaps, perLevel, top3Qty, top1Qty, bestBidQty, wallByDepth };
     }
 
     const yesAnalysis = _analyzeSide(yesOrders, bestYesBid);
@@ -3398,8 +3400,26 @@ function displayOrderbookLadder(orderbook) {
 
     // Fav concentration for display
     const _favConc = favDepth > 0 ? favAnalysis.top1Qty / favDepth : 0;
-    // Max safe qty
-    const maxSafeQty = Math.min(50, Math.max(1, Math.floor(favAnalysis.top3Qty / 3)));
+    // ── 3-Tier Participation Rate Sizing (fav L1 TOB) ──
+    // TOB = fav best bid qty (Level 1 only — the price your hedge sits at)
+    // Never size off top3 — you'd be programming in slippage acceptance
+    const _favTOB = favAnalysis.bestBidQty || 0;
+    const _favTop3 = favAnalysis.top3Qty || 0;
+    // Spoof shield: if L1 is >80% of L2+L3 combined, no structural support behind it
+    // Treat as THIN regardless of how big the L1 number looks
+    const _spoofed = _favTop3 > 0 && _favTOB > _favTop3 * 0.80;
+    // Tier 1: THIN (<500 TOB or spoofed) → 15% — spoofer bots pull liq on contact
+    // Tier 2: STANDARD (500-5000 TOB) → 25% — genuine volume, blend in
+    // Tier 3: DEEP (>5000 TOB) → 40% — fast replenishment, can push harder
+    const _effectiveTier = _spoofed ? 1 : _favTOB < 500 ? 1 : _favTOB < 5000 ? 2 : 3;
+    const _participationRate = _effectiveTier === 1 ? 0.15 : _effectiveTier === 2 ? 0.25 : 0.40;
+    const suggestedQty = Math.min(99, Math.max(1, Math.floor(_favTOB * _participationRate)));
+    // Max safe = next tier's rate (aggressive ceiling)
+    const _maxRate = _effectiveTier === 1 ? 0.25 : _effectiveTier === 2 ? 0.40 : 0.50;
+    const maxSafeQty = Math.min(99, Math.max(1, Math.floor(_favTOB * _maxRate)));
+    // Tier labels
+    const qtyTier = _effectiveTier === 3 ? 'DEEP' : _effectiveTier === 2 ? 'STANDARD' : (_spoofed ? 'SPOOFED' : 'THIN');
+    const qtyTierCol = _effectiveTier === 3 ? '#00ff88' : _effectiveTier === 2 ? '#00ccff' : '#ff8800';
 
     // Fill difficulty — how likely your anchor actually fills (separate from catch quality)
     const fillDiff = dogDepth < 100 ? 'easy fill' : dogDepth < 500 ? 'moderate' : dogDepth < 2000 ? 'busy' : dogDepth < 10000 ? 'crowded' : 'packed';
@@ -3421,8 +3441,8 @@ function displayOrderbookLadder(orderbook) {
             dogDepth, favDepth, dogBid: dogBidPrice, favBid: favBidPrice,
             dogPerLevel: dogAnalysis.perLevel, favPerLevel: favAnalysis.perLevel,
             dogGaps: dogAnalysis.gaps, favGaps: favAnalysis.gaps,
-            favTop3: favAnalysis.top3Qty, favTop1: favAnalysis.top1Qty,
-            favConc: _favConc, maxSafeQty,
+            favTop3: favAnalysis.top3Qty, favTop1: favAnalysis.top1Qty, favBestBid: favAnalysis.bestBidQty,
+            favConc: _favConc, maxSafeQty, suggestedQty,
             dogWall: dogAnalysis.wallByDepth,
             hedgeRoom, catchScore,
             ts: Date.now()
@@ -3542,7 +3562,7 @@ function displayOrderbookLadder(orderbook) {
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;padding-top:6px;border-top:1px solid #1e274033;">
             <span style="color:#8892a6;font-size:9px;">Room: <span style="color:${roomCol};font-weight:700;">${hedgeRoom}¢</span> <span style="color:${roomCol};">${roomLabel}</span></span>
-            <span style="color:#8892a6;font-size:9px;">Max qty: <span style="color:#ffaa00;font-weight:700;">${maxSafeQty}</span></span>
+            <span style="color:#8892a6;font-size:9px;">Qty: <span style="color:#00ff88;font-weight:700;">${suggestedQty}</span> <span style="color:#555;">rec</span> · <span style="color:#ffaa00;font-weight:700;">${maxSafeQty}</span> <span style="color:#555;">max</span> · <span style="color:${qtyTierCol};font-weight:600;">${qtyTier}</span> <span style="color:#555;">(TOB:${_favTOB >= 1000 ? (_favTOB/1000).toFixed(1) + 'K' : _favTOB})</span></span>
         </div>
     </div>`;
     const ladderEl = document.getElementById('orderbook-ladder');
@@ -3823,9 +3843,11 @@ function setTradeMode(mode) {
         window._anchorInputFocused = false;
         initAnchorDogPrices();
         renderAnchorRungs(true);  // Force initial render (non-force can skip on mobile)
-        // Apply saved base qty to first rung after render
+        // Apply saved base qty — but cap at max safe qty for this market's liquidity
         if (_savedPhantom?.baseQty > 1 && _anchorRungs.length > 0) {
-            _anchorRungs[0].qty = _savedPhantom.baseQty;
+            const _dc = (window._obDepthCache || {})[(currentArbMarket || {}).ticker || ''];
+            const _maxQ = _dc?.maxSafeQty || 99;
+            _anchorRungs[0].qty = Math.min(_savedPhantom.baseQty, _maxQ);
             renderAnchorRungs(true);
         }
     } else {
@@ -4171,8 +4193,11 @@ function initAnchorDogPrices() {
     const depthDisplaySync = document.getElementById('anchor-depth-display');
     if (depthDisplaySync) depthDisplaySync.textContent = `${anchorDepth}¢`;
     // Auto-add a default rung with smart pricing
+    // Qty from liquidity: use suggested qty from depth cache (scales with fav book)
+    const _depthCache = (window._obDepthCache || {})[(currentArbMarket || {}).ticker || ''];
+    const _autoQty = _depthCache?.suggestedQty || 1;
     if (_anchorRungs.length === 0 && anchorBase > 5) {
-        _anchorRungs.push({ price: smartPrice, qty: 1, offset: anchorDepth });
+        _anchorRungs.push({ price: smartPrice, qty: _autoQty, offset: anchorDepth });
         // Force render immediately — the non-force render below can skip on mobile
         renderAnchorRungs(true);
     }
@@ -4241,9 +4266,16 @@ function renderAnchorRungs(force) {
             </div>
             <div style="display:flex;align-items:center;gap:3px;">
                 <span style="color:#8892a6;font-size:9px;">QTY</span>
-                <input type="number" min="1" max="99" value="${rung.qty}" onchange="updateRungQty(0, this.value)"
+                ${(() => {
+                    const _dc2 = (window._obDepthCache || {})[(currentArbMarket || {}).ticker || ''];
+                    const _maxQ = _dc2?.maxSafeQty || 99;
+                    const _sugQ = _dc2?.suggestedQty || 1;
+                    const _over = rung.qty > _maxQ;
+                    const _qtyBorder = _over ? '#ff4444' : rung.qty > _sugQ ? '#ffaa0044' : '#1e2740';
+                    return `<input type="number" min="1" max="99" value="${rung.qty}" onchange="updateRungQty(0, this.value)"
                     onfocus="window._anchorInputFocused=true" onblur="window._anchorInputFocused=false"
-                    style="width:40px;padding:4px 6px;background:#0a0e1a;border:1px solid #1e2740;border-radius:4px;color:#fff;font-size:13px;font-weight:700;text-align:center;">
+                    style="width:40px;padding:4px 6px;background:#0a0e1a;border:1px solid ${_qtyBorder};border-radius:4px;color:${_over ? '#ff4444' : '#fff'};font-size:13px;font-weight:700;text-align:center;">`;
+                })()}
             </div>
             <span style="color:#555;font-size:9px;">${baseLabel} ${anchorBase}¢ <span style="color:#ffaa00;">−${offset}¢</span></span>
         </div>

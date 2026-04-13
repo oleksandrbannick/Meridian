@@ -13107,6 +13107,80 @@ def _handle_apex(bot_id, bot, actions):
         _apex_mm_exit_tick(bot_id, bot)
         return
 
+    # ── STATUS: waiting_repeat — restart after smart stop / user restart ──
+    if status == 'waiting_repeat':
+        wait_since = bot.get('waiting_repeat_since', now)
+        if now - wait_since < 5:
+            return  # 5s cooldown before restarting
+
+        # Fresh midpoint
+        midpoint = _apex_mm_midpoint(ticker)
+        if midpoint is None:
+            yb = bot.get('live_yes_bid', 0)
+            nb = bot.get('live_no_bid', 0)
+            if yb > 0 and nb > 0:
+                midpoint = round((yb + (100 - nb)) / 2)
+            else:
+                return  # no prices yet, wait
+
+        # Drift guard: don't restart if market decided
+        _drift_max = max(bot.get('live_yes_bid', 0), bot.get('live_no_bid', 0))
+        if _drift_max >= 80:
+            print(f'📊 APEX MM WAITING: {bot_id} drift {_drift_max}c — not safe to restart')
+            return
+
+        # Reset inventory tracking (bot should be flat, but ensure clean state)
+        bot['net_yes'] = 0
+        bot['net_no'] = 0
+        bot['avg_yes_cost'] = 0
+        bot['avg_no_cost'] = 0
+        bot['total_yes_cost'] = 0
+        bot['total_no_cost'] = 0
+        bot['yes_orders'] = {}
+        bot['no_orders'] = {}
+        bot['_yes_side_paused'] = False
+        bot['_no_side_paused'] = False
+        bot['_skew_active'] = False
+        bot['_skew_direction'] = ''
+        bot['_pull_count'] = 0
+        bot['_last_pull_at'] = 0
+        bot['_last_pull_reason'] = ''
+        bot['_exit_price'] = 0
+        bot['_exit_walk_count'] = 0
+        bot['_exit_posted_at'] = 0
+        bot['_exit_fill_qty'] = 0
+        bot['_exit_total_qty'] = 0
+        bot['_exit_reason'] = None
+        bot['_exit_started_at'] = None
+        bot['_exit_sell_oids'] = {}
+        bot['_velocity_gated'] = False
+        bot['_velocity_fills'] = []
+        bot['_drift_pulled'] = False
+        bot['_begin_exit_running'] = False
+        bot['_all_placed_order_ids'] = []
+        bot['_counted_order_fills'] = {}
+        bot['_cycle_start_pnl'] = bot.get('realized_pnl_cents', 0)
+
+        # Post fresh ladder using configured levels
+        base_qty = bot.get('base_qty', bot.get('qty_per_level', 10))
+        yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, scale=bot.get('auto_scale', True), inv_limit=bot.get('inventory_limit', 0))
+        if not yes_levels and not no_levels:
+            print(f'⚠ APEX MM RESTART: {bot_id} no valid levels at mid={midpoint}')
+            return
+        success = _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
+        if success:
+            bot['midpoint'] = midpoint
+            bot['status'] = 'market_making_active'
+            bot['posted_at'] = now
+            save_state()
+            bot_log('APEX_MM_RESTART', bot_id, {
+                'midpoint': midpoint, 'levels': bot['levels'],
+                'start_gap': bot['start_gap'], 'base_qty': base_qty,
+                'yes_levels': len(yes_levels), 'no_levels': len(no_levels),
+            })
+            print(f'🔄 APEX MM RESTART: {bot_id} mid={midpoint} levels={bot["levels"]} gap={bot["start_gap"]} — fresh ladder posted')
+        return
+
     # ── STATUS: market_making_active — main logic ──
     if status != 'market_making_active':
         return
@@ -17029,6 +17103,7 @@ def add_runs(bot_id):
             print(f'🔄 SMART RESTART: {bot_id} clearing smart exit trigger (was: {bot["_smart_exit_trigger"]})')
             bot['_smart_exit_trigger'] = None
         bot['_smart_exit_sold'] = None
+        bot['_begin_exit_running'] = False  # clear exit guard for clean restart
         if bot.get('status') in ('completed', 'stopped', 'awaiting_settlement'):
             bot['status'] = 'waiting_repeat'
             bot['waiting_repeat_since'] = time.time()

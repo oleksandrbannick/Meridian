@@ -6167,7 +6167,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 const favD = bot._fav_depth_top3 != null ? bot._fav_depth_top3 : '?';
                 return `<span style="color:${color};font-size:9px;font-weight:600;background:${color}15;padding:1px 5px;border-radius:3px;" title="OBI: ${obi} | Dog depth: ${dogD} | Fav depth: ${favD}">OBI: ${label}</span>`;
             })() : ''}
-            <span style="color:#00e5ff;">×${qty}</span>
+            <span style="color:#b2ff59;">×${qty}</span>
             ${isLadder && bot.avg_fill_price > 0 ? `<span style="color:#ffaa00;">Avg: ${bot.avg_fill_price}¢</span>` : ''}
             ${!_isCompletedSummary && bot.smart_mode ? `<span style="color:#00e5ff;font-weight:700;">Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L</span>` : !_isCompletedSummary && bot.repeat_count > 0 ? `<span style="color:#aa66ff;">🔄 ${(bot.repeats_done || 0) + 1}/${bot.repeat_count + 1}</span>` : ''}
             ${_isCompletedSummary && bot.smart_mode ? `<span style="color:#8892a6;">Streak: <strong style="color:${(bot.consecutive_losses || 0) >= 2 ? '#ff4444' : (bot.consecutive_losses || 0) >= 1 ? '#ffaa00' : '#00ff88'};">${bot.consecutive_losses || 0}L</strong></span>` : ''}
@@ -6268,7 +6268,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     + '</span>'
                     + (_depCombo ? '<span>' + _depCombo + '</span>' : '<span></span>')
                     + '<span style="display:flex;align-items:center;gap:2px;">' + (_hmsStr || '') + (r.taker ? '<span style="color:#ff66aa;font-size:8px;font-weight:700;">+1</span>' : '') + '</span>'
-                    + '<span style="color:#00e5ff;font-weight:700;text-align:center;">x' + (r.qty || 1) + '</span>'
+                    + '<span style="color:#b2ff59;font-weight:700;text-align:center;">x' + (r.qty || 1) + '</span>'
                     + '<span style="color:' + (r.pnl >= 0 ? '#00ff88' : '#ff4444') + ';font-weight:800;text-align:right;">' + (r.pnl >= 0 ? '+' : '') + r.pnl + '¢</span>'
                     + '</div>'
                     + '';
@@ -8445,7 +8445,7 @@ async function loadBots() {
                         html += runHist.map((r, i) => `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 6px;${i > 0 ? 'border-top:1px solid #1e274033;' : ''}font-size:10px;">
                             <span style="color:#00e5ff;font-weight:600;">#${r.run || i + 1}</span>
                             <span style="color:#ccd6e0;">Y${r.dog_price || r.yes_price || '?'}¢ + N${r.fav_price || r.no_price || '?'}¢</span>
-                            <span style="color:#00e5ff;">x${r.qty || bot.quantity || 1}</span>
+                            <span style="color:#b2ff59;">x${r.qty || bot.quantity || 1}</span>
                             <span style="color:${(r.pnl||0) >= 0 ? '#00ff88' : '#ff4444'};font-weight:700;">${(r.pnl||0) >= 0 ? '+' : ''}${r.pnl||0}¢</span>
                         </div>`).join('');
                         html += '</div>';

@@ -1113,11 +1113,11 @@
                     <!-- Width -->
                     <div style="margin-bottom:12px;">
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                            <label style="color:#ff7043;font-weight:700;font-size:11px;letter-spacing:.05em;">WIDTH</label>
-                            <span id="mm-width-label" style="color:#ff7043;font-weight:800;font-size:13px;">4¢</span>
+                            <label style="color:#00d4ff;font-weight:700;font-size:11px;letter-spacing:.05em;">WIDTH</label>
+                            <span id="mm-width-label" style="color:#00d4ff;font-weight:800;font-size:13px;">4¢</span>
                         </div>
                         <div style="display:flex;justify-content:space-between;gap:5px;" id="mm-width-grid">
-                            <button onclick="selectMMWidth(4)" class="mm-width-btn" data-width="4" style="width:36px;height:36px;border-radius:50%;background:#ff704318;border:1px solid #ff7043;color:#ff7043;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;">4</button>
+                            <button onclick="selectMMWidth(4)" class="mm-width-btn" data-width="4" style="width:36px;height:36px;border-radius:50%;background:#00d4ff18;border:1px solid #00d4ff;color:#00d4ff;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;">4</button>
                             <button onclick="selectMMWidth(5)" class="mm-width-btn" data-width="5" style="width:36px;height:36px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;">5</button>
                             <button onclick="selectMMWidth(6)" class="mm-width-btn" data-width="6" style="width:36px;height:36px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;">6</button>
                             <button onclick="selectMMWidth(7)" class="mm-width-btn" data-width="7" style="width:36px;height:36px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;">7</button>
@@ -1130,18 +1130,18 @@
                     <!-- Rungs + Base Qty -->
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
                         <div>
-                            <label style="color:#00d4ff;font-weight:700;font-size:11px;letter-spacing:.05em;display:block;margin-bottom:6px;">RUNGS</label>
+                            <label style="color:#ff7043;font-weight:700;font-size:11px;letter-spacing:.05em;display:block;margin-bottom:6px;">RUNGS</label>
                             <div style="display:flex;gap:5px;" id="mm-levels-grid">
                                 <button onclick="selectMMLevels(3)" class="mm-levels-btn" data-levels="3" style="width:36px;height:36px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;">3</button>
                                 <button onclick="selectMMLevels(5)" class="mm-levels-btn" data-levels="5" style="width:36px;height:36px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;">5</button>
-                                <button onclick="selectMMLevels(7)" class="mm-levels-btn" data-levels="7" style="width:36px;height:36px;border-radius:50%;background:#00d4ff18;border:1px solid #00d4ff;color:#00d4ff;cursor:pointer;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;">7</button>
+                                <button onclick="selectMMLevels(7)" class="mm-levels-btn" data-levels="7" style="width:36px;height:36px;border-radius:50%;background:#ff704318;border:1px solid #ff7043;color:#ff7043;cursor:pointer;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;">7</button>
                                 <button onclick="selectMMLevels(10)" class="mm-levels-btn" data-levels="10" style="width:36px;height:36px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;">10</button>
                             </div>
                         </div>
                         <div>
-                            <label style="color:#00d4ff;font-weight:700;font-size:11px;letter-spacing:.05em;display:block;margin-bottom:6px;">QTY / RUNG</label>
+                            <label style="color:#ff7043;font-weight:700;font-size:11px;letter-spacing:.05em;display:block;margin-bottom:6px;">QTY / RUNG</label>
                             <input type="number" id="mm-qty-per-level" min="1" max="100" value="5" oninput="updateMMPreview(); updateMMMaxDefault();"
-                                   style="width:100%;padding:8px;background:#0a0e1a;border:1px solid #00d4ff44;border-radius:6px;color:#00d4ff;font-size:16px;font-weight:700;text-align:center;outline:none;transition:all .15s;box-sizing:border-box;" onfocus="this.style.borderColor='#00d4ff'" onblur="this.style.borderColor='#00d4ff44'">
+                                   style="width:100%;padding:8px;background:#0a0e1a;border:1px solid #ff704344;border-radius:6px;color:#ff7043;font-size:16px;font-weight:700;text-align:center;outline:none;transition:all .15s;box-sizing:border-box;" onfocus="this.style.borderColor='#ff7043'" onblur="this.style.borderColor='#ff704344'">
                         </div>
                     </div>
 
@@ -3222,7 +3222,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260413164000"></script>
+    <script src="app.js?v=20260413165000"></script>
     <!-- Bottom status bar — always visible -->
     <div id="bottom-status-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#080c16;border-top:1px solid #1a2035;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;font-size:11px;">
         <span style="color:#3a4560;font-size:10px;letter-spacing:.03em;">hi irene</span>

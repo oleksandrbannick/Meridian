@@ -3854,6 +3854,26 @@ function setTradeMode(mode) {
         if (typeof drawLegendBot === 'function') drawLegendBot(document.getElementById('apex-form-ghost'), 'apex');
         updateMMPreview();
     }
+    // Recolor market prices to match bot type
+    _recolorMarketPrices(mode === 'arb' ? ['#00d4ff','#ff7043'] : ['#00ff88','#ff4444']);
+}
+
+function _recolorMarketPrices(colors) {
+    const el = document.getElementById('bot-market-prices');
+    if (!el) return;
+    const boxes = el.querySelectorAll(':scope > div');
+    if (boxes.length < 2) return;
+    boxes.forEach((box, i) => {
+        const c = colors[i] || colors[0];
+        box.style.borderColor = c + '33';
+        box.querySelectorAll('span').forEach(s => {
+            if (s.querySelector('strong')) return;
+            if (s.style.color && s.style.color !== 'rgb(136, 146, 166)' && s.style.color !== '#555' && !s.style.color.includes('85')) {
+                s.style.color = c;
+            }
+        });
+        box.querySelectorAll('strong').forEach(s => { s.style.color = c; });
+    });
 }
 
 /** Set the selected side for straight bet */
@@ -4951,24 +4971,24 @@ function openBotModal(market, _side, _price) {
         : 'NO';
 
     document.getElementById('bot-market-prices').innerHTML = `
-        <div style="background:#060a14;border:1px solid #00d4ff33;border-radius:6px;padding:8px 10px;">
+        <div style="background:#060a14;border:1px solid #00ff8833;border-radius:6px;padding:8px 10px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                <span style="color:#00d4ff;font-weight:700;font-size:11px;">${yesTeamLabel}</span>
+                <span style="color:#00ff88;font-weight:700;font-size:11px;">${yesTeamLabel}</span>
                 <span style="color:#555;font-size:9px;">${yesSpread > 0 ? `spread ${yesSpread}¢` : ''}</span>
             </div>
             <div style="display:flex;justify-content:space-between;font-size:13px;">
-                <span style="color:#8892a6;">Bid <strong style="color:#00d4ff;">${fmtPrice(yesBid)}</strong></span>
-                <span style="color:#8892a6;">Ask <strong style="color:#00d4ff;">${fmtPrice(yesAsk)}</strong></span>
+                <span style="color:#8892a6;">Bid <strong style="color:#00ff88;">${fmtPrice(yesBid)}</strong></span>
+                <span style="color:#8892a6;">Ask <strong style="color:#00ff88;">${fmtPrice(yesAsk)}</strong></span>
             </div>
         </div>
-        <div style="background:#060a14;border:1px solid #ff704333;border-radius:6px;padding:8px 10px;">
+        <div style="background:#060a14;border:1px solid #ff444433;border-radius:6px;padding:8px 10px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                <span style="color:#ff7043;font-weight:700;font-size:11px;">${noTeamLabel}</span>
+                <span style="color:#ff4444;font-weight:700;font-size:11px;">${noTeamLabel}</span>
                 <span style="color:#555;font-size:9px;">${noSpread > 0 ? `spread ${noSpread}¢` : ''}</span>
             </div>
             <div style="display:flex;justify-content:space-between;font-size:13px;">
-                <span style="color:#8892a6;">Bid <strong style="color:#ff7043;">${fmtPrice(noBid)}</strong></span>
-                <span style="color:#8892a6;">Ask <strong style="color:#ff7043;">${fmtPrice(noAsk)}</strong></span>
+                <span style="color:#8892a6;">Bid <strong style="color:#ff4444;">${fmtPrice(noBid)}</strong></span>
+                <span style="color:#8892a6;">Ask <strong style="color:#ff4444;">${fmtPrice(noAsk)}</strong></span>
             </div>
         </div>
     `;
@@ -5094,24 +5114,24 @@ function refreshModalPriceCards() {
     }
 
     document.getElementById('bot-market-prices').innerHTML = `
-        <div style="background:#060a14;border:1px solid #00d4ff33;border-radius:6px;padding:8px 10px;">
+        <div style="background:#060a14;border:1px solid #00ff8833;border-radius:6px;padding:8px 10px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                <span style="color:#00d4ff;font-weight:700;font-size:11px;">${yesTeamLabel}</span>
+                <span style="color:#00ff88;font-weight:700;font-size:11px;">${yesTeamLabel}</span>
                 <span style="color:#555;font-size:9px;">${yesSpread > 0 ? `spread ${yesSpread}¢` : ''}</span>
             </div>
             <div style="display:flex;justify-content:space-between;font-size:13px;">
-                <span style="color:#8892a6;">Bid <strong style="color:#00d4ff;">${fmtPrice(yesBid)}</strong></span>
-                <span style="color:#8892a6;">Ask <strong style="color:#00d4ff;">${fmtPrice(yesAsk)}</strong></span>
+                <span style="color:#8892a6;">Bid <strong style="color:#00ff88;">${fmtPrice(yesBid)}</strong></span>
+                <span style="color:#8892a6;">Ask <strong style="color:#00ff88;">${fmtPrice(yesAsk)}</strong></span>
             </div>
         </div>
-        <div style="background:#060a14;border:1px solid #ff704333;border-radius:6px;padding:8px 10px;">
+        <div style="background:#060a14;border:1px solid #ff444433;border-radius:6px;padding:8px 10px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-                <span style="color:#ff7043;font-weight:700;font-size:11px;">${noTeamLabel}</span>
+                <span style="color:#ff4444;font-weight:700;font-size:11px;">${noTeamLabel}</span>
                 <span style="color:#555;font-size:9px;">${noSpread > 0 ? `spread ${noSpread}¢` : ''}</span>
             </div>
             <div style="display:flex;justify-content:space-between;font-size:13px;">
-                <span style="color:#8892a6;">Bid <strong style="color:#ff7043;">${fmtPrice(noBid)}</strong></span>
-                <span style="color:#8892a6;">Ask <strong style="color:#ff7043;">${fmtPrice(noAsk)}</strong></span>
+                <span style="color:#8892a6;">Bid <strong style="color:#ff4444;">${fmtPrice(noBid)}</strong></span>
+                <span style="color:#8892a6;">Ask <strong style="color:#ff4444;">${fmtPrice(noAsk)}</strong></span>
             </div>
         </div>
     `;
@@ -5457,22 +5477,22 @@ async function viewOrderbook(ticker) {
                     <button onclick="closeOrderbookModal()" style="background: #ff4444; border: none; color: white; padding: 6px 14px; border-radius: 6px; cursor: pointer;">✕ Close</button>
                 </div>
                 <div style="text-align:center;padding:8px;background:rgba(0,255,136,0.06);border-radius:6px;margin-bottom:14px;font-size:13px;color:#8892a6;">
-                    Buy YES: <strong style="color:#00d4ff;">${typeof impliedYesAsk === 'number' ? impliedYesAsk+'¢' : impliedYesAsk}</strong>
+                    Buy YES: <strong style="color:#00ff88;">${typeof impliedYesAsk === 'number' ? impliedYesAsk+'¢' : impliedYesAsk}</strong>
                     &nbsp;|&nbsp;
-                    Buy NO: <strong style="color:#ff7043;">${typeof impliedNoAsk === 'number' ? impliedNoAsk+'¢' : impliedNoAsk}</strong>
+                    Buy NO: <strong style="color:#ff4444;">${typeof impliedNoAsk === 'number' ? impliedNoAsk+'¢' : impliedNoAsk}</strong>
                 </div>
                 ${liqHtml}
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
                     <div>
-                        <div style="color:#00d4ff;font-weight:700;font-size:12px;margin-bottom:8px;letter-spacing:.05em;">YES</div>
+                        <div style="color:#00ff88;font-weight:700;font-size:12px;margin-bottom:8px;letter-spacing:.05em;">YES BIDS</div>
                         <div style="background: #0f1419; padding: 8px; border-radius: 8px; max-height: 320px; overflow-y: auto;">
-                            ${yesOrders.length > 0 ? yesOrders.map(o => renderModalRow(o, '#00d4ff')).join('') : '<p style="color:#8892a6;text-align:center;padding:12px;">No bids</p>'}
+                            ${yesOrders.length > 0 ? yesOrders.map(o => renderModalRow(o, '#00ff88')).join('') : '<p style="color:#8892a6;text-align:center;padding:12px;">No bids</p>'}
                         </div>
                     </div>
                     <div>
-                        <div style="color:#ff7043;font-weight:700;font-size:12px;margin-bottom:8px;letter-spacing:.05em;">NO</div>
+                        <div style="color:#ff4444;font-weight:700;font-size:12px;margin-bottom:8px;letter-spacing:.05em;">NO BIDS</div>
                         <div style="background: #0f1419; padding: 8px; border-radius: 8px; max-height: 320px; overflow-y: auto;">
-                            ${noOrders.length > 0 ? noOrders.map(o => renderModalRow(o, '#ff7043')).join('') : '<p style="color:#8892a6;text-align:center;padding:12px;">No bids</p>'}
+                            ${noOrders.length > 0 ? noOrders.map(o => renderModalRow(o, '#ff4444')).join('') : '<p style="color:#8892a6;text-align:center;padding:12px;">No bids</p>'}
                         </div>
                     </div>
                 </div>

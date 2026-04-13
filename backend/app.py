@@ -21663,6 +21663,116 @@ def _run_startup():
         except Exception as _re:
             print(f'⚠ Startup fill recovery failed: {_re}')
 
+    # ── Phantom position reconciliation: verify ALL phantom bots against Kalshi positions ──
+    # Order-based fill recovery can miss fills when order IDs got cleared during restart.
+    # This catches the case: dog filled → hedge posted → restart → bot thinks 0 fills,
+    # but Kalshi still holds fav-side contracts (the hedges).
+    if kalshi_client:
+        _phantom_reconciled = 0
+        for _bid, _bot in list(active_bots.items()):
+            if _bot.get('bot_category') != 'anchor_dog':
+                continue
+            _bst = _bot.get('status', '')
+            # Only check bots that think they have no fills
+            if _bst not in ('dog_anchor_posted',):
+                continue
+            _tk = _bot.get('ticker', '')
+            _hedge_tk = _bot.get('hedge_ticker', _tk) or _tk
+            _dog_side = _bot.get('dog_side', '')
+            _fav_side = _bot.get('fav_side', '')
+            if not _tk or not _dog_side:
+                continue
+            try:
+                # Check position on the dog ticker
+                api_read_limiter.wait()
+                _ph_pos = kalshi_client.get_positions(ticker=_tk)
+                _ph_list = _ph_pos.get('market_positions', _ph_pos.get('positions', []))
+                _ph_net = 0
+                for _p in _ph_list:
+                    if _p.get('ticker') == _tk:
+                        _ph_net = _parse_position_qty(_p)
+                        break
+                # position_fp: positive = YES held, negative = NO held
+                # If we hold contracts on fav_side, it means dog filled and hedge happened
+                _fav_qty = 0
+                if _fav_side == 'yes' and _ph_net > 0:
+                    _fav_qty = _ph_net
+                elif _fav_side == 'no' and _ph_net < 0:
+                    _fav_qty = abs(_ph_net)
+                # Also check dog side — we might hold dog contracts if hedge hasn't happened
+                _dog_qty = 0
+                if _dog_side == 'yes' and _ph_net > 0:
+                    _dog_qty = _ph_net
+                elif _dog_side == 'no' and _ph_net < 0:
+                    _dog_qty = abs(_ph_net)
+
+                # Cross-market: also check hedge ticker
+                if _hedge_tk != _tk:
+                    try:
+                        api_read_limiter.wait()
+                        _hpos = kalshi_client.get_positions(ticker=_hedge_tk)
+                        _hlist = _hpos.get('market_positions', _hpos.get('positions', []))
+                        for _hp in _hlist:
+                            if _hp.get('ticker') == _hedge_tk:
+                                _h_net = _parse_position_qty(_hp)
+                                if _fav_side == 'yes' and _h_net > 0:
+                                    _fav_qty = max(_fav_qty, _h_net)
+                                elif _fav_side == 'no' and _h_net < 0:
+                                    _fav_qty = max(_fav_qty, abs(_h_net))
+                                break
+                    except Exception:
+                        pass
+
+                if _fav_qty > 0:
+                    # Kalshi has fav-side contracts — dog must have filled, hedge happened
+                    # Transition bot to fav_hedge_posted so it resumes bid-following
+                    _qty = _bot.get('quantity', 1)
+                    _fill_qty = min(_fav_qty, _qty)
+                    print(f'🚨 PHANTOM STARTUP RECONCILE: {_bid[:50]} has {_fav_qty}x {_fav_side.upper()} on Kalshi but dog_fill_qty=0 → fixing')
+                    _bot['dog_fill_qty'] = _fill_qty
+                    if _dog_side == 'yes':
+                        _bot['yes_fill_qty'] = _fill_qty
+                    else:
+                        _bot['no_fill_qty'] = _fill_qty
+                    _bot['fav_fill_qty'] = _fav_qty
+                    if _fav_side == 'yes':
+                        _bot['yes_fill_qty'] = _fav_qty
+                    else:
+                        _bot['no_fill_qty'] = _fav_qty
+                    _bot['status'] = 'fav_hedge_posted'
+                    _bot['_hedge_fired'] = True
+                    _bot['dog_filled_at'] = time.time()
+                    _phantom_reconciled += 1
+                    bot_log('PHANTOM_STARTUP_RECONCILE', _bid, {
+                        'fav_side': _fav_side, 'fav_qty': _fav_qty,
+                        'dog_side': _dog_side, 'ticker': _tk,
+                    }, level='WARN')
+                elif _dog_qty > 0 and _bot.get('dog_fill_qty', 0) == 0:
+                    # Dog side contracts exist but no hedge yet — dog filled during downtime
+                    _qty = _bot.get('quantity', 1)
+                    _fill_qty = min(_dog_qty, _qty)
+                    print(f'🚨 PHANTOM STARTUP RECONCILE: {_bid[:50]} has {_dog_qty}x {_dog_side.upper()} (dog) on Kalshi but dog_fill_qty=0 → hedging')
+                    _bot['dog_fill_qty'] = _fill_qty
+                    if _dog_side == 'yes':
+                        _bot['yes_fill_qty'] = _fill_qty
+                    else:
+                        _bot['no_fill_qty'] = _fill_qty
+                    _bot['_hedge_fired'] = True
+                    _bot['dog_filled_at'] = time.time()
+                    _bot['status'] = 'dog_filled'
+                    _hedge_worker_queue.put((_execute_phantom_hedge, (_bid,)))
+                    _phantom_reconciled += 1
+                    bot_log('PHANTOM_STARTUP_DOG_RECONCILE', _bid, {
+                        'dog_side': _dog_side, 'dog_qty': _dog_qty, 'ticker': _tk,
+                    }, level='WARN')
+            except Exception as _pe:
+                print(f'⚠ Phantom startup reconcile {_bid[:30]}: {_pe}')
+        if _phantom_reconciled:
+            print(f'🔧 Reconciled {_phantom_reconciled} phantom bot(s) with Kalshi positions')
+            save_state()
+        else:
+            print('✅ Phantom startup reconcile: all bots match Kalshi')
+
     # ── Post-recovery: prune _all_dog_order_ids now that fill recovery is done ──
     # This prevents WS reconnection from replaying old fills as ghost hedges
     for _bid, _bot in active_bots.items():

@@ -7090,25 +7090,25 @@ function _renderWatchBotCard(bot, botId, container, gameScores) {
 
     const item = document.createElement('div');
     item.className = 'bot-item';
-    item.style.cssText = `background:#0c1018;border:1px solid #ffd74018;border-left:3px solid ${isStopped ? accentCol : '#00ff88'};border-radius:10px;padding:12px;margin-bottom:8px;cursor:pointer;box-shadow:0 0 12px rgba(255,215,64,0.04);${isStopped ? 'opacity:0.75;' : ''}`;
+    item.style.cssText = `flex-direction:column;gap:0;background:#0c1018;border:1px solid #ffd74018;border-left:3px solid ${isStopped ? accentCol : '#00ff88'};border-radius:10px;padding:12px;margin-bottom:8px;cursor:pointer;box-shadow:0 0 12px rgba(255,215,64,0.04);${isStopped ? 'opacity:0.75;' : ''}`;
     item.onclick = (e) => { if (!e.target.closest('button') && !e.target.closest('a')) showBotDetail(botId); };
     item.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
-            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;flex:1;min-width:0;">
-                ${botIconSvg('scout', 18)}
-                <span style="color:#00ff88;font-weight:800;font-size:9px;letter-spacing:.1em;opacity:0.8;">SCOUT</span>
-                <a href="#" onclick="navigateToMarket('${ticker.toUpperCase().split('-').slice(0,2).join('-')}');return false;" style="color:#e8eaed;font-weight:700;font-size:13px;text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="View in Markets tab">${watchDisplayName}</a>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                ${botIconSvg('scout', 22)}
+                <span style="color:#00ff88;font-weight:800;font-size:10px;letter-spacing:.08em;text-transform:uppercase;">SCOUT</span>
+                <span style="color:#fff;font-weight:700;font-size:14px;">${watchDisplayName}</span>
+                <span style="background:${accentCol}22;color:${accentCol};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel}</span>
                 ${watchScoreBadge}
-                <span style="background:${accentCol}15;color:${accentCol};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;letter-spacing:.03em;">${statusLabel}</span>
-                <span style="padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;background:${side==='yes'?'#00ff8820':'#ff444420'};color:${side==='yes'?'#00ff88':'#ff4444'};">${side.toUpperCase()}</span>
+                <span style="padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;background:${side==='yes'?'#00ff8822':'#ff444422'};color:${side==='yes'?'#00ff88':'#ff4444'};">${side.toUpperCase()}</span>
+                <span style="color:#555;font-size:10px;">${ageStr}</span>
             </div>
-            <div style="display:flex;align-items:center;gap:5px;flex-shrink:0;">
+            <div style="display:flex;align-items:center;gap:8px;">
                 ${orderFilled && unrealizedPnl !== 0 ? `<span style="color:${unrealColor};font-weight:800;font-size:13px;">${unrealizedPnl > 0 ? '+' : ''}${unrealizedPnl}¢</span>` : ''}
-                <span style="color:#334;font-size:9px;">${ageStr}</span>
-                ${!isStopped ? `<button onclick="scoutModify('${botId}')" style="background:#ffd74015;color:#ffd740;border:1px solid #ffd74030;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Edit</button>` : ''}
-                ${!isStopped ? `<button onclick="stopBot('${botId}')" style="background:#ff880015;color:#ff8800;border:1px solid #ff880030;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
-                ${!isStopped ? `<button onclick="releaseBot('${botId}')" style="background:#4488ff15;color:#4488ff;border:1px solid #4488ff30;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Release</button>` : ''}
-                <button onclick="cancelBot('${botId}')" style="background:#ff444415;color:#ff4444;border:1px solid #ff444430;border-radius:5px;padding:3px 7px;font-size:10px;cursor:pointer;">x</button>
+                ${!isStopped ? `<button onclick="scoutModify('${botId}')" style="background:#ffd74022;color:#ffd740;border:1px solid #ffd74044;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Edit</button>` : ''}
+                ${!isStopped ? `<button onclick="stopBot('${botId}')" style="background:#ff880022;color:#ff8800;border:1px solid #ff880044;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
+                ${!isStopped ? `<button onclick="releaseBot('${botId}')" style="background:#4488ff22;color:#4488ff;border:1px solid #4488ff44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Release</button>` : ''}
+                <button onclick="cancelBot('${botId}')" style="background:#ff444422;color:#ff4444;border:1px solid #ff444444;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✕</button>
             </div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">

@@ -11845,6 +11845,8 @@ def _handle_phantom(bot_id, bot, actions):
         dog_price = bot['dog_price']
         # Post at fav bid, or bid+1 if in bid+1 mode
         hedge_price = (fav_bid + 1) if bot.get('_taker_fired') else fav_bid
+        if hedge_price > 99:
+            hedge_price = 99  # Kalshi max is 99c for buy orders
         if hedge_price < 1:
             actions.append({'bot_id': bot_id, 'action': 'dog_filled_waiting_fav_bid'})
             return
@@ -12186,6 +12188,7 @@ def _handle_phantom(bot_id, bot, actions):
             try:
                 _ph_oids = [bot.get('dog_order_id'), bot.get('fav_order_id')]
                 _ph_oids += bot.get('_all_dog_order_ids', [])
+                _ph_oids += bot.get('_all_hedge_order_ids', [])  # Include replaced fav orders (amend/BID+1 creates new IDs)
                 _ph_oids = [o for o in _ph_oids if o]
                 _ph_yes = 0
                 _ph_no = 0
@@ -12312,6 +12315,7 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['no_fill_qty'] = 0
                 bot['_hedge_fired'] = False
                 bot['_trade_recorded'] = False
+                bot['_all_hedge_order_ids'] = []  # Clear — hedge cycle complete, prevents cross-cycle verify contamination
                 # Keep _all_dog_order_ids until new order placed — WS fills on old orders
                 # can still arrive during waiting_repeat cooldown. Cleared at re-anchor.
                 bot['_bid_at_post'] = bot.get(f'live_{dog_side}_bid', 0)

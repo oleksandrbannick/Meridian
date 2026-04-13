@@ -5862,7 +5862,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
         'dog_filled': '👻 FILLED — HEDGING', 'ladder_filled_no_fav': '👻 FILLED — HEDGING',
         'fav_hedge_posted': bot._game_over_holding ? '⏳ HOLDING — SETTLEMENT' : bot._taker_fired ? '⚡ BID+1' : '⭐ HEDGE POSTED', 'waiting_repeat': bot._just_completed ? '✅ COMPLETED' : bot._flip_pending ? '⚡ FLIPPING' : '🔄 REPEATING',
         'completed': _isSettled ? '🏁 SETTLED' : _isAwaitingSettlement ? '⏳ AWAITING SETTLEMENT' : _isDeathZone ? '🛑 END OF GAME' : _isSmartStopped ? '⏹ SMART STOP' : _isCompletedRuns ? '✅ COMPLETED RUNS' : '✅ COMPLETE',
-        'stopped': _isDeathZone ? '🛑 END OF GAME' : _isSmartStopped ? '⏹ SMART STOP' : (bot._pending_sells?.length ? '📤 SELLING' : '🛑 STOPPED'),
+        'stopped': bot._stop_reason === 'scout_orphan_cleanup' ? '🛑 STOPPED — Scout managing' : _isDeathZone ? '🛑 END OF GAME' : _isSmartStopped ? '⏹ SMART STOP' : (bot._pending_sells?.length ? '📤 SELLING' : '🛑 STOPPED'),
         'awaiting_settlement': '⏳ AWAITING SETTLEMENT',
     };
     const borderMap = {
@@ -6564,11 +6564,11 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 ${rtLog.length > 0 ? rtLog.map((rt, i) => {
                     const combCol = rt.combined < 99 ? '#00ff88' : rt.combined <= 100 ? '#ffaa00' : '#ff4444';
                     const pCol = rt.pnl >= 0 ? '#00ff88' : '#ff4444';
-                    return `<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:10px;${i > 0 ? 'border-top:1px solid #0f1520;' : ''}">
+                    return `<div style="display:grid;grid-template-columns:28px 1fr 36px 42px;align-items:center;padding:2px 0;font-size:10px;${i > 0 ? 'border-top:1px solid #0f1520;' : ''}">
                         <span style="color:#00d4ff;">#${i+1}</span>
                         <span><span style="color:#00d4ff;">${rt.entry_price}</span> <span style="color:#ff7043;">${rt.exit_price}</span> <span style="color:${combCol};font-weight:700;">${rt.combined}c</span></span>
-                        <span style="color:#ff7043;">x${rt.qty}</span>
-                        <span style="color:${pCol};font-weight:700;">${rt.pnl >= 0 ? '+' : ''}${rt.pnl}c</span>
+                        <span style="color:#ff7043;text-align:right;">x${rt.qty}</span>
+                        <span style="color:${pCol};font-weight:700;text-align:right;">${rt.pnl >= 0 ? '+' : ''}${rt.pnl}c</span>
                     </div>`;
                 }).join('') : ''}
                 ${exitLog.length > 0 ? `<div style="margin-top:4px;padding-top:4px;border-top:1px solid #1a0a0a;">` +
@@ -6580,11 +6580,11 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                         const exitCol = (ex.held_side === 'yes') ? '#ff7043' : '#00d4ff';
                         const combPrice = ex.type === 'arb_complete' ? ex.held_avg + ex.exit_price : 0;
                         const combCol = combPrice > 0 ? (combPrice < 99 ? '#00ff88' : combPrice <= 100 ? '#ffaa00' : '#ff4444') : '';
-                        return `<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:10px;${i > 0 ? 'border-top:1px solid #0f1520;' : ''}">
-                            <span style="color:${sideCol};">${sideLabel}</span>
+                        return `<div style="display:grid;grid-template-columns:62px 1fr 36px 42px;align-items:center;padding:2px 0;font-size:10px;${i > 0 ? 'border-top:1px solid #0f1520;' : ''}">
+                            <span style="color:${sideCol};font-weight:700;">${sideLabel}</span>
                             <span><span style="color:${heldCol};">${ex.held_avg}c</span><span style="color:#334;">${ex.type === 'arb_complete' ? '·' : '>'}</span><span style="color:${exitCol};">${ex.type === 'arb_complete' ? ex.exit_price : ex.sell_price}c</span>${combPrice > 0 ? `<span style="color:#334;">·</span><span style="color:${combCol};font-weight:700;">${combPrice}c</span>` : ''}</span>
-                            <span style="color:#ff7043;">x${ex.qty}</span>
-                            <span style="color:${pCol};font-weight:700;">${ex.pnl >= 0 ? '+' : ''}${ex.pnl}c</span>
+                            <span style="color:#ff7043;text-align:right;">x${ex.qty}</span>
+                            <span style="color:${pCol};font-weight:700;text-align:right;">${ex.pnl >= 0 ? '+' : ''}${ex.pnl}c</span>
                         </div>`;
                     }).join('') + '</div>' : ''}
             </div>

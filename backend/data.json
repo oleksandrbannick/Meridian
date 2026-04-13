@@ -1,416 +1,20 @@
 {
   "active_bots": {
-    "anchor_KXMLBGAME-26APR062040HOUCOL-HOU_d1881689": {
-      "ticker": "KXMLBGAME-26APR062040HOUCOL-HOU",
-      "hedge_ticker": "KXMLBGAME-26APR062040HOUCOL-HOU",
-      "cross_market": false,
-      "bot_category": "anchor_dog",
-      "status": "dog_anchor_posted",
-      "dog_side": "no",
-      "fav_side": "yes",
-      "dog_price": 19,
-      "dog_order_id": "f9d84615-3c45-4e84-b597-0b4ce93804d1",
-      "fav_order_id": null,
-      "fav_price": null,
-      "target_width": 5,
-      "quantity": 10,
-      "hedge_timeout_s": 120,
-      "dog_fill_qty": 0,
-      "fav_fill_qty": 0,
-      "game_phase": "live",
-      "created_at": 1775523349.1452513,
-      "posted_at": 1775526580.6661646,
-      "dog_filled_at": null,
-      "repeat_count": 999,
-      "repeats_done": 0,
-      "smart_mode": true,
-      "consecutive_losses": 0,
-      "anchor_depth": 5,
-      "fav_shave": 0,
-      "fav_walk_count": 0,
-      "fav_walk_ceiling": 100,
-      "fav_last_walk_at": null,
-      "market_type": "moneyline",
-      "spread_line": "",
-      "yes_price": null,
-      "no_price": 19,
-      "yes_order_id": null,
-      "no_order_id": "f9d84615-3c45-4e84-b597-0b4ce93804d1",
-      "yes_fill_qty": 0,
-      "no_fill_qty": 0,
-      "arb_width": 5,
-      "_precalc_hedge_price": 84,
-      "_bid_at_post": 24,
-      "_last_repost_at": 1775526580.6661646,
-      "_all_dog_order_ids": [
-        "716cf10f-0bfc-48c9-a1eb-25755aa76fd2",
-        "716cf10f-0bfc-48c9-a1eb-25755aa76fd2",
-        "a9603db6-769f-42dc-98d3-70e9b6063ed4",
-        "a9603db6-769f-42dc-98d3-70e9b6063ed4",
-        "19af1167-78a1-471b-aee8-c5aa9f129eb6",
-        "19af1167-78a1-471b-aee8-c5aa9f129eb6",
-        "8a6c71ba-a209-4e51-b0d7-da061afc1556",
-        "8a6c71ba-a209-4e51-b0d7-da061afc1556",
-        "af9f37bf-2fa1-4400-b0a2-a0d53ee02c55",
-        "af9f37bf-2fa1-4400-b0a2-a0d53ee02c55",
-        "e53b9340-16aa-4908-b9c3-b5294b6cb8b0",
-        "e53b9340-16aa-4908-b9c3-b5294b6cb8b0",
-        "90977ef4-76c6-4a9f-afa6-90e745f4de19",
-        "90977ef4-76c6-4a9f-afa6-90e745f4de19",
-        "fc5cd65c-958a-4e71-af31-2999cea6fe38",
-        "fc5cd65c-958a-4e71-af31-2999cea6fe38",
-        "011bcc57-35c8-4b7c-b92b-b927c5f72859",
-        "011bcc57-35c8-4b7c-b92b-b927c5f72859",
-        "e6db26a0-7fb6-4b99-bbfb-954de5be61ce",
-        "e6db26a0-7fb6-4b99-bbfb-954de5be61ce",
-        "148af04a-688a-4b49-bbfe-9bc6499a4c88",
-        "148af04a-688a-4b49-bbfe-9bc6499a4c88",
-        "7ebe5938-fbba-433e-9f18-db41a80d97aa",
-        "7ebe5938-fbba-433e-9f18-db41a80d97aa",
-        "16c801d9-7a0f-4b72-80d7-bf6a244dec33",
-        "16c801d9-7a0f-4b72-80d7-bf6a244dec33",
-        "6e39c773-b486-4a5c-993b-a2616890a6f4",
-        "6e39c773-b486-4a5c-993b-a2616890a6f4",
-        "7e66889f-81e3-4ccb-a544-267dc04c200b",
-        "7e66889f-81e3-4ccb-a544-267dc04c200b",
-        "8c3af6d7-8e55-4b52-a2f2-4fba9665e859",
-        "8c3af6d7-8e55-4b52-a2f2-4fba9665e859",
-        "7128af36-3e43-498d-ae73-ce72c9338a04",
-        "7128af36-3e43-498d-ae73-ce72c9338a04",
-        "6d3d3168-19f7-41d9-9b33-d6b72dbd2b75",
-        "6d3d3168-19f7-41d9-9b33-d6b72dbd2b75",
-        "7492fe63-c966-4539-bc48-a5cdf6f21e26",
-        "7492fe63-c966-4539-bc48-a5cdf6f21e26",
-        "24e072d5-c637-481c-bd04-9a0da37ee14c",
-        "24e072d5-c637-481c-bd04-9a0da37ee14c",
-        "07279251-465d-4e14-9862-aa53dfb7a088",
-        "07279251-465d-4e14-9862-aa53dfb7a088",
-        "f9d84615-3c45-4e84-b597-0b4ce93804d1"
-      ],
-      "_fav_depth": 3568,
-      "_price_source": "ws",
-      "_price_age_s": 0,
-      "_last_stale_market_check": 1775526389.4067147,
-      "_last_settle_check_global": 1775526584.7100024,
-      "_bid_history": [
-        [
-          1775526564.2545898,
-          26
-        ],
-        [
-          1775526567.2660809,
-          26
-        ],
-        [
-          1775526569.257831,
-          26
-        ],
-        [
-          1775526571.2897747,
-          26
-        ],
-        [
-          1775526573.2921908,
-          26
-        ],
-        [
-          1775526575.2911088,
-          21
-        ],
-        [
-          1775526580.6992939,
-          23
-        ],
-        [
-          1775526585.3832664,
-          24
-        ],
-        [
-          1775526587.2986653,
-          24
-        ],
-        [
-          1775526589.2798326,
-          24
-        ],
-        [
-          1775526593.2736053,
-          24
-        ],
-        [
-          1775526595.2791638,
-          24
-        ],
-        [
-          1775526597.306546,
-          24
-        ],
-        [
-          1775526601.2811406,
-          24
-        ],
-        [
-          1775526603.2832057,
-          24
-        ],
-        [
-          1775526605.2886283,
-          24
-        ],
-        [
-          1775526606.7371109,
-          24
-        ],
-        [
-          1775526608.6972961,
-          24
-        ],
-        [
-          1775526610.7651415,
-          24
-        ],
-        [
-          1775526612.7554638,
-          24
-        ],
-        [
-          1775526614.7758036,
-          24
-        ],
-        [
-          1775526616.7486498,
-          25
-        ],
-        [
-          1775526618.747541,
-          25
-        ],
-        [
-          1775526621.7604613,
-          25
-        ],
-        [
-          1775526623.7566187,
-          25
-        ]
-      ],
-      "_volatility": 5,
-      "_market_condition": "normal",
-      "_gap_threshold": 5,
-      "_gap_cooldown": 20,
-      "_fav_dry_count": 0,
-      "_last_retreat_at": 1775526580.6661646,
-      "dog_repost_count": 68,
-      "live_yes_bid": 74,
-      "live_no_bid": 25,
-      "live_yes_ask": 75,
-      "live_no_ask": 26
-    },
-    "anchor_KXMLBGAME-26APR062040HOUCOL-COL_126622ed": {
-      "ticker": "KXMLBGAME-26APR062040HOUCOL-COL",
-      "hedge_ticker": "KXMLBGAME-26APR062040HOUCOL-COL",
-      "cross_market": false,
-      "bot_category": "anchor_dog",
-      "status": "dog_anchor_posted",
-      "dog_side": "yes",
-      "fav_side": "no",
-      "dog_price": 18,
-      "dog_order_id": "ea0dc8d6-1b86-49d4-bfe0-38bbc8f08d84",
-      "fav_order_id": null,
-      "fav_price": null,
-      "target_width": 5,
-      "quantity": 15,
-      "hedge_timeout_s": 120,
-      "dog_fill_qty": 0,
-      "fav_fill_qty": 0,
-      "game_phase": "live",
-      "created_at": 1775523363.156126,
-      "posted_at": 1775526576.524259,
-      "dog_filled_at": null,
-      "repeat_count": 999,
-      "repeats_done": 0,
-      "smart_mode": true,
-      "consecutive_losses": 0,
-      "anchor_depth": 6,
-      "fav_shave": 0,
-      "fav_walk_count": 0,
-      "fav_walk_ceiling": 100,
-      "fav_last_walk_at": null,
-      "market_type": "moneyline",
-      "spread_line": "",
-      "yes_price": 18,
-      "no_price": null,
-      "yes_order_id": "ea0dc8d6-1b86-49d4-bfe0-38bbc8f08d84",
-      "no_order_id": null,
-      "yes_fill_qty": 0,
-      "no_fill_qty": 0,
-      "arb_width": 5,
-      "_precalc_hedge_price": 85,
-      "_bid_at_post": 24,
-      "_last_repost_at": 1775526576.524259,
-      "_all_dog_order_ids": [
-        "0c3bb13b-c7a7-4ae5-a68c-9dbf859646c7",
-        "0c3bb13b-c7a7-4ae5-a68c-9dbf859646c7",
-        "e96df0c6-c7de-4717-a2f4-1ff6fa207664",
-        "e96df0c6-c7de-4717-a2f4-1ff6fa207664",
-        "e659ebf9-ab60-443b-94ed-788531a3aa0e",
-        "e659ebf9-ab60-443b-94ed-788531a3aa0e",
-        "bba5ef86-5194-4151-be82-2a353c171888",
-        "bba5ef86-5194-4151-be82-2a353c171888",
-        "2b4ccd39-e757-4ebd-9484-852757f3e8f7",
-        "2b4ccd39-e757-4ebd-9484-852757f3e8f7",
-        "c40a59f8-cf0b-4043-a6e5-286ce09109dd",
-        "c40a59f8-cf0b-4043-a6e5-286ce09109dd",
-        "3dc2b3a6-adab-4a4a-9717-b809b1ea026b",
-        "3dc2b3a6-adab-4a4a-9717-b809b1ea026b",
-        "ab9da658-868e-4194-a374-39b9377509df",
-        "ab9da658-868e-4194-a374-39b9377509df",
-        "2d7ee5aa-d3ab-46ec-b067-b7875883bc11",
-        "2d7ee5aa-d3ab-46ec-b067-b7875883bc11",
-        "46c3989d-cc3c-4c3b-94a8-3cd2ef89c9fe",
-        "46c3989d-cc3c-4c3b-94a8-3cd2ef89c9fe",
-        "1821b588-00ad-4bed-866f-355632490ef2",
-        "1821b588-00ad-4bed-866f-355632490ef2",
-        "e6748a67-f150-450a-a08f-b61e2b7b0e45",
-        "e6748a67-f150-450a-a08f-b61e2b7b0e45",
-        "144288f0-b9c0-41fb-beb8-d7fab1a69d0c",
-        "144288f0-b9c0-41fb-beb8-d7fab1a69d0c",
-        "ea0dc8d6-1b86-49d4-bfe0-38bbc8f08d84"
-      ],
-      "_fav_depth": 382,
-      "_price_source": "ws",
-      "_price_age_s": 1,
-      "_last_stale_market_check": 1775526406.2784786,
-      "_last_settle_check_global": 1775526581.4786608,
-      "_bid_history": [
-        [
-          1775526564.281555,
-          26
-        ],
-        [
-          1775526567.295565,
-          26
-        ],
-        [
-          1775526569.2915318,
-          26
-        ],
-        [
-          1775526571.3136685,
-          26
-        ],
-        [
-          1775526573.3181403,
-          26
-        ],
-        [
-          1775526577.2642365,
-          24
-        ],
-        [
-          1775526582.267659,
-          23
-        ],
-        [
-          1775526585.4084337,
-          24
-        ],
-        [
-          1775526587.3310802,
-          24
-        ],
-        [
-          1775526589.3080595,
-          24
-        ],
-        [
-          1775526593.2994866,
-          24
-        ],
-        [
-          1775526595.307194,
-          24
-        ],
-        [
-          1775526597.3565662,
-          24
-        ],
-        [
-          1775526601.3093786,
-          24
-        ],
-        [
-          1775526603.3104942,
-          24
-        ],
-        [
-          1775526605.3176386,
-          24
-        ],
-        [
-          1775526606.7646427,
-          24
-        ],
-        [
-          1775526608.7239065,
-          24
-        ],
-        [
-          1775526610.795151,
-          24
-        ],
-        [
-          1775526612.7824097,
-          24
-        ],
-        [
-          1775526614.830965,
-          25
-        ],
-        [
-          1775526616.7822464,
-          25
-        ],
-        [
-          1775526618.7740643,
-          25
-        ],
-        [
-          1775526621.7852871,
-          25
-        ],
-        [
-          1775526623.7885168,
-          25
-        ]
-      ],
-      "_volatility": 3,
-      "_market_condition": "calm",
-      "_gap_threshold": 3,
-      "_gap_cooldown": 15,
-      "_fav_dry_count": 0,
-      "_last_retreat_at": 1775526576.524259,
-      "dog_repost_count": 57,
-      "live_yes_bid": 25,
-      "live_no_bid": 74,
-      "live_yes_ask": 26,
-      "live_no_ask": 75
-    },
     "KXNBATOTAL-26APR07OKCLAL-218_8a6f3f3d": {
       "ticker": "KXNBATOTAL-26APR07OKCLAL-218",
       "yes_price": 52,
       "no_price": 15,
       "quantity": 1,
       "profit_per": 33,
-      "game_phase": "pregame",
-      "status": "both_posted",
+      "game_phase": "live",
+      "status": "completed",
       "yes_order_id": "8fd3e422-2232-4ab5-a731-f3288a6f3f3d",
       "no_order_id": "c9574caa-65c6-4c2f-abea-411bdfab2752",
       "order_group_id": null,
       "yes_fill_qty": 0,
       "no_fill_qty": 0,
       "created_at": 1775523851.0429718,
-      "posted_at": 1775523851.0429733,
+      "posted_at": 1776042050.1581576,
       "repost_count": 0,
       "repeat_count": 0,
       "repeats_done": 0,
@@ -431,7 +35,9 @@
       "live_yes_bid": 53,
       "live_no_bid": 16,
       "live_yes_ask": 84,
-      "live_no_ask": 47
+      "live_no_ask": 47,
+      "completed_at": 1776042050.5733259,
+      "market_title": "Oklahoma City at Los Angeles L: Total Points"
     },
     "anchor_KXMLBGAME-26APR061940DETMIN-MIN_f9e27ac3": {
       "ticker": "KXMLBGAME-26APR061940DETMIN-MIN",
@@ -476,34 +82,6 @@
       "_bid_at_post": 10,
       "_last_repost_at": 1775526422.1466944,
       "_all_dog_order_ids": [
-        "2eacf427-8c42-4537-92a5-4f2362867f47",
-        "2eacf427-8c42-4537-92a5-4f2362867f47",
-        "da1d75d7-62ee-4e39-a7f9-e772c8204039",
-        "da1d75d7-62ee-4e39-a7f9-e772c8204039",
-        "60681393-6130-4b7c-8c02-42ddceca443e",
-        "60681393-6130-4b7c-8c02-42ddceca443e",
-        "b9b4d435-e420-4ba8-bd44-bf6cd161b66b",
-        "b9b4d435-e420-4ba8-bd44-bf6cd161b66b",
-        "d4e1bd7f-cf51-419d-823a-184218284e27",
-        "d4e1bd7f-cf51-419d-823a-184218284e27",
-        "3e70c7fb-654b-43bf-9e89-ee0b81ca1005",
-        "3e70c7fb-654b-43bf-9e89-ee0b81ca1005",
-        "b00e0695-228d-4f22-9dbb-1b4b39985353",
-        "b00e0695-228d-4f22-9dbb-1b4b39985353",
-        "3742c1bc-fa1a-4d4e-ac8d-17f141fe624d",
-        "3742c1bc-fa1a-4d4e-ac8d-17f141fe624d",
-        "b5743951-92be-4a2a-8896-1582480527bf",
-        "b5743951-92be-4a2a-8896-1582480527bf",
-        "062340d9-d824-4566-b8e7-550026bf6fe8",
-        "062340d9-d824-4566-b8e7-550026bf6fe8",
-        "d951f1b9-bd9b-4ae4-9983-bf93c3e8a59c",
-        "d951f1b9-bd9b-4ae4-9983-bf93c3e8a59c",
-        "5aacbd24-2877-42b6-a7b6-7d8956bc3dea",
-        "5aacbd24-2877-42b6-a7b6-7d8956bc3dea",
-        "2fd78a25-6740-49f5-9dd5-2818e0581425",
-        "2fd78a25-6740-49f5-9dd5-2818e0581425",
-        "9bac3f5d-61d2-4c66-8a46-858ef5cc3df2",
-        "9bac3f5d-61d2-4c66-8a46-858ef5cc3df2",
         "aa1d99da-11c0-45a4-a628-821e1691ebb7"
       ],
       "_fav_depth": 491,
@@ -638,7 +216,8 @@
       "live_no_bid": 9,
       "live_yes_ask": 91,
       "live_no_ask": 12,
-      "completed_at": 1775526496.291068
+      "completed_at": 1775526496.291068,
+      "market_title": "Detroit vs Minnesota Winner?"
     },
     "anchor_KXMLBGAME-26APR061940DETMIN-DET_6019635c": {
       "ticker": "KXMLBGAME-26APR061940DETMIN-DET",
@@ -683,18 +262,6 @@
       "_bid_at_post": 11,
       "_last_repost_at": 1775526392.126706,
       "_all_dog_order_ids": [
-        "b0cd6df0-ed64-474f-b91d-10616019635c",
-        "b0cd6df0-ed64-474f-b91d-10616019635c",
-        "f33febfb-5bb5-460f-ab07-e054104e3b22",
-        "f33febfb-5bb5-460f-ab07-e054104e3b22",
-        "57acf6a6-0bfc-4d1d-a908-0aab9e7f95c6",
-        "57acf6a6-0bfc-4d1d-a908-0aab9e7f95c6",
-        "f475ade4-c6e7-4321-8f58-6daccd4d28d7",
-        "f475ade4-c6e7-4321-8f58-6daccd4d28d7",
-        "74940650-7644-4483-a8d5-f6eeb54a0d9d",
-        "74940650-7644-4483-a8d5-f6eeb54a0d9d",
-        "9caffc6b-3df1-4593-b1b5-9b8bfbed881f",
-        "9caffc6b-3df1-4593-b1b5-9b8bfbed881f",
         "feb48122-603c-4e61-8db0-5212b60ba1b9"
       ],
       "_fav_depth": 1253,
@@ -795,347 +362,8 @@
       "live_no_bid": 88,
       "live_yes_ask": 12,
       "live_no_ask": 90,
-      "completed_at": 1775526497.4591
-    },
-    "anchor_KXMLBGAME-26APR062138ATLLAA-LAA_2f932303": {
-      "ticker": "KXMLBGAME-26APR062138ATLLAA-LAA",
-      "hedge_ticker": "KXMLBGAME-26APR062138ATLLAA-LAA",
-      "cross_market": false,
-      "bot_category": "anchor_dog",
-      "status": "dog_anchor_posted",
-      "dog_side": "yes",
-      "fav_side": "no",
-      "dog_price": 34,
-      "dog_order_id": "a8ba66d1-9979-47ef-9b23-68d6f50a3782",
-      "fav_order_id": null,
-      "fav_price": null,
-      "target_width": 5,
-      "quantity": 30,
-      "hedge_timeout_s": 120,
-      "dog_fill_qty": 0,
-      "fav_fill_qty": 0,
-      "game_phase": "live",
-      "created_at": 1775526017.5936136,
-      "posted_at": 1775526510.2540493,
-      "dog_filled_at": null,
-      "repeat_count": 999,
-      "repeats_done": 0,
-      "smart_mode": true,
-      "consecutive_losses": 0,
-      "anchor_depth": 8,
-      "fav_shave": 0,
-      "fav_walk_count": 0,
-      "fav_walk_ceiling": 100,
-      "fav_last_walk_at": null,
-      "market_type": "moneyline",
-      "spread_line": "",
-      "yes_price": 34,
-      "no_price": null,
-      "yes_order_id": "a8ba66d1-9979-47ef-9b23-68d6f50a3782",
-      "no_order_id": null,
-      "yes_fill_qty": 0,
-      "no_fill_qty": 0,
-      "arb_width": 5,
-      "_precalc_hedge_price": 69,
-      "_bid_at_post": 42,
-      "_last_repost_at": 1775526510.2540493,
-      "_all_dog_order_ids": [
-        "1a4cf87b-2a25-45d8-bdc5-d4942f932303",
-        "1a4cf87b-2a25-45d8-bdc5-d4942f932303",
-        "3b7209e8-28e4-4a0a-af0c-0ad5a1ea3a10",
-        "3b7209e8-28e4-4a0a-af0c-0ad5a1ea3a10",
-        "7550d4ef-f1ba-4a31-b60a-1f74920b15c3",
-        "7550d4ef-f1ba-4a31-b60a-1f74920b15c3",
-        "6a54f8ca-d106-4a97-baac-48970423b96a",
-        "6a54f8ca-d106-4a97-baac-48970423b96a",
-        "e4234166-da45-43ef-90a5-3c02282981d9",
-        "e4234166-da45-43ef-90a5-3c02282981d9",
-        "49b79cb1-ae27-4959-8399-e354ca52641a",
-        "49b79cb1-ae27-4959-8399-e354ca52641a",
-        "bb5384a6-d086-4ad5-80e1-f74c2d879c0b",
-        "bb5384a6-d086-4ad5-80e1-f74c2d879c0b",
-        "e11b50f6-32ec-448d-85af-a05a7ea5a393",
-        "e11b50f6-32ec-448d-85af-a05a7ea5a393",
-        "4bc2b068-99b1-4cbd-9115-581233001fd8",
-        "4bc2b068-99b1-4cbd-9115-581233001fd8",
-        "d85e95fd-1d35-446d-b6ff-24537d726fa8",
-        "d85e95fd-1d35-446d-b6ff-24537d726fa8",
-        "0928b459-4695-4c57-b2ae-ad0c123422c5",
-        "0928b459-4695-4c57-b2ae-ad0c123422c5",
-        "0a3d2f27-3a32-4671-9b93-1b972ba2d035",
-        "0a3d2f27-3a32-4671-9b93-1b972ba2d035",
-        "a8ba66d1-9979-47ef-9b23-68d6f50a3782"
-      ],
-      "_fav_depth": 44294,
-      "_last_stale_market_check": 1775526619.8361003,
-      "_price_source": "ws",
-      "_price_age_s": 7,
-      "_last_settle_check_global": 1775526574.312348,
-      "_bid_history": [
-        [
-          1775526565.290868,
-          44
-        ],
-        [
-          1775526568.315529,
-          42
-        ],
-        [
-          1775526570.3366916,
-          44
-        ],
-        [
-          1775526572.2592082,
-          44
-        ],
-        [
-          1775526574.3594675,
-          44
-        ],
-        [
-          1775526579.3116837,
-          44
-        ],
-        [
-          1775526583.382322,
-          44
-        ],
-        [
-          1775526586.3830192,
-          42
-        ],
-        [
-          1775526588.3284342,
-          42
-        ],
-        [
-          1775526591.2818408,
-          42
-        ],
-        [
-          1775526594.2734811,
-          42
-        ],
-        [
-          1775526596.2975264,
-          42
-        ],
-        [
-          1775526598.3591895,
-          42
-        ],
-        [
-          1775526602.363623,
-          42
-        ],
-        [
-          1775526604.3128564,
-          42
-        ],
-        [
-          1775526606.3558774,
-          42
-        ],
-        [
-          1775526607.4832788,
-          42
-        ],
-        [
-          1775526609.5007129,
-          42
-        ],
-        [
-          1775526611.7708898,
-          42
-        ],
-        [
-          1775526613.7633455,
-          42
-        ],
-        [
-          1775526615.8298876,
-          42
-        ],
-        [
-          1775526617.796097,
-          42
-        ],
-        [
-          1775526619.80912,
-          42
-        ],
-        [
-          1775526622.8214667,
-          42
-        ]
-      ],
-      "_volatility": 2,
-      "_market_condition": "calm",
-      "_gap_threshold": 3,
-      "_gap_cooldown": 15,
-      "_fav_dry_count": 0,
-      "_last_retreat_at": 1775526510.2540493,
-      "dog_repost_count": 12,
-      "live_yes_bid": 42,
-      "live_no_bid": 57,
-      "live_yes_ask": 43,
-      "live_no_ask": 58
-    },
-    "anchor_KXMLBGAME-26APR061940DETMIN-DET_557d622e": {
-      "ticker": "KXMLBGAME-26APR061940DETMIN-DET",
-      "hedge_ticker": "KXMLBGAME-26APR061940DETMIN-DET",
-      "cross_market": false,
-      "bot_category": "anchor_dog",
-      "status": "dog_anchor_posted",
-      "dog_side": "yes",
-      "fav_side": "no",
-      "dog_price": 5,
-      "dog_order_id": "cc9e71e7-edf4-4e7c-817f-78bd557d622e",
-      "fav_order_id": null,
-      "fav_price": null,
-      "target_width": 5,
-      "quantity": 10,
-      "hedge_timeout_s": 120,
-      "dog_fill_qty": 0,
-      "fav_fill_qty": 0,
-      "game_phase": "live",
-      "created_at": 1775526595.30445,
-      "posted_at": 1775526595.3044503,
-      "dog_filled_at": null,
-      "repeat_count": 999,
-      "repeats_done": 0,
-      "smart_mode": true,
-      "consecutive_losses": 0,
-      "anchor_depth": 8,
-      "fav_shave": 0,
-      "fav_walk_count": 0,
-      "fav_walk_ceiling": 100,
-      "fav_last_walk_at": null,
-      "market_type": "moneyline",
-      "spread_line": "",
-      "yes_price": 5,
-      "no_price": null,
-      "yes_order_id": "cc9e71e7-edf4-4e7c-817f-78bd557d622e",
-      "no_order_id": null,
-      "yes_fill_qty": 0,
-      "no_fill_qty": 0,
-      "arb_width": 5,
-      "_precalc_hedge_price": 98,
-      "_bid_at_post": 13,
-      "_last_repost_at": 0,
-      "_all_dog_order_ids": [
-        "cc9e71e7-edf4-4e7c-817f-78bd557d622e"
-      ],
-      "_fav_depth": 60133,
-      "_price_source": "ws",
-      "_price_age_s": 1,
-      "_last_stale_market_check": 1775526596.2975945,
-      "_last_settle_check_global": 1775526598.3592293,
-      "_bid_history": [
-        [
-          1775526599.3078518,
-          13
-        ],
-        [
-          1775526602.3926945,
-          13
-        ],
-        [
-          1775526604.341129,
-          13
-        ],
-        [
-          1775526606.4045112,
-          13
-        ],
-        [
-          1775526607.5378845,
-          13
-        ],
-        [
-          1775526609.5528378,
-          13
-        ],
-        [
-          1775526611.8003113,
-          13
-        ],
-        [
-          1775526613.7885468,
-          13
-        ],
-        [
-          1775526615.8545227,
-          13
-        ],
-        [
-          1775526617.9187167,
-          13
-        ],
-        [
-          1775526619.8360624,
-          13
-        ],
-        [
-          1775526622.8464613,
-          13
-        ]
-      ],
-      "_volatility": 0,
-      "_market_condition": "calm",
-      "_gap_threshold": 3,
-      "_gap_cooldown": 15,
-      "live_yes_bid": 13,
-      "live_no_bid": 86,
-      "live_yes_ask": 14,
-      "live_no_ask": 87
-    },
-    "anchor_KXMLBGAME-26APR062138ATLLAA-ATL_86282750": {
-      "ticker": "KXMLBGAME-26APR062138ATLLAA-ATL",
-      "hedge_ticker": "KXMLBGAME-26APR062138ATLLAA-ATL",
-      "cross_market": false,
-      "bot_category": "anchor_dog",
-      "status": "dog_anchor_posted",
-      "dog_side": "no",
-      "fav_side": "yes",
-      "dog_price": 35,
-      "dog_order_id": "dfef0706-f0e7-487a-92cf-412786282750",
-      "fav_order_id": null,
-      "fav_price": null,
-      "target_width": 5,
-      "quantity": 10,
-      "hedge_timeout_s": 120,
-      "dog_fill_qty": 0,
-      "fav_fill_qty": 0,
-      "game_phase": "live",
-      "created_at": 1775526624.8339715,
-      "posted_at": 1775526624.8339717,
-      "dog_filled_at": null,
-      "repeat_count": 999,
-      "repeats_done": 0,
-      "smart_mode": true,
-      "consecutive_losses": 0,
-      "anchor_depth": 6,
-      "fav_shave": 0,
-      "fav_walk_count": 0,
-      "fav_walk_ceiling": 100,
-      "fav_last_walk_at": null,
-      "market_type": "moneyline",
-      "spread_line": "",
-      "yes_price": null,
-      "no_price": 35,
-      "yes_order_id": null,
-      "no_order_id": "dfef0706-f0e7-487a-92cf-412786282750",
-      "yes_fill_qty": 0,
-      "no_fill_qty": 0,
-      "arb_width": 5,
-      "_precalc_hedge_price": 68,
-      "_bid_at_post": 41,
-      "_last_repost_at": 0,
-      "_all_dog_order_ids": [
-        "dfef0706-f0e7-487a-92cf-412786282750"
-      ],
-      "_fav_depth": 12073
+      "completed_at": 1775526497.4591,
+      "market_title": "Detroit vs Minnesota Winner?"
     }
   },
   "trade_history": [
@@ -3752,6 +2980,31 @@
       "anchor_depth": 5
     },
     {
+      "bot_id": "anchor_KXMLBGAME-26APR061840SDPIT-SD_e8e142dc",
+      "ticker": "KXMLBGAME-26APR061840SDPIT-SD",
+      "yes_price": 78,
+      "no_price": 25,
+      "quantity": 19,
+      "profit_cents": 0,
+      "loss_cents": 0,
+      "fee_cents": 13,
+      "result": "anchor_partial_arb",
+      "timestamp": 1775520158.0038493,
+      "placed_at": 1775519804.9865456,
+      "arb_width": 5,
+      "bot_category": "anchor_dog",
+      "market_type": "moneyline",
+      "spread_line": "",
+      "sport": "MLB",
+      "_trade_id": "fa26eda9-5f8b-4f54-8a72-d49940d820ee",
+      "yes_order_id": "199a12ef-54f2-4c2d-a620-983027e92e4a",
+      "no_order_id": "bcc6f614-ac1d-41bc-a26e-908efa65a46e",
+      "dog_order_id": "bcc6f614-ac1d-41bc-a26e-908efa65a46e",
+      "fav_order_id": null,
+      "hedge_order_id": null,
+      "anchor_depth": 5
+    },
+    {
       "bot_id": "anchor_KXMLBGAME-26APR061840SDPIT-PIT_4f2c4a32",
       "ticker": "KXMLBGAME-26APR061840SDPIT-PIT",
       "yes_price": 24,
@@ -4378,6 +3631,31 @@
       "spread_line": "",
       "sport": "Tennis",
       "_trade_id": "7c57f8e7-b9f9-4132-95da-4648b2b7d6a7",
+      "yes_order_id": "1d77ec71-750d-4298-bd36-e91a808ab4fe",
+      "no_order_id": "5cb13685-2dc1-4707-8422-c805a6b9fc3e",
+      "dog_order_id": "5cb13685-2dc1-4707-8422-c805a6b9fc3e",
+      "fav_order_id": null,
+      "hedge_order_id": null,
+      "anchor_depth": 7
+    },
+    {
+      "bot_id": "anchor_KXATPCHALLENGERMATCH-26APR06CATPOL-POL_bd413bba",
+      "ticker": "KXATPCHALLENGERMATCH-26APR06CATPOL-POL",
+      "yes_price": 67,
+      "no_price": 29,
+      "quantity": 30,
+      "profit_cents": 97,
+      "loss_cents": 0,
+      "fee_cents": 23,
+      "result": "anchor_partial_arb",
+      "timestamp": 1775509868.4781184,
+      "placed_at": 1775504474.2045367,
+      "arb_width": 5,
+      "bot_category": "anchor_dog",
+      "market_type": "moneyline",
+      "spread_line": "",
+      "sport": "Tennis",
+      "_trade_id": "57daba29-9b49-49a4-a446-26c8276c92a9",
       "yes_order_id": "1d77ec71-750d-4298-bd36-e91a808ab4fe",
       "no_order_id": "5cb13685-2dc1-4707-8422-c805a6b9fc3e",
       "dog_order_id": "5cb13685-2dc1-4707-8422-c805a6b9fc3e",
@@ -89753,12 +89031,12 @@
     }
   ],
   "session_pnl": {
-    "gross_profit_cents": 2628,
-    "gross_loss_cents": 5094,
-    "completed_bots": 61,
-    "stopped_bots": 18,
-    "session_start": 1775525777.2973192,
-    "day_key": "2026-04-06"
+    "gross_profit_cents": 0,
+    "gross_loss_cents": 0,
+    "completed_bots": 0,
+    "stopped_bots": 0,
+    "session_start": 1776043683.5964017,
+    "day_key": "2026-04-12"
   },
   "opening_lines": {
     "KXATPCHALLENGERMATCH-26MAR16BASPER-PER": {
@@ -109784,6 +109062,1574 @@
     "KXMLBGAME-26APR091940CWSKC-CWS": {
       "yes_price": 19,
       "captured_at": 1775521275.9568453
+    },
+    "KXATPCHALLENGERMATCH-26APR13BERHOU-HOU": {
+      "yes_price": 54,
+      "captured_at": 1776042066.0988076
+    },
+    "KXATPCHALLENGERMATCH-26APR13BERHOU-BER": {
+      "yes_price": 42,
+      "captured_at": 1776042066.0988119
+    },
+    "KXATPCHALLENGERMATCH-26APR13CUIKUK-KUK": {
+      "yes_price": 66,
+      "captured_at": 1776042066.0988152
+    },
+    "KXATPCHALLENGERMATCH-26APR13CUIKUK-CUI": {
+      "yes_price": 30,
+      "captured_at": 1776042066.0988188
+    },
+    "KXATPCHALLENGERMATCH-26APR13DOMFOR-FOR": {
+      "yes_price": 66,
+      "captured_at": 1776042066.098821
+    },
+    "KXATPCHALLENGERMATCH-26APR13DOMFOR-DOM": {
+      "yes_price": 24,
+      "captured_at": 1776042066.0988226
+    },
+    "KXATPCHALLENGERMATCH-26APR13ECHROD-ROD": {
+      "yes_price": 72,
+      "captured_at": 1776042066.098826
+    },
+    "KXATPCHALLENGERMATCH-26APR13ECHROD-ECH": {
+      "yes_price": 24,
+      "captured_at": 1776042066.098828
+    },
+    "KXATPCHALLENGERMATCH-26APR13ELISCH-SCH": {
+      "yes_price": 73,
+      "captured_at": 1776042066.09883
+    },
+    "KXATPCHALLENGERMATCH-26APR13ELISCH-ELI": {
+      "yes_price": 23,
+      "captured_at": 1776042066.098832
+    },
+    "KXATPCHALLENGERMATCH-26APR13GADSHI-SHI": {
+      "yes_price": 36,
+      "captured_at": 1776042066.098834
+    },
+    "KXATPCHALLENGERMATCH-26APR13GADSHI-GAD": {
+      "yes_price": 59,
+      "captured_at": 1776042066.098836
+    },
+    "KXATPCHALLENGERMATCH-26APR13GENMOR-MOR": {
+      "yes_price": 60,
+      "captured_at": 1776042066.0988533
+    },
+    "KXATPCHALLENGERMATCH-26APR13GENMOR-GEN": {
+      "yes_price": 37,
+      "captured_at": 1776042066.0988555
+    },
+    "KXATPCHALLENGERMATCH-26APR13GILAGA-GIL": {
+      "yes_price": 60,
+      "captured_at": 1776042066.0988572
+    },
+    "KXATPCHALLENGERMATCH-26APR13GILAGA-AGA": {
+      "yes_price": 32,
+      "captured_at": 1776042066.0988586
+    },
+    "KXATPCHALLENGERMATCH-26APR13GRABIN-GRA": {
+      "yes_price": 77,
+      "captured_at": 1776042066.098861
+    },
+    "KXATPCHALLENGERMATCH-26APR13GRABIN-BIN": {
+      "yes_price": 22,
+      "captured_at": 1776042066.098863
+    },
+    "KXATPCHALLENGERMATCH-26APR13LLAKUZ-LLA": {
+      "yes_price": 78,
+      "captured_at": 1776042066.0988643
+    },
+    "KXATPCHALLENGERMATCH-26APR13LLAKUZ-KUZ": {
+      "yes_price": 18,
+      "captured_at": 1776042066.0988667
+    },
+    "KXATPCHALLENGERMATCH-26APR13MARLEO-MAR": {
+      "yes_price": 54,
+      "captured_at": 1776042066.0988681
+    },
+    "KXATPCHALLENGERMATCH-26APR13MARLEO-LEO": {
+      "yes_price": 42,
+      "captured_at": 1776042066.0988703
+    },
+    "KXATPCHALLENGERMATCH-26APR13ROYCEC-ROY": {
+      "yes_price": 60,
+      "captured_at": 1776042066.0988717
+    },
+    "KXATPCHALLENGERMATCH-26APR13ROYCEC-CEC": {
+      "yes_price": 36,
+      "captured_at": 1776042066.0988739
+    },
+    "KXATPCHALLENGERMATCH-26APR13SAFTOR-TOR": {
+      "yes_price": 11,
+      "captured_at": 1776042066.098875
+    },
+    "KXATPCHALLENGERMATCH-26APR13SAFTOR-SAF": {
+      "yes_price": 85,
+      "captured_at": 1776042066.0988772
+    },
+    "KXATPCHALLENGERMATCH-26APR13SATSUL-SUL": {
+      "yes_price": 62,
+      "captured_at": 1776042066.0988789
+    },
+    "KXATPCHALLENGERMATCH-26APR13SATSUL-SAT": {
+      "yes_price": 33,
+      "captured_at": 1776042066.098881
+    },
+    "KXATPCHALLENGERMATCH-26APR13TAKAGU-TAK": {
+      "yes_price": 47,
+      "captured_at": 1776042066.0988822
+    },
+    "KXATPCHALLENGERMATCH-26APR13TAKAGU-AGU": {
+      "yes_price": 49,
+      "captured_at": 1776042066.0988839
+    },
+    "KXATPCHALLENGERMATCH-26APR13XIAELL-XIA": {
+      "yes_price": 27,
+      "captured_at": 1776042066.0988853
+    },
+    "KXATPCHALLENGERMATCH-26APR13XIAELL-ELL": {
+      "yes_price": 70,
+      "captured_at": 1776042066.0988872
+    },
+    "KXATPMATCH-26APR13ALCVIR-VIR": {
+      "yes_price": 5,
+      "captured_at": 1776042066.0988898
+    },
+    "KXATPMATCH-26APR13ALCVIR-ALC": {
+      "yes_price": 95,
+      "captured_at": 1776042066.098892
+    },
+    "KXATPMATCH-26APR13DEOFN-OFN": {
+      "yes_price": 18,
+      "captured_at": 1776042066.0988936
+    },
+    "KXATPMATCH-26APR13DEOFN-DE": {
+      "yes_price": 82,
+      "captured_at": 1776042066.098895
+    },
+    "KXATPMATCH-26APR13DIASAC-SAC": {
+      "yes_price": 40,
+      "captured_at": 1776042066.0988996
+    },
+    "KXATPMATCH-26APR13DIASAC-DIA": {
+      "yes_price": 58,
+      "captured_at": 1776042066.098901
+    },
+    "KXATPMATCH-26APR13FILATM-FIL": {
+      "yes_price": 80,
+      "captured_at": 1776042066.098903
+    },
+    "KXATPMATCH-26APR13FILATM-ATM": {
+      "yes_price": 19,
+      "captured_at": 1776042066.098905
+    },
+    "KXATPMATCH-26APR13MARSON-SON": {
+      "yes_price": 37,
+      "captured_at": 1776042066.0989065
+    },
+    "KXATPMATCH-26APR13MARSON-MAR": {
+      "yes_price": 56,
+      "captured_at": 1776042066.0989077
+    },
+    "KXATPMATCH-26APR13NAKCER-NAK": {
+      "yes_price": 51,
+      "captured_at": 1776042066.0989094
+    },
+    "KXATPMATCH-26APR13NAKCER-CER": {
+      "yes_price": 43,
+      "captured_at": 1776042066.0989118
+    },
+    "KXATPMATCH-26APR13NAVSHE-SHE": {
+      "yes_price": 74,
+      "captured_at": 1776042066.0989134
+    },
+    "KXATPMATCH-26APR13NAVSHE-NAV": {
+      "yes_price": 26,
+      "captured_at": 1776042066.098915
+    },
+    "KXATPMATCH-26APR13OPEQUI-QUI": {
+      "yes_price": 62,
+      "captured_at": 1776042066.0989165
+    },
+    "KXATPMATCH-26APR13OPEQUI-OPE": {
+      "yes_price": 36,
+      "captured_at": 1776042066.0989187
+    },
+    "KXATPMATCH-26APR13TRUMED-TRU": {
+      "yes_price": 29,
+      "captured_at": 1776042066.09892
+    },
+    "KXATPMATCH-26APR13TRUMED-MED": {
+      "yes_price": 72,
+      "captured_at": 1776042066.098922
+    },
+    "KXATPMATCH-26APR13VANHUE-VAN": {
+      "yes_price": 71,
+      "captured_at": 1776042066.0989232
+    },
+    "KXATPMATCH-26APR13VANHUE-HUE": {
+      "yes_price": 27,
+      "captured_at": 1776042066.0989249
+    },
+    "KXEPLGAME-26APR21BRICFC-TIE": {
+      "yes_price": 26,
+      "captured_at": 1776042066.0989583
+    },
+    "KXEPLGAME-26APR21BRICFC-CFC": {
+      "yes_price": 33,
+      "captured_at": 1776042066.0989604
+    },
+    "KXEPLGAME-26APR21BRICFC-BRI": {
+      "yes_price": 37,
+      "captured_at": 1776042066.0989618
+    },
+    "KXEPLGAME-26APR22BOULEE-TIE": {
+      "yes_price": 25,
+      "captured_at": 1776042066.0989666
+    },
+    "KXEPLGAME-26APR22BOULEE-LEE": {
+      "yes_price": 24,
+      "captured_at": 1776042066.0989685
+    },
+    "KXEPLGAME-26APR22BOULEE-BOU": {
+      "yes_price": 44,
+      "captured_at": 1776042066.0989704
+    },
+    "KXEPLGAME-26APR22BURMCI-TIE": {
+      "yes_price": 12,
+      "captured_at": 1776042066.098973
+    },
+    "KXEPLGAME-26APR22BURMCI-MCI": {
+      "yes_price": 75,
+      "captured_at": 1776042066.0989778
+    },
+    "KXEPLGAME-26APR22BURMCI-BUR": {
+      "yes_price": 8,
+      "captured_at": 1776042066.0989792
+    },
+    "KXEPLGAME-26APR24SUNNFO-TIE": {
+      "yes_price": 26,
+      "captured_at": 1776042066.0989814
+    },
+    "KXEPLGAME-26APR24SUNNFO-SUN": {
+      "yes_price": 31,
+      "captured_at": 1776042066.098983
+    },
+    "KXEPLGAME-26APR24SUNNFO-NFO": {
+      "yes_price": 38,
+      "captured_at": 1776042066.098985
+    },
+    "KXEPLGAME-26APR25ARSNEW-TIE": {
+      "yes_price": 18,
+      "captured_at": 1776042066.0989869
+    },
+    "KXEPLGAME-26APR25ARSNEW-NEW": {
+      "yes_price": 16,
+      "captured_at": 1776042066.0989883
+    },
+    "KXEPLGAME-26APR25ARSNEW-ARS": {
+      "yes_price": 61,
+      "captured_at": 1776042066.09899
+    },
+    "KXEPLGAME-26APR25FULAVL-TIE": {
+      "yes_price": 24,
+      "captured_at": 1776042066.0989916
+    },
+    "KXEPLGAME-26APR25FULAVL-FUL": {
+      "yes_price": 33,
+      "captured_at": 1776042066.0989933
+    },
+    "KXEPLGAME-26APR25FULAVL-AVL": {
+      "yes_price": 37,
+      "captured_at": 1776042066.0989947
+    },
+    "KXEPLGAME-26APR25LFCCRY-TIE": {
+      "yes_price": 21,
+      "captured_at": 1776042066.0989964
+    },
+    "KXEPLGAME-26APR25LFCCRY-LFC": {
+      "yes_price": 62,
+      "captured_at": 1776042066.0989985
+    },
+    "KXEPLGAME-26APR25LFCCRY-CRY": {
+      "yes_price": 13,
+      "captured_at": 1776042066.0990002
+    },
+    "KXEPLGAME-26APR25WHUEVE-WHU": {
+      "yes_price": 36,
+      "captured_at": 1776042066.099002
+    },
+    "KXEPLGAME-26APR25WHUEVE-TIE": {
+      "yes_price": 26,
+      "captured_at": 1776042066.0990033
+    },
+    "KXEPLGAME-26APR25WHUEVE-EVE": {
+      "yes_price": 31,
+      "captured_at": 1776042066.099005
+    },
+    "KXEPLGAME-26APR25WOLTOT-WOL": {
+      "yes_price": 28,
+      "captured_at": 1776042066.0990064
+    },
+    "KXEPLGAME-26APR25WOLTOT-TOT": {
+      "yes_price": 45,
+      "captured_at": 1776042066.0990083
+    },
+    "KXEPLGAME-26APR25WOLTOT-TIE": {
+      "yes_price": 24,
+      "captured_at": 1776042066.0990098
+    },
+    "KXEPLGAME-26APR27MUNBRE-TIE": {
+      "yes_price": 21,
+      "captured_at": 1776042066.099012
+    },
+    "KXEPLGAME-26APR27MUNBRE-MUN": {
+      "yes_price": 54,
+      "captured_at": 1776042066.0990133
+    },
+    "KXEPLGAME-26APR27MUNBRE-BRE": {
+      "yes_price": 19,
+      "captured_at": 1776042066.0990155
+    },
+    "KXMLBGAME-26APR131610HOUSEA-SEA": {
+      "yes_price": 61,
+      "captured_at": 1776042066.0991998
+    },
+    "KXMLBGAME-26APR131610HOUSEA-HOU": {
+      "yes_price": 37,
+      "captured_at": 1776042066.0992048
+    },
+    "KXMLBGAME-26APR131835AZBAL-BAL": {
+      "yes_price": 53,
+      "captured_at": 1776042066.0992098
+    },
+    "KXMLBGAME-26APR131835AZBAL-AZ": {
+      "yes_price": 44,
+      "captured_at": 1776042066.099213
+    },
+    "KXMLBGAME-26APR131840CHCPHI-PHI": {
+      "yes_price": 62,
+      "captured_at": 1776042066.0992155
+    },
+    "KXMLBGAME-26APR131840CHCPHI-CHC": {
+      "yes_price": 38,
+      "captured_at": 1776042066.099218
+    },
+    "KXMLBGAME-26APR131840WSHPIT-WSH": {
+      "yes_price": 33,
+      "captured_at": 1776042066.0992205
+    },
+    "KXMLBGAME-26APR131840WSHPIT-PIT": {
+      "yes_price": 67,
+      "captured_at": 1776042066.099223
+    },
+    "KXMLBGAME-26APR131905LAANYY-NYY": {
+      "yes_price": 61,
+      "captured_at": 1776042066.0992243
+    },
+    "KXMLBGAME-26APR131905LAANYY-LAA": {
+      "yes_price": 38,
+      "captured_at": 1776042066.0992258
+    },
+    "KXMLBGAME-26APR131915MIAATL-MIA": {
+      "yes_price": 43,
+      "captured_at": 1776042066.0992277
+    },
+    "KXMLBGAME-26APR131915MIAATL-ATL": {
+      "yes_price": 55,
+      "captured_at": 1776042066.0992293
+    },
+    "KXMLBGAME-26APR131940BOSMIN-MIN": {
+      "yes_price": 39,
+      "captured_at": 1776042066.0992312
+    },
+    "KXMLBGAME-26APR131940BOSMIN-BOS": {
+      "yes_price": 60,
+      "captured_at": 1776042066.0992327
+    },
+    "KXMLBGAME-26APR131945CLESTL-STL": {
+      "yes_price": 48,
+      "captured_at": 1776042066.099235
+    },
+    "KXMLBGAME-26APR131945CLESTL-CLE": {
+      "yes_price": 51,
+      "captured_at": 1776042066.0992367
+    },
+    "KXMLBGAME-26APR132140TEXATH-TEX": {
+      "yes_price": 54,
+      "captured_at": 1776042066.0992386
+    },
+    "KXMLBGAME-26APR132140TEXATH-ATH": {
+      "yes_price": 45,
+      "captured_at": 1776042066.0992403
+    },
+    "KXMLBGAME-26APR132210NYMLAD-NYM": {
+      "yes_price": 40,
+      "captured_at": 1776042066.099242
+    },
+    "KXMLBGAME-26APR132210NYMLAD-LAD": {
+      "yes_price": 60,
+      "captured_at": 1776042066.0992434
+    },
+    "KXMLBGAME-26APR141835AZBAL-BAL": {
+      "yes_price": 60,
+      "captured_at": 1776042066.0992458
+    },
+    "KXMLBGAME-26APR141835AZBAL-AZ": {
+      "yes_price": 39,
+      "captured_at": 1776042066.0992477
+    },
+    "KXMLBGAME-26APR141840CHCPHI-PHI": {
+      "yes_price": 56,
+      "captured_at": 1776042066.0992565
+    },
+    "KXMLBGAME-26APR141840CHCPHI-CHC": {
+      "yes_price": 39,
+      "captured_at": 1776042066.0992584
+    },
+    "KXMLBGAME-26APR141840KCDET-KC": {
+      "yes_price": 43,
+      "captured_at": 1776042066.0992599
+    },
+    "KXMLBGAME-26APR141840KCDET-DET": {
+      "yes_price": 52,
+      "captured_at": 1776042066.0992618
+    },
+    "KXMLBGAME-26APR141840SFCIN-SF": {
+      "yes_price": 48,
+      "captured_at": 1776042066.0992646
+    },
+    "KXMLBGAME-26APR141840SFCIN-CIN": {
+      "yes_price": 50,
+      "captured_at": 1776042066.0992668
+    },
+    "KXMLBGAME-26APR141840WSHPIT-WSH": {
+      "yes_price": 34,
+      "captured_at": 1776042066.0992687
+    },
+    "KXMLBGAME-26APR141840WSHPIT-PIT": {
+      "yes_price": 63,
+      "captured_at": 1776042066.0992732
+    },
+    "KXMLBGAME-26APR141905LAANYY-NYY": {
+      "yes_price": 57,
+      "captured_at": 1776042066.099275
+    },
+    "KXMLBGAME-26APR141905LAANYY-LAA": {
+      "yes_price": 39,
+      "captured_at": 1776042066.0992765
+    },
+    "KXMLBGAME-26APR141915MIAATL-MIA": {
+      "yes_price": 39,
+      "captured_at": 1776042066.0992785
+    },
+    "KXMLBGAME-26APR141915MIAATL-ATL": {
+      "yes_price": 57,
+      "captured_at": 1776042066.0992799
+    },
+    "KXMLBGAME-26APR141940BOSMIN-MIN": {
+      "yes_price": 44,
+      "captured_at": 1776042066.0992813
+    },
+    "KXMLBGAME-26APR141940BOSMIN-BOS": {
+      "yes_price": 51,
+      "captured_at": 1776042066.099283
+    },
+    "KXMLBGAME-26APR141940TBCWS-TB": {
+      "yes_price": 56,
+      "captured_at": 1776042066.0992846
+    },
+    "KXMLBGAME-26APR141940TBCWS-CWS": {
+      "yes_price": 40,
+      "captured_at": 1776042066.0992866
+    },
+    "KXMLBGAME-26APR141940TORMIL-TOR": {
+      "yes_price": 42,
+      "captured_at": 1776042066.0992885
+    },
+    "KXMLBGAME-26APR141940TORMIL-MIL": {
+      "yes_price": 56,
+      "captured_at": 1776042066.0992901
+    },
+    "KXMLBGAME-26APR141945CLESTL-STL": {
+      "yes_price": 50,
+      "captured_at": 1776042066.0992923
+    },
+    "KXMLBGAME-26APR141945CLESTL-CLE": {
+      "yes_price": 46,
+      "captured_at": 1776042066.0992937
+    },
+    "KXMLBGAME-26APR142010COLHOU-HOU": {
+      "yes_price": 62,
+      "captured_at": 1776042066.0992951
+    },
+    "KXMLBGAME-26APR142010COLHOU-COL": {
+      "yes_price": 33,
+      "captured_at": 1776042066.0992966
+    },
+    "KXMLBGAME-26APR142140SEASD-SEA": {
+      "yes_price": 48,
+      "captured_at": 1776042066.0992982
+    },
+    "KXMLBGAME-26APR142140SEASD-SD": {
+      "yes_price": 46,
+      "captured_at": 1776042066.0992997
+    },
+    "KXMLBGAME-26APR142140TEXATH-TEX": {
+      "yes_price": 51,
+      "captured_at": 1776042066.0993044
+    },
+    "KXMLBGAME-26APR142140TEXATH-ATH": {
+      "yes_price": 48,
+      "captured_at": 1776042066.0993056
+    },
+    "KXMLBGAME-26APR142210NYMLAD-NYM": {
+      "yes_price": 36,
+      "captured_at": 1776042066.0993078
+    },
+    "KXMLBGAME-26APR142210NYMLAD-LAD": {
+      "yes_price": 61,
+      "captured_at": 1776042066.099309
+    },
+    "KXMLBGAME-26APR151235AZBAL-BAL": {
+      "yes_price": 40,
+      "captured_at": 1776042066.0993106
+    },
+    "KXMLBGAME-26APR151235AZBAL-AZ": {
+      "yes_price": 40,
+      "captured_at": 1776042066.0993116
+    },
+    "KXMLBGAME-26APR151315CLESTL-STL": {
+      "yes_price": 52,
+      "captured_at": 1776042066.0993137
+    },
+    "KXMLBGAME-26APR151315CLESTL-CLE": {
+      "yes_price": 46,
+      "captured_at": 1776042066.099315
+    },
+    "KXMLBGAME-26APR151340BOSMIN-MIN": {
+      "yes_price": 41,
+      "captured_at": 1776042066.0993168
+    },
+    "KXMLBGAME-26APR151340BOSMIN-BOS": {
+      "yes_price": 39,
+      "captured_at": 1776042066.099318
+    },
+    "KXMLBGAME-26APR151840CHCPHI-PHI": {
+      "yes_price": 60,
+      "captured_at": 1776042066.0993197
+    },
+    "KXMLBGAME-26APR151840CHCPHI-CHC": {
+      "yes_price": 35,
+      "captured_at": 1776042066.0993214
+    },
+    "KXMLBGAME-26APR151840KCDET-KC": {
+      "yes_price": 29,
+      "captured_at": 1776042066.099323
+    },
+    "KXMLBGAME-26APR151840KCDET-DET": {
+      "yes_price": 29,
+      "captured_at": 1776042066.0993247
+    },
+    "KXMLBGAME-26APR151840SFCIN-SF": {
+      "yes_price": 29,
+      "captured_at": 1776042066.0993264
+    },
+    "KXMLBGAME-26APR151840SFCIN-CIN": {
+      "yes_price": 29,
+      "captured_at": 1776042066.0993278
+    },
+    "KXMLBGAME-26APR151840WSHPIT-WSH": {
+      "yes_price": 31,
+      "captured_at": 1776042066.0993295
+    },
+    "KXMLBGAME-26APR151840WSHPIT-PIT": {
+      "yes_price": 63,
+      "captured_at": 1776042066.0993307
+    },
+    "KXMLBGAME-26APR151905LAANYY-NYY": {
+      "yes_price": 61,
+      "captured_at": 1776042066.099332
+    },
+    "KXMLBGAME-26APR151905LAANYY-LAA": {
+      "yes_price": 31,
+      "captured_at": 1776042066.0993335
+    },
+    "KXMLBGAME-26APR151915MIAATL-MIA": {
+      "yes_price": 30,
+      "captured_at": 1776042066.0993357
+    },
+    "KXMLBGAME-26APR151915MIAATL-ATL": {
+      "yes_price": 50,
+      "captured_at": 1776042066.099337
+    },
+    "KXMLBGAME-26APR151940TBCWS-TB": {
+      "yes_price": 36,
+      "captured_at": 1776042066.0993395
+    },
+    "KXMLBGAME-26APR151940TBCWS-CWS": {
+      "yes_price": 29,
+      "captured_at": 1776042066.099347
+    },
+    "KXMLBGAME-26APR151940TORMIL-TOR": {
+      "yes_price": 29,
+      "captured_at": 1776042066.099349
+    },
+    "KXMLBGAME-26APR151940TORMIL-MIL": {
+      "yes_price": 30,
+      "captured_at": 1776042066.09935
+    },
+    "KXMLBGAME-26APR152010COLHOU-HOU": {
+      "yes_price": 28,
+      "captured_at": 1776042066.0993521
+    },
+    "KXMLBGAME-26APR152010COLHOU-COL": {
+      "yes_price": 28,
+      "captured_at": 1776042066.0993536
+    },
+    "KXMLSGAME-26APR17VANSKC-VAN": {
+      "yes_price": 79,
+      "captured_at": 1776042066.099463
+    },
+    "KXMLSGAME-26APR17VANSKC-TIE": {
+      "yes_price": 10,
+      "captured_at": 1776042066.0994647
+    },
+    "KXMLSGAME-26APR17VANSKC-SKC": {
+      "yes_price": 7,
+      "captured_at": 1776042066.0994658
+    },
+    "KXMLSGAME-26APR18ATLNSH-TIE": {
+      "yes_price": 24,
+      "captured_at": 1776042066.0994675
+    },
+    "KXMLSGAME-26APR18ATLNSH-NSH": {
+      "yes_price": 45,
+      "captured_at": 1776042066.0994694
+    },
+    "KXMLSGAME-26APR18ATLNSH-ATL": {
+      "yes_price": 27,
+      "captured_at": 1776042066.0994706
+    },
+    "KXMLSGAME-26APR18CINCHI-TIE": {
+      "yes_price": 23,
+      "captured_at": 1776042066.099472
+    },
+    "KXMLSGAME-26APR18CINCHI-CIN": {
+      "yes_price": 35,
+      "captured_at": 1776042066.099474
+    },
+    "KXMLSGAME-26APR18CINCHI-CHI": {
+      "yes_price": 34,
+      "captured_at": 1776042066.0994751
+    },
+    "KXMLSGAME-26APR18COLMIA-TIE": {
+      "yes_price": 23,
+      "captured_at": 1776042066.0994768
+    },
+    "KXMLSGAME-26APR18COLMIA-MIA": {
+      "yes_price": 50,
+      "captured_at": 1776042066.0994785
+    },
+    "KXMLSGAME-26APR18COLMIA-COL": {
+      "yes_price": 27,
+      "captured_at": 1776042066.0994802
+    },
+    "KXMLSGAME-26APR18DALLAG-TIE": {
+      "yes_price": 26,
+      "captured_at": 1776042066.0994823
+    },
+    "KXMLSGAME-26APR18DALLAG-LAG": {
+      "yes_price": 29,
+      "captured_at": 1776042066.0994842
+    },
+    "KXMLSGAME-26APR18DALLAG-DAL": {
+      "yes_price": 42,
+      "captured_at": 1776042066.0994854
+    },
+    "KXMLSGAME-26APR18MINPOR-TIE": {
+      "yes_price": 22,
+      "captured_at": 1776042066.0994873
+    },
+    "KXMLSGAME-26APR18MINPOR-POR": {
+      "yes_price": 24,
+      "captured_at": 1776042066.099489
+    },
+    "KXMLSGAME-26APR18MINPOR-MIN": {
+      "yes_price": 50,
+      "captured_at": 1776042066.099491
+    },
+    "KXMLSGAME-26APR18MTLNYRB-TIE": {
+      "yes_price": 24,
+      "captured_at": 1776042066.0994961
+    },
+    "KXMLSGAME-26APR18MTLNYRB-NYRB": {
+      "yes_price": 32,
+      "captured_at": 1776042066.099501
+    },
+    "KXMLSGAME-26APR18MTLNYRB-MTL": {
+      "yes_price": 39,
+      "captured_at": 1776042066.0995028
+    },
+    "KXMLSGAME-26APR18NECLB-TIE": {
+      "yes_price": 26,
+      "captured_at": 1776042066.0995045
+    },
+    "KXMLSGAME-26APR18NECLB-NE": {
+      "yes_price": 30,
+      "captured_at": 1776042066.0995061
+    },
+    "KXMLSGAME-26APR18NECLB-CLB": {
+      "yes_price": 40,
+      "captured_at": 1776042066.0995078
+    },
+    "KXMLSGAME-26APR18NYCCLT-TIE": {
+      "yes_price": 24,
+      "captured_at": 1776042066.099509
+    },
+    "KXMLSGAME-26APR18NYCCLT-NYC": {
+      "yes_price": 48,
+      "captured_at": 1776042066.0995111
+    },
+    "KXMLSGAME-26APR18NYCCLT-CLT": {
+      "yes_price": 20,
+      "captured_at": 1776042066.099513
+    },
+    "KXMLSGAME-26APR18ORLHOU-TIE": {
+      "yes_price": 25,
+      "captured_at": 1776042066.0995185
+    },
+    "KXMLSGAME-26APR18ORLHOU-ORL": {
+      "yes_price": 38,
+      "captured_at": 1776042066.09952
+    },
+    "KXMLSGAME-26APR18ORLHOU-HOU": {
+      "yes_price": 36,
+      "captured_at": 1776042066.0995219
+    },
+    "KXMLSGAME-26APR18PHIDCU-TIE": {
+      "yes_price": 24,
+      "captured_at": 1776042066.0995233
+    },
+    "KXMLSGAME-26APR18PHIDCU-PHI": {
+      "yes_price": 50,
+      "captured_at": 1776042066.099525
+    },
+    "KXMLSGAME-26APR18PHIDCU-DCU": {
+      "yes_price": 20,
+      "captured_at": 1776042066.0995266
+    },
+    "KXMLSGAME-26APR18RSLSD-TIE": {
+      "yes_price": 25,
+      "captured_at": 1776042066.100197
+    },
+    "KXMLSGAME-26APR18RSLSD-SD": {
+      "yes_price": 29,
+      "captured_at": 1776042066.1002111
+    },
+    "KXMLSGAME-26APR18RSLSD-RSL": {
+      "yes_price": 43,
+      "captured_at": 1776042066.1002145
+    },
+    "KXMLSGAME-26APR18SEASTL-TIE": {
+      "yes_price": 25,
+      "captured_at": 1776042066.100217
+    },
+    "KXMLSGAME-26APR18SEASTL-STL": {
+      "yes_price": 16,
+      "captured_at": 1776042066.1002216
+    },
+    "KXMLSGAME-26APR18SEASTL-SEA": {
+      "yes_price": 52,
+      "captured_at": 1776042066.1002262
+    },
+    "KXMLSGAME-26APR18TORATX-TOR": {
+      "yes_price": 48,
+      "captured_at": 1776042066.1002293
+    },
+    "KXMLSGAME-26APR18TORATX-TIE": {
+      "yes_price": 24,
+      "captured_at": 1776042066.1002452
+    },
+    "KXMLSGAME-26APR18TORATX-ATX": {
+      "yes_price": 21,
+      "captured_at": 1776042066.1002474
+    },
+    "KXMLSGAME-26APR19LAFCSJ-TIE": {
+      "yes_price": 17,
+      "captured_at": 1776042066.100249
+    },
+    "KXMLSGAME-26APR19LAFCSJ-SJ": {
+      "yes_price": 20,
+      "captured_at": 1776042066.100251
+    },
+    "KXMLSGAME-26APR19LAFCSJ-LAFC": {
+      "yes_price": 59,
+      "captured_at": 1776042066.1002533
+    },
+    "KXNHLGAME-26APR13BUFCHI-CHI": {
+      "yes_price": 35,
+      "captured_at": 1776042066.100384
+    },
+    "KXNHLGAME-26APR13BUFCHI-BUF": {
+      "yes_price": 64,
+      "captured_at": 1776042066.100387
+    },
+    "KXNHLGAME-26APR13CARPHI-PHI": {
+      "yes_price": 48,
+      "captured_at": 1776042066.1003895
+    },
+    "KXNHLGAME-26APR13CARPHI-CAR": {
+      "yes_price": 53,
+      "captured_at": 1776042066.1003916
+    },
+    "KXNHLGAME-26APR13COLEDM-EDM": {
+      "yes_price": 47,
+      "captured_at": 1776042066.1003945
+    },
+    "KXNHLGAME-26APR13COLEDM-COL": {
+      "yes_price": 52,
+      "captured_at": 1776042066.1003969
+    },
+    "KXNHLGAME-26APR13DALTOR-TOR": {
+      "yes_price": 37,
+      "captured_at": 1776042066.1003997
+    },
+    "KXNHLGAME-26APR13DALTOR-DAL": {
+      "yes_price": 61,
+      "captured_at": 1776042066.1004043
+    },
+    "KXNHLGAME-26APR13DETTB-TB": {
+      "yes_price": 63,
+      "captured_at": 1776042066.1004086
+    },
+    "KXNHLGAME-26APR13DETTB-DET": {
+      "yes_price": 35,
+      "captured_at": 1776042066.1004112
+    },
+    "KXNHLGAME-26APR13LASEA-SEA": {
+      "yes_price": 42,
+      "captured_at": 1776042066.1004138
+    },
+    "KXNHLGAME-26APR13LASEA-LA": {
+      "yes_price": 56,
+      "captured_at": 1776042066.1004162
+    },
+    "KXNHLGAME-26APR13MINSTL-STL": {
+      "yes_price": 45,
+      "captured_at": 1776042066.1004188
+    },
+    "KXNHLGAME-26APR13MINSTL-MIN": {
+      "yes_price": 53,
+      "captured_at": 1776042066.1004212
+    },
+    "KXNHLGAME-26APR13NYRFLA-NYR": {
+      "yes_price": 49,
+      "captured_at": 1776042066.1004236
+    },
+    "KXNHLGAME-26APR13NYRFLA-FLA": {
+      "yes_price": 49,
+      "captured_at": 1776042066.1004264
+    },
+    "KXNHLGAME-26APR13SJNSH-SJ": {
+      "yes_price": 40,
+      "captured_at": 1776042066.100429
+    },
+    "KXNHLGAME-26APR13SJNSH-NSH": {
+      "yes_price": 58,
+      "captured_at": 1776042066.1004317
+    },
+    "KXNHLGAME-26APR13WPGVGK-WPG": {
+      "yes_price": 37,
+      "captured_at": 1776042066.1004348
+    },
+    "KXNHLGAME-26APR13WPGVGK-VGK": {
+      "yes_price": 62,
+      "captured_at": 1776042066.1004457
+    },
+    "KXNHLGAME-26APR14ANAMIN-MIN": {
+      "yes_price": 54,
+      "captured_at": 1776042066.100448
+    },
+    "KXNHLGAME-26APR14ANAMIN-ANA": {
+      "yes_price": 41,
+      "captured_at": 1776042066.1004503
+    },
+    "KXNHLGAME-26APR14CARNYI-NYI": {
+      "yes_price": 42,
+      "captured_at": 1776042066.1004527
+    },
+    "KXNHLGAME-26APR14CARNYI-CAR": {
+      "yes_price": 57,
+      "captured_at": 1776042066.1004543
+    },
+    "KXNHLGAME-26APR14COLCGY-COL": {
+      "yes_price": 62,
+      "captured_at": 1776042066.1004565
+    },
+    "KXNHLGAME-26APR14COLCGY-CGY": {
+      "yes_price": 36,
+      "captured_at": 1776042066.1004584
+    },
+    "KXNHLGAME-26APR14LAVAN-VAN": {
+      "yes_price": 34,
+      "captured_at": 1776042066.1004603
+    },
+    "KXNHLGAME-26APR14LAVAN-LA": {
+      "yes_price": 60,
+      "captured_at": 1776042066.1004634
+    },
+    "KXNHLGAME-26APR14MTLPHI-PHI": {
+      "yes_price": 45,
+      "captured_at": 1776042066.1004653
+    },
+    "KXNHLGAME-26APR14MTLPHI-MTL": {
+      "yes_price": 51,
+      "captured_at": 1776042066.1004677
+    },
+    "KXNHLGAME-26APR14NJBOS-NJ": {
+      "yes_price": 43,
+      "captured_at": 1776042066.10047
+    },
+    "KXNHLGAME-26APR14NJBOS-BOS": {
+      "yes_price": 53,
+      "captured_at": 1776042066.1004727
+    },
+    "KXNHLGAME-26APR14PITSTL-STL": {
+      "yes_price": 46,
+      "captured_at": 1776042066.100475
+    },
+    "KXNHLGAME-26APR14PITSTL-PIT": {
+      "yes_price": 50,
+      "captured_at": 1776042066.1004775
+    },
+    "KXNHLGAME-26APR14WPGUTA-WPG": {
+      "yes_price": 37,
+      "captured_at": 1776042066.1004798
+    },
+    "KXNHLGAME-26APR14WPGUTA-UTA": {
+      "yes_price": 59,
+      "captured_at": 1776042066.1004822
+    },
+    "KXNHLGAME-26APR14WSHCBJ-WSH": {
+      "yes_price": 46,
+      "captured_at": 1776042066.1004848
+    },
+    "KXNHLGAME-26APR14WSHCBJ-CBJ": {
+      "yes_price": 50,
+      "captured_at": 1776042066.1004868
+    },
+    "KXWTACHALLENGERMATCH-26APR13BRAMAR-MAR": {
+      "yes_price": 58,
+      "captured_at": 1776042066.1006658
+    },
+    "KXWTACHALLENGERMATCH-26APR13BRAMAR-BRA": {
+      "yes_price": 37,
+      "captured_at": 1776042066.1006684
+    },
+    "KXWTACHALLENGERMATCH-26APR13GORBER-GOR": {
+      "yes_price": 62,
+      "captured_at": 1776042066.10067
+    },
+    "KXWTACHALLENGERMATCH-26APR13GORBER-BER": {
+      "yes_price": 34,
+      "captured_at": 1776042066.100672
+    },
+    "KXWTACHALLENGERMATCH-26APR13LAMKOS-LAM": {
+      "yes_price": 36,
+      "captured_at": 1776042066.100678
+    },
+    "KXWTACHALLENGERMATCH-26APR13LAMKOS-KOS": {
+      "yes_price": 54,
+      "captured_at": 1776042066.1006796
+    },
+    "KXWTACHALLENGERMATCH-26APR13LEEBRO-LEE": {
+      "yes_price": 40,
+      "captured_at": 1776042066.1006813
+    },
+    "KXWTACHALLENGERMATCH-26APR13LEEBRO-BRO": {
+      "yes_price": 55,
+      "captured_at": 1776042066.100683
+    },
+    "KXWTACHALLENGERMATCH-26APR13LEERIS-RIS": {
+      "yes_price": 55,
+      "captured_at": 1776042066.100685
+    },
+    "KXWTACHALLENGERMATCH-26APR13LEERIS-LEE": {
+      "yes_price": 41,
+      "captured_at": 1776042066.100686
+    },
+    "KXWTACHALLENGERMATCH-26APR13TEIVRA-VRA": {
+      "yes_price": 26,
+      "captured_at": 1776042066.1006882
+    },
+    "KXWTACHALLENGERMATCH-26APR13TEIVRA-TEI": {
+      "yes_price": 69,
+      "captured_at": 1776042066.1006901
+    },
+    "KXWTAMATCH-26APR13ALEKNU-KNU": {
+      "yes_price": 13,
+      "captured_at": 1776042066.1006923
+    },
+    "KXWTAMATCH-26APR13ALEKNU-ALE": {
+      "yes_price": 85,
+      "captured_at": 1776042066.1006937
+    },
+    "KXWTAMATCH-26APR13BAPPON-PON": {
+      "yes_price": 15,
+      "captured_at": 1776042066.1006956
+    },
+    "KXWTAMATCH-26APR13BAPPON-BAP": {
+      "yes_price": 82,
+      "captured_at": 1776042066.100697
+    },
+    "KXWTAMATCH-26APR13BLIPOT-POT": {
+      "yes_price": 71,
+      "captured_at": 1776042066.100699
+    },
+    "KXWTAMATCH-26APR13BLIPOT-BLI": {
+      "yes_price": 24,
+      "captured_at": 1776042066.1007006
+    },
+    "KXWTAMATCH-26APR13EALFER-FER": {
+      "yes_price": 56,
+      "captured_at": 1776042066.100703
+    },
+    "KXWTAMATCH-26APR13EALFER-EAL": {
+      "yes_price": 40,
+      "captured_at": 1776042066.1007059
+    },
+    "KXWTAMATCH-26APR13FERCIR-FER": {
+      "yes_price": 17,
+      "captured_at": 1776042066.1007082
+    },
+    "KXWTAMATCH-26APR13FERCIR-CIR": {
+      "yes_price": 83,
+      "captured_at": 1776042066.1007133
+    },
+    "KXWTAMATCH-26APR13KASANN-KAS": {
+      "yes_price": 48,
+      "captured_at": 1776042066.1007166
+    },
+    "KXWTAMATCH-26APR13KASANN-ANN": {
+      "yes_price": 50,
+      "captured_at": 1776042066.1007197
+    },
+    "KXWTAMATCH-26APR13KORSHN-SHN": {
+      "yes_price": 81,
+      "captured_at": 1776042066.1007223
+    },
+    "KXWTAMATCH-26APR13KORSHN-KOR": {
+      "yes_price": 16,
+      "captured_at": 1776042066.1007245
+    },
+    "KXWTAMATCH-26APR13KOSPAR-PAR": {
+      "yes_price": 19,
+      "captured_at": 1776042066.100727
+    },
+    "KXWTAMATCH-26APR13KOSPAR-KOS": {
+      "yes_price": 79,
+      "captured_at": 1776042066.1007373
+    },
+    "KXWTAMATCH-26APR13LYSBAD-LYS": {
+      "yes_price": 26,
+      "captured_at": 1776042066.1007404
+    },
+    "KXWTAMATCH-26APR13LYSBAD-BAD": {
+      "yes_price": 71,
+      "captured_at": 1776042066.1007435
+    },
+    "KXWTAMATCH-26APR13MARJAC-MAR": {
+      "yes_price": 28,
+      "captured_at": 1776042066.1007457
+    },
+    "KXWTAMATCH-26APR13MARJAC-JAC": {
+      "yes_price": 62,
+      "captured_at": 1776042066.1007476
+    },
+    "KXWTAMATCH-26APR13MCCVOL-VOL": {
+      "yes_price": 52,
+      "captured_at": 1776042066.1007493
+    },
+    "KXWTAMATCH-26APR13MCCVOL-MCC": {
+      "yes_price": 43,
+      "captured_at": 1776042066.100751
+    },
+    "KXWTAMATCH-26APR13MERSEI-SEI": {
+      "yes_price": 14,
+      "captured_at": 1776042066.100752
+    },
+    "KXWTAMATCH-26APR13MERSEI-MER": {
+      "yes_price": 85,
+      "captured_at": 1776042066.1007543
+    },
+    "KXWTAMATCH-26APR13MUCSAS-SAS": {
+      "yes_price": 24,
+      "captured_at": 1776042066.1007562
+    },
+    "KXWTAMATCH-26APR13MUCSAS-MUC": {
+      "yes_price": 75,
+      "captured_at": 1776042066.1007583
+    },
+    "KXWTAMATCH-26APR13OLITAG-TAG": {
+      "yes_price": 53,
+      "captured_at": 1776042066.1007605
+    },
+    "KXWTAMATCH-26APR13OLITAG-OLI": {
+      "yes_price": 44,
+      "captured_at": 1776042066.1007652
+    },
+    "KXWTAMATCH-26APR13OSTAND-OST": {
+      "yes_price": 27,
+      "captured_at": 1776042066.1007683
+    },
+    "KXWTAMATCH-26APR13OSTAND-AND": {
+      "yes_price": 71,
+      "captured_at": 1776042066.1007707
+    },
+    "KXWTAMATCH-26APR13PARNOH-PAR": {
+      "yes_price": 58,
+      "captured_at": 1776042066.1007729
+    },
+    "KXWTAMATCH-26APR13PARNOH-NOH": {
+      "yes_price": 37,
+      "captured_at": 1776042066.1007752
+    },
+    "KXWTAMATCH-26APR13RAKCRI-RAK": {
+      "yes_price": 17,
+      "captured_at": 1776042066.1007774
+    },
+    "KXWTAMATCH-26APR13RAKCRI-CRI": {
+      "yes_price": 83,
+      "captured_at": 1776042066.1007795
+    },
+    "KXWTAMATCH-26APR13RAKKAL-RAK": {
+      "yes_price": 59,
+      "captured_at": 1776042066.1007824
+    },
+    "KXWTAMATCH-26APR13RAKKAL-KAL": {
+      "yes_price": 40,
+      "captured_at": 1776042066.1007843
+    },
+    "KXWTAMATCH-26APR13RUZSAM-SAM": {
+      "yes_price": 71,
+      "captured_at": 1776042066.1007867
+    },
+    "KXWTAMATCH-26APR13RUZSAM-RUZ": {
+      "yes_price": 29,
+      "captured_at": 1776042066.100798
+    },
+    "KXWTAMATCH-26APR13SIETOM-TOM": {
+      "yes_price": 40,
+      "captured_at": 1776042066.1008003
+    },
+    "KXWTAMATCH-26APR13SIETOM-SIE": {
+      "yes_price": 60,
+      "captured_at": 1776042066.1008027
+    },
+    "KXWTAMATCH-26APR13SONPAO-SON": {
+      "yes_price": 20,
+      "captured_at": 1776042066.1008046
+    },
+    "KXWTAMATCH-26APR13SONPAO-PAO": {
+      "yes_price": 75,
+      "captured_at": 1776042066.1008067
+    },
+    "KXWTAMATCH-26APR13STEPOD-STE": {
+      "yes_price": 56,
+      "captured_at": 1776042066.1008096
+    },
+    "KXWTAMATCH-26APR13STEPOD-POD": {
+      "yes_price": 37,
+      "captured_at": 1776042066.100812
+    },
+    "KXWTAMATCH-26APR13TIMBOU-TIM": {
+      "yes_price": 31,
+      "captured_at": 1776042066.100814
+    },
+    "KXWTAMATCH-26APR13TIMBOU-BOU": {
+      "yes_price": 62,
+      "captured_at": 1776042066.100816
+    },
+    "KXWTAMATCH-26APR13TJEBON-TJE": {
+      "yes_price": 33,
+      "captured_at": 1776042066.1008184
+    },
+    "KXWTAMATCH-26APR13TJEBON-BON": {
+      "yes_price": 66,
+      "captured_at": 1776042066.1008203
+    },
+    "KXWTAMATCH-26APR13ZHANOS-ZHA": {
+      "yes_price": 14,
+      "captured_at": 1776042066.1008222
+    },
+    "KXWTAMATCH-26APR13ZHANOS-NOS": {
+      "yes_price": 84,
+      "captured_at": 1776042066.1008244
+    },
+    "KXNHLGAME-26APR15DALBUF-DAL": {
+      "yes_price": 10,
+      "captured_at": 1776042475.671253
+    },
+    "KXNHLGAME-26APR15DALBUF-BUF": {
+      "yes_price": 10,
+      "captured_at": 1776042475.6712584
+    },
+    "KXNHLGAME-26APR15DETFLA-FLA": {
+      "yes_price": 10,
+      "captured_at": 1776042475.6712623
+    },
+    "KXNHLGAME-26APR15DETFLA-DET": {
+      "yes_price": 10,
+      "captured_at": 1776042475.6712651
+    },
+    "KXNHLGAME-26APR15NYRTB-TB": {
+      "yes_price": 10,
+      "captured_at": 1776042475.671268
+    },
+    "KXNHLGAME-26APR15NYRTB-NYR": {
+      "yes_price": 10,
+      "captured_at": 1776042475.6712704
+    },
+    "KXNHLGAME-26APR15SJCHI-SJ": {
+      "yes_price": 10,
+      "captured_at": 1776042475.6712728
+    },
+    "KXNHLGAME-26APR15SJCHI-CHI": {
+      "yes_price": 10,
+      "captured_at": 1776042475.671275
+    },
+    "KXNHLGAME-26APR15TOROTT-TOR": {
+      "yes_price": 10,
+      "captured_at": 1776042475.6712775
+    },
+    "KXNHLGAME-26APR15TOROTT-OTT": {
+      "yes_price": 10,
+      "captured_at": 1776042475.67128
+    },
+    "KXNBAGAME-26APR12CHIDAL-DAL": {
+      "yes_price": 96,
+      "captured_at": 1776043633.8801425
+    },
+    "KXNBAGAME-26APR12CHIDAL-CHI": {
+      "yes_price": 4,
+      "captured_at": 1776043633.880149
+    },
+    "KXNBAGAME-26APR12DENSAS-SAS": {
+      "yes_price": 43,
+      "captured_at": 1776043633.8801532
+    },
+    "KXNBAGAME-26APR12DENSAS-DEN": {
+      "yes_price": 56,
+      "captured_at": 1776043633.8801558
+    },
+    "KXNBAGAME-26APR12GSWLAC-LAC": {
+      "yes_price": 68,
+      "captured_at": 1776043633.8801587
+    },
+    "KXNBAGAME-26APR12GSWLAC-GSW": {
+      "yes_price": 31,
+      "captured_at": 1776043633.8801615
+    },
+    "KXNBAGAME-26APR12MEMHOU-HOU": {
+      "yes_price": 99,
+      "captured_at": 1776043633.8801658
+    },
+    "KXNBAGAME-26APR12NOPMIN-NOP": {
+      "yes_price": 29,
+      "captured_at": 1776043633.880168
+    },
+    "KXNBAGAME-26APR12NOPMIN-MIN": {
+      "yes_price": 70,
+      "captured_at": 1776043633.8801696
+    },
+    "KXNBAGAME-26APR12PHXOKC-PHX": {
+      "yes_price": 80,
+      "captured_at": 1776043633.880172
+    },
+    "KXNBAGAME-26APR12PHXOKC-OKC": {
+      "yes_price": 19,
+      "captured_at": 1776043633.8801756
+    },
+    "KXNBAGAME-26APR12SACPOR-SAC": {
+      "yes_price": 3,
+      "captured_at": 1776043633.8801782
+    },
+    "KXNBAGAME-26APR12SACPOR-POR": {
+      "yes_price": 96,
+      "captured_at": 1776043633.8801808
+    },
+    "KXNBAGAME-26APR12UTALAL-UTA": {
+      "yes_price": 3,
+      "captured_at": 1776043633.8801837
+    },
+    "KXNBAGAME-26APR12UTALAL-LAL": {
+      "yes_price": 96,
+      "captured_at": 1776043633.8801863
+    },
+    "KXATPCHALLENGERMATCH-26APR12DANZAH-ZAH": {
+      "yes_price": 21,
+      "captured_at": 1776043635.9046993
+    },
+    "KXATPCHALLENGERMATCH-26APR12DANZAH-DAN": {
+      "yes_price": 78,
+      "captured_at": 1776043635.9047048
+    },
+    "KXATPCHALLENGERMATCH-26APR12DUCNAP-NAP": {
+      "yes_price": 70,
+      "captured_at": 1776043635.9047077
+    },
+    "KXATPCHALLENGERMATCH-26APR12DUCNAP-DUC": {
+      "yes_price": 28,
+      "captured_at": 1776043635.9047103
+    },
+    "KXATPCHALLENGERMATCH-26APR12IMANAK-NAK": {
+      "yes_price": 19,
+      "captured_at": 1776043635.9047127
+    },
+    "KXATPCHALLENGERMATCH-26APR12IMANAK-IMA": {
+      "yes_price": 77,
+      "captured_at": 1776043635.904716
+    },
+    "KXATPCHALLENGERMATCH-26APR12ISOVIT-VIT": {
+      "yes_price": 40,
+      "captured_at": 1776043635.9047186
+    },
+    "KXATPCHALLENGERMATCH-26APR12ISOVIT-ISO": {
+      "yes_price": 55,
+      "captured_at": 1776043635.9047205
+    },
+    "KXATPCHALLENGERMATCH-26APR12MASDEL-MAS": {
+      "yes_price": 75,
+      "captured_at": 1776043635.9047222
+    },
+    "KXATPCHALLENGERMATCH-26APR12MASDEL-DEL": {
+      "yes_price": 24,
+      "captured_at": 1776043635.904724
+    },
+    "KXATPCHALLENGERMATCH-26APR12OSTKIK-OST": {
+      "yes_price": 58,
+      "captured_at": 1776043635.904726
+    },
+    "KXATPCHALLENGERMATCH-26APR12OSTKIK-KIK": {
+      "yes_price": 38,
+      "captured_at": 1776043635.9047275
+    },
+    "KXATPCHALLENGERMATCH-26APR12SHISHA-SHI": {
+      "yes_price": 39,
+      "captured_at": 1776043635.9047296
+    },
+    "KXATPCHALLENGERMATCH-26APR12SHISHA-SHA": {
+      "yes_price": 57,
+      "captured_at": 1776043635.9047313
+    },
+    "KXATPCHALLENGERMATCH-26APR12TOKSHI-TOK": {
+      "yes_price": 62,
+      "captured_at": 1776043635.9047332
+    },
+    "KXATPCHALLENGERMATCH-26APR12TOKSHI-SHI": {
+      "yes_price": 35,
+      "captured_at": 1776043635.9047346
+    },
+    "KXATPCHALLENGERMATCH-26APR12TROSAM-TRO": {
+      "yes_price": 64,
+      "captured_at": 1776043635.9047365
+    },
+    "KXATPCHALLENGERMATCH-26APR12TROSAM-SAM": {
+      "yes_price": 34,
+      "captured_at": 1776043635.9047387
+    },
+    "KXATPCHALLENGERMATCH-26APR12TUNSOR-TUN": {
+      "yes_price": 87,
+      "captured_at": 1776043635.9047587
+    },
+    "KXATPCHALLENGERMATCH-26APR12TUNSOR-SOR": {
+      "yes_price": 10,
+      "captured_at": 1776043635.9047604
+    },
+    "KXATPMATCH-26APR12BLOHAN-HAN": {
+      "yes_price": 46,
+      "captured_at": 1776043635.9047818
+    },
+    "KXATPMATCH-26APR12BLOHAN-BLO": {
+      "yes_price": 51,
+      "captured_at": 1776043635.904784
+    },
+    "KXATPMATCH-26APR12BORMAN-MAN": {
+      "yes_price": 20,
+      "captured_at": 1776043635.9047856
+    },
+    "KXATPMATCH-26APR12BORMAN-BOR": {
+      "yes_price": 78,
+      "captured_at": 1776043635.9047878
+    },
+    "KXATPMATCH-26APR12BUSMOU-MOU": {
+      "yes_price": 61,
+      "captured_at": 1776043635.9047897
+    },
+    "KXATPMATCH-26APR12BUSMOU-BUS": {
+      "yes_price": 37,
+      "captured_at": 1776043635.9047914
+    },
+    "KXATPMATCH-26APR12CILALT-CIL": {
+      "yes_price": 57,
+      "captured_at": 1776043635.904793
+    },
+    "KXATPMATCH-26APR12CILALT-ALT": {
+      "yes_price": 42,
+      "captured_at": 1776043635.9047945
+    },
+    "KXATPMATCH-26APR12ENGKOP-KOP": {
+      "yes_price": 71,
+      "captured_at": 1776043635.9047964
+    },
+    "KXATPMATCH-26APR12ENGKOP-ENG": {
+      "yes_price": 26,
+      "captured_at": 1776043635.9047978
+    },
+    "KXATPMATCH-26APR12ETCDRA-ETC": {
+      "yes_price": 42,
+      "captured_at": 1776043635.9047992
+    },
+    "KXATPMATCH-26APR12ETCDRA-DRA": {
+      "yes_price": 57,
+      "captured_at": 1776043635.9048007
+    },
+    "KXATPMATCH-26APR12GRISHA-SHA": {
+      "yes_price": 50,
+      "captured_at": 1776043635.904803
+    },
+    "KXATPMATCH-26APR12GRISHA-GRI": {
+      "yes_price": 51,
+      "captured_at": 1776043635.904805
+    },
+    "KXATPMATCH-26APR12LANMUS-MUS": {
+      "yes_price": 75,
+      "captured_at": 1776043635.9048066
+    },
+    "KXATPMATCH-26APR12LANMUS-LAN": {
+      "yes_price": 23,
+      "captured_at": 1776043635.9048085
+    },
+    "KXATPMATCH-26APR12MACBAE-MAC": {
+      "yes_price": 56,
+      "captured_at": 1776043635.90481
+    },
+    "KXATPMATCH-26APR12MACBAE-BAE": {
+      "yes_price": 42,
+      "captured_at": 1776043635.904812
+    },
+    "KXATPMATCH-26APR12MARTSI-TSI": {
+      "yes_price": 56,
+      "captured_at": 1776043635.9048138
+    },
+    "KXATPMATCH-26APR12MARTSI-MAR": {
+      "yes_price": 41,
+      "captured_at": 1776043635.9048157
+    },
+    "KXATPMATCH-26APR12MUNJOD-MUN": {
+      "yes_price": 32,
+      "captured_at": 1776043635.9048173
+    },
+    "KXATPMATCH-26APR12MUNJOD-JOD": {
+      "yes_price": 67,
+      "captured_at": 1776043635.9048426
+    },
+    "KXATPMATCH-26APR12NAVRUB-RUB": {
+      "yes_price": 59,
+      "captured_at": 1776043635.904845
+    },
+    "KXATPMATCH-26APR12NAVRUB-NAV": {
+      "yes_price": 39,
+      "captured_at": 1776043635.9048474
+    },
+    "KXATPMATCH-26APR12NORWAW-WAW": {
+      "yes_price": 22,
+      "captured_at": 1776043635.904849
+    },
+    "KXATPMATCH-26APR12NORWAW-NOR": {
+      "yes_price": 77,
+      "captured_at": 1776043635.904851
+    },
+    "KXATPMATCH-26APR12RINMIC-RIN": {
+      "yes_price": 60,
+      "captured_at": 1776043635.9048526
+    },
+    "KXATPMATCH-26APR12RINMIC-MIC": {
+      "yes_price": 40,
+      "captured_at": 1776043635.9048548
+    },
+    "KXATPMATCH-26APR12STRCER-STR": {
+      "yes_price": 19,
+      "captured_at": 1776043635.904857
+    },
+    "KXATPMATCH-26APR12STRCER-CER": {
+      "yes_price": 81,
+      "captured_at": 1776043635.9048588
+    },
+    "KXATPMATCH-26APR12TABFON-TAB": {
+      "yes_price": 31,
+      "captured_at": 1776043635.9048607
+    },
+    "KXATPMATCH-26APR12TABFON-FON": {
+      "yes_price": 67,
+      "captured_at": 1776043635.9048624
+    },
+    "KXATPMATCH-26APR12UGOKHA-UGO": {
+      "yes_price": 34,
+      "captured_at": 1776043635.9048645
+    },
+    "KXATPMATCH-26APR12UGOKHA-KHA": {
+      "yes_price": 64,
+      "captured_at": 1776043635.9048662
+    },
+    "KXATPMATCH-26APR12ZHADAR-ZHA": {
+      "yes_price": 27,
+      "captured_at": 1776043635.9048681
+    },
+    "KXATPMATCH-26APR12ZHADAR-DAR": {
+      "yes_price": 71,
+      "captured_at": 1776043635.9048693
+    },
+    "KXATPMATCH-26APR12ZVEKEC-ZVE": {
+      "yes_price": 84,
+      "captured_at": 1776043635.904872
+    },
+    "KXATPMATCH-26APR12ZVEKEC-KEC": {
+      "yes_price": 15,
+      "captured_at": 1776043635.9048736
+    },
+    "KXMLBGAME-26APR121920CLEATL-ATL": {
+      "yes_price": 99,
+      "captured_at": 1776043635.9051497
+    },
+    "KXNHLGAME-26APR12OTTNJ-OTT": {
+      "yes_price": 45,
+      "captured_at": 1776043635.9058073
+    },
+    "KXNHLGAME-26APR12OTTNJ-NJ": {
+      "yes_price": 51,
+      "captured_at": 1776043635.90581
+    },
+    "KXNHLGAME-26APR12UTACGY-UTA": {
+      "yes_price": 31,
+      "captured_at": 1776043635.905812
+    },
+    "KXNHLGAME-26APR12UTACGY-CGY": {
+      "yes_price": 69,
+      "captured_at": 1776043635.9058142
+    },
+    "KXNHLGAME-26APR12VANANA-VAN": {
+      "yes_price": 47,
+      "captured_at": 1776043635.9058244
+    },
+    "KXNHLGAME-26APR12VANANA-ANA": {
+      "yes_price": 52,
+      "captured_at": 1776043635.9058263
+    },
+    "KXNBAGAME-26APR12MEMHOU-MEM": {
+      "yes_price": 1,
+      "captured_at": 1776044002.6770222
     }
   },
   "pnl_resets": {},
@@ -109796,5 +110642,6 @@
     "006_dedup_rung_trades",
     "007_backfill_anchor_depth",
     "008_fix_sport_labels"
-  ]
+  ],
+  "pending_maker_sells": {}
 }

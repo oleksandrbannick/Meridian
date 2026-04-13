@@ -6658,7 +6658,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
 
     // ── BUILD CARD ──
     const item = document.createElement('div');
-    item.style.cssText = `background:#0c1018;border:1px solid #00d4ff18;border-left:3px solid #00d4ff;border-radius:10px;padding:12px;margin-bottom:8px;box-shadow:0 0 12px rgba(0,212,255,0.04);`;
+    item.style.cssText = `background:#0c1018;border:1px solid #00d4ff18;border-left:3px solid #00d4ff;border-radius:10px;padding:12px;margin-bottom:8px;box-shadow:0 0 12px rgba(0,212,255,0.04);cursor:pointer;`;
+    item.onclick = (e) => { if (!e.target.closest('button') && !e.target.closest('a')) showBotDetail(botId); };
     item.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;flex:1;min-width:0;">
@@ -7366,14 +7367,14 @@ async function loadBots() {
                     const sampleTicker = rawTickerBets.toUpperCase();
                     const groupName = formatBotDisplayName(sampleTicker).split('·')[0].split('—')[0].trim();
                     const sportIcon = _sportIcon(sampleTicker);
-                    const kalshiUrl = `https://kalshi.com/markets/${rawTickerBets.split('-')[0]}/${rawTickerBets}`;
                     const gs = gameScores[gk] || {};
                     const scoreBadge = buildScoreBadgeHtml(gs, 'compact');
+                    const _mktTicker = rawTickerBets.toUpperCase().split('-').slice(0,2).join('-');
                     const header = document.createElement('div');
                     header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:6px 12px;margin-top:12px;margin-bottom:4px;background:#0d1117;border-left:3px solid #00ff88;border-radius:4px;font-size:12px;';
                     header.innerHTML = `
                         <div style="display:flex;align-items:center;gap:8px;">
-                            <a href="${kalshiUrl}" target="_blank" style="color:#00ff88;font-weight:700;text-decoration:none;" title="Open on Kalshi">${sportIcon} ${groupName}</a>
+                            <a href="#" onclick="navigateToMarket('${_mktTicker}');return false;" style="color:#00ff88;font-weight:700;text-decoration:none;" title="View in Meridian">${sportIcon} ${groupName}</a>
                             ${scoreBadge}
                         </div>
                         <span style="color:#555;font-size:10px;">${groupIds.length} bet${groupIds.length > 1 ? 's' : ''}</span>`;
@@ -7413,14 +7414,14 @@ async function loadBots() {
                     const sampleTicker = rawTickerMid.toUpperCase();
                     const groupName = formatBotDisplayName(sampleTicker).split('·')[0].split('—')[0].trim();
                     const sportIcon = _sportIcon(sampleTicker);
-                    const kalshiUrl = `https://kalshi.com/markets/${rawTickerMid.split('-')[0]}/${rawTickerMid}`;
                     const gs = gameScores[gk] || {};
                     const scoreBadge = buildScoreBadgeHtml(gs, 'compact');
+                    const _mktTickerMid = rawTickerMid.toUpperCase().split('-').slice(0,2).join('-');
                     const header = document.createElement('div');
                     header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:6px 12px;margin-top:12px;margin-bottom:4px;background:#0d1117;border-left:3px solid #60a5fa;border-radius:4px;font-size:12px;';
                     header.innerHTML = `
                         <div style="display:flex;align-items:center;gap:8px;">
-                            <a href="${kalshiUrl}" target="_blank" style="color:#60a5fa;font-weight:700;text-decoration:none;" title="Open on Kalshi">${sportIcon} ${groupName}</a>
+                            <a href="#" onclick="navigateToMarket('${_mktTickerMid}');return false;" style="color:#60a5fa;font-weight:700;text-decoration:none;" title="View in Meridian">${sportIcon} ${groupName}</a>
                             ${scoreBadge}
                         </div>
                         <span style="color:#555;font-size:10px;">${groupIds.length} bot${groupIds.length > 1 ? 's' : ''}</span>`;
@@ -7492,7 +7493,6 @@ async function loadBots() {
                     const rawTickerDog = sampleBot.ticker || '';
                     const sampleTicker = rawTickerDog.toUpperCase();
                     const sportIcon = _sportIcon(sampleTicker);
-                    const kalshiUrl = `https://kalshi.com/markets/${rawTickerDog.split('-')[0]}/${rawTickerDog}`;
                     const gs = gameScores[gk] || {};
                     const scoreBadge = buildScoreBadgeHtml(gs, 'compact');
                     const groupIsLive = groupIds.some(id => bots[id].game_phase === 'live');
@@ -7502,11 +7502,12 @@ async function loadBots() {
                         const b = bots[id];
                         return sum + (b.lifetime_pnl ?? b.net_pnl_cents ?? 0);
                     }, 0);
+                    const _mktTickerDog = rawTickerDog.toUpperCase().split('-').slice(0,2).join('-');
                     const header = document.createElement('div');
                     header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:6px 12px;margin-top:12px;margin-bottom:4px;background:#0d1117;border-left:3px solid #ffaa00;border-radius:4px;font-size:12px;';
                     header.innerHTML = `
                         <div style="display:flex;align-items:center;gap:8px;">
-                            <a href="${kalshiUrl}" target="_blank" style="color:#ffaa00;font-weight:700;text-decoration:none;" title="Open on Kalshi">${sportIcon} ${groupName}</a>
+                            <a href="#" onclick="navigateToMarket('${_mktTickerDog}');return false;" style="color:#ffaa00;font-weight:700;text-decoration:none;" title="View in Meridian">${sportIcon} ${groupName}</a>
                             <span style="color:${groupIsLive ? '#ff6666' : '#556'};font-size:10px;font-weight:700;">${groupPhase}</span>
                             ${scoreBadge}
                         </div>
@@ -7682,7 +7683,6 @@ async function loadBots() {
             const rawTickerApex = sampleBot.ticker || '';
             const sampleTicker = rawTickerApex.toUpperCase();
             const sportIcon = _sportIcon(sampleTicker);
-            const kalshiUrl = `https://kalshi.com/markets/${rawTickerApex.split('-')[0]}/${rawTickerApex}`;
             // Live score from backend
             const gs = gameScores[gameKey] || {};
             const groupScoreBadge = buildScoreBadgeHtml(gs, 'normal');
@@ -7691,9 +7691,10 @@ async function loadBots() {
             const groupSignal = getGameSignal(gameKey, groupSport, []);
             const groupSignalBadge = groupSignal.label ? `<span style="background:${groupSignal.color}22;color:${groupSignal.color};border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700;" title="${groupSignal.description || ''}">${groupSignal.label}</span>` : '';
             const escapedGameKey = gameKey.replace(/'/g, "\\'");
+            const _mktTickerApex = rawTickerApex.toUpperCase().split('-').slice(0,2).join('-');
             groupHeader.innerHTML = `
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                    <a href="${kalshiUrl}" target="_blank" style="color:#00d4ff;font-weight:700;text-decoration:none;" title="Open on Kalshi">${sportIcon} ${groupMatchup}</a>
+                    <a href="#" onclick="navigateToMarket('${_mktTickerApex}');return false;" style="color:#00d4ff;font-weight:700;text-decoration:none;" title="View in Meridian">${sportIcon} ${groupMatchup}</a>
                     <span style="color:${groupIsLive ? '#ff6666' : '#556'};font-size:10px;font-weight:700;">${groupPhase}</span>
                     ${groupScoreBadge}
                     ${groupSignalBadge}
@@ -8494,11 +8495,11 @@ async function showBotDetail(botId) {
         const typeName = typeMap[cat] || cat;
         const color = colorMap[cat] || '#00d4ff';
         const isPhantomType = cat === 'anchor_dog' || cat === 'anchor_ladder';
-        // Phantom: gradient top bar like edit modal; others: solid color
+        const isApexType = cat === 'ladder_arb';
+        // Phantom/Apex: gradient top bar; others: solid color
         const modalContent = modal.querySelector('.modal-content');
         if (isPhantomType) {
             modalContent.style.borderTop = 'none';
-            // Add gradient accent bar
             let accentBar = modalContent.querySelector('.bd-accent-bar');
             if (!accentBar) {
                 accentBar = document.createElement('div');
@@ -8506,6 +8507,15 @@ async function showBotDetail(botId) {
                 modalContent.insertBefore(accentBar, modalContent.firstChild);
             }
             accentBar.style.cssText = 'height:3px;background:linear-gradient(90deg,#ffaa00,#ff66aa);opacity:0.8;';
+        } else if (isApexType) {
+            modalContent.style.borderTop = 'none';
+            let accentBar = modalContent.querySelector('.bd-accent-bar');
+            if (!accentBar) {
+                accentBar = document.createElement('div');
+                accentBar.className = 'bd-accent-bar';
+                modalContent.insertBefore(accentBar, modalContent.firstChild);
+            }
+            accentBar.style.cssText = 'height:3px;background:linear-gradient(90deg,#00d4ff,#ff7043);opacity:0.8;';
         } else {
             modalContent.style.borderTop = `3px solid ${color}`;
             const oldBar = modalContent.querySelector('.bd-accent-bar');
@@ -8525,9 +8535,11 @@ async function showBotDetail(botId) {
         subtitle.textContent = `${typeName} · ${displayStatus}`;
         subtitle.style.color = color;
         icon.textContent = iconMap[cat] || '⚡';
-        // Phantom header styling
+        // Header icon styling
         if (isPhantomType) {
             icon.style.cssText = 'font-size:18px;filter:drop-shadow(0 0 4px #ffaa0066);';
+        } else if (isApexType) {
+            icon.style.cssText = 'font-size:18px;filter:drop-shadow(0 0 4px #00d4ff66);';
         } else {
             icon.style.cssText = 'font-size:18px;';
         }
@@ -8561,22 +8573,28 @@ async function showBotDetail(botId) {
         const repeatsDone = bot.repeats_done || 0;
         const repeatsTotal = bot.repeat_count || 0;
 
-        // ── Phantom section label helper ──
-        const _sectionBorder = isPhantom ? '#ffaa0022' : '#1e2740';
+        // ── Section label helpers (Phantom: orange/pink, Apex: cyan/coral) ──
+        const _sectionBorder = isPhantom ? '#ffaa0022' : isApex ? '#00d4ff22' : '#1e2740';
         const _sectionLabel = (text, labelColor) => {
             if (isPhantom) {
                 return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
                     <div style="width:3px;height:12px;background:linear-gradient(180deg,#ffaa00,#ff66aa);border-radius:2px;"></div>
                     <span style="color:${labelColor || '#ffaa00'};font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.03em;">${text}</span></div>`;
             }
+            if (isApex) {
+                return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+                    <div style="width:3px;height:12px;background:linear-gradient(180deg,#00d4ff,#ff7043);border-radius:2px;"></div>
+                    <span style="color:${labelColor || '#00d4ff'};font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.03em;">${text}</span></div>`;
+            }
             return `<div style="color:${labelColor || '#8892a6'};font-size:10px;font-weight:700;margin-bottom:6px;">${text}</div>`;
         };
 
         // ── Overview: 4-column top stats ──
         html += `<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;margin-bottom:12px;">`;
+        const _isStyled = isPhantom || isApex;
         const _statBox = (label, value, valColor='#fff') => {
-            const border = isPhantom ? '#ffaa0025' : '#1e2740';
-            return `<div style="background:#0a0e1a;border:1px solid ${border};border-radius:${isPhantom ? '10px' : '8px'};padding:8px 6px;text-align:center;">
+            const border = isPhantom ? '#ffaa0025' : isApex ? '#00d4ff25' : '#1e2740';
+            return `<div style="background:#0a0e1a;border:1px solid ${border};border-radius:${_isStyled ? '10px' : '8px'};padding:8px 6px;text-align:center;">
             <div style="color:#8892a6;font-size:8px;text-transform:uppercase;margin-bottom:3px;">${label}</div>
             <div style="color:${valColor};font-weight:700;font-size:11px;">${value}</div></div>`;
         };
@@ -8593,7 +8611,7 @@ async function showBotDetail(botId) {
             const profitColor = profit > 3 ? '#00ff88' : profit > 0 ? '#ffaa00' : '#ff4444';
             const pnlColor = netPnl > 0 ? '#00ff88' : netPnl < 0 ? '#ff4444' : '#8892a6';
             const fillPct = hedgeQty > 0 ? Math.min(100, Math.round((hedgeFills / hedgeQty) * 100)) : 0;
-            html += `<div style="background:#0a0e1a;border:1px solid ${_sectionBorder};border-radius:${isPhantom?'10px':'8px'};padding:10px 14px;margin-bottom:12px;">`;
+            html += `<div style="background:#0a0e1a;border:1px solid ${_sectionBorder};border-radius:${_isStyled?'10px':'8px'};padding:10px 14px;margin-bottom:12px;">`;
             html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">`;
             html += _sectionLabel('POSITION', isPhantom ? '#ff66aa' : '#8892a6');
             if (netPnl !== 0) html += `<div style="font-size:11px;font-weight:700;color:${pnlColor};">${netPnl > 0 ? '+' : ''}${(netPnl/100).toFixed(2)}</div>`;
@@ -8643,10 +8661,34 @@ async function showBotDetail(botId) {
             html += `</div>`;
         }
 
+        // ── Apex: Config panel ──
+        if (isApex) {
+            const apexWidth = (bot.start_gap || 0) * 2;
+            const apexLevels = bot.levels || '?';
+            const apexQtyPerLevel = bot.base_qty || bot.qty_per_level || '?';
+            const apexSmartMode = bot.smart_mode ? (typeof bot.smart_mode === 'number' ? bot.smart_mode : 2) : 0;
+            const apexInvLimit = bot.inventory_limit || 0;
+            const apexAutoScale = bot.auto_scale !== false;
+            const apexRoundTrips = bot.round_trips_completed || 0;
+
+            html += `<div style="background:#0a0e1a;border:1px solid ${_sectionBorder};border-radius:10px;padding:10px 14px;margin-bottom:12px;">`;
+            html += _sectionLabel('APEX CONFIG');
+            html += `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:10px;">`;
+            html += `<div><span style="color:#8892a6;">Width:</span> <strong style="color:#00d4ff;">${apexWidth}¢</strong></div>`;
+            html += `<div><span style="color:#8892a6;">Levels:</span> <strong style="color:#00d4ff;">${apexLevels}</strong></div>`;
+            html += `<div><span style="color:#8892a6;">Qty/lvl:</span> <strong style="color:#00d4ff;">${apexQtyPerLevel}${apexAutoScale ? ' <span style="color:#ff7043;font-size:8px;">SCALED</span>' : ''}</strong></div>`;
+            if (apexSmartMode > 0) html += `<div><span style="color:#8892a6;">Smart:</span> <strong style="color:#00e5ff;">${apexSmartMode} loss limit</strong></div>`;
+            if (apexInvLimit > 0) html += `<div><span style="color:#8892a6;">Inv limit:</span> <strong style="color:#ff7043;">${apexInvLimit}</strong></div>`;
+            if (apexRoundTrips > 0) html += `<div><span style="color:#8892a6;">Round trips:</span> <strong style="color:#00ff88;">${apexRoundTrips}</strong></div>`;
+            html += `</div>`;
+            html += `<div style="color:#556;font-size:9px;margin-top:6px;">Continuous quoting · Spread collection · Net inventory tracking</div>`;
+            html += `</div>`;
+        }
+
         // ── Time-Decay Status (Apex 2.0) / Walk Status (legacy) ──
         if (isApex) {
-            html += `<div style="background:#0a0e1a;border:1px solid #00aaff33;border-radius:8px;padding:10px 14px;margin-bottom:12px;">`;
-            html += `<div style="color:#00aaff;font-size:10px;font-weight:700;margin-bottom:6px;">TIME-DECAY EXIT</div>`;
+            html += `<div style="background:#0a0e1a;border:1px solid ${_sectionBorder};border-radius:10px;padding:10px 14px;margin-bottom:12px;">`;
+            html += _sectionLabel('TIME-DECAY EXIT');
             html += `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:10px;">`;
             html += `<div><span style="color:#00ff88;">●</span> Profit <strong>0-15s</strong></div>`;
             html += `<div><span style="color:#ffaa00;">●</span> Scratch <strong>15-30s</strong></div>`;
@@ -8673,8 +8715,8 @@ async function showBotDetail(botId) {
         const rawMs = bot.raw_hedge_ms || bot.hedge_latency_ms;
         const fillMs = bot.hedge_fill_latency_ms;
         if (rawMs || fillMs) {
-            html += `<div style="background:#0a0e1a;border:1px solid ${isPhantom ? '#ffaa0022' : '#1e2740'};border-radius:${isPhantom?'10px':'8px'};padding:10px 14px;margin-bottom:12px;">`;
-            html += _sectionLabel('LATENCY', isPhantom ? '#ffaa00' : '#ffaa00');
+            html += `<div style="background:#0a0e1a;border:1px solid ${_sectionBorder};border-radius:${_isStyled?'10px':'8px'};padding:10px 14px;margin-bottom:12px;">`;
+            html += _sectionLabel('LATENCY', '#ffaa00');
             html += `<div style="display:flex;gap:20px;font-size:11px;">`;
             if (rawMs) html += `<div><span style="color:#8892a6;">Hedge posted:</span> <strong style="color:${rawMs < 50 ? '#00ff88' : rawMs < 200 ? '#ffaa00' : '#ff4444'};">${rawMs}ms</strong></div>`;
             if (fillMs) html += `<div><span style="color:#8892a6;">Hedge filled:</span> <strong style="color:${fillMs < 500 ? '#00ff88' : fillMs < 2000 ? '#ffaa00' : '#ff4444'};">${fillMs}ms</strong></div>`;
@@ -8682,7 +8724,7 @@ async function showBotDetail(botId) {
         }
 
         // ── Prices section ──
-        html += `<div style="background:#0a0e1a;border:1px solid ${_sectionBorder};border-radius:${isPhantom?'10px':'8px'};padding:10px 14px;margin-bottom:12px;">`;
+        html += `<div style="background:#0a0e1a;border:1px solid ${_sectionBorder};border-radius:${_isStyled?'10px':'8px'};padding:10px 14px;margin-bottom:12px;">`;
         html += _sectionLabel('PRICES');
         if (isPhantom) {
             html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 8px;font-size:11px;">`;
@@ -8722,7 +8764,7 @@ async function showBotDetail(botId) {
         // ── Live Market Data ──
         const yBid = bot.live_yes_bid, yAsk = bot.live_yes_ask, nBid = bot.live_no_bid, nAsk = bot.live_no_ask;
         if (yBid || nBid) {
-            html += `<div style="background:#0a0e1a;border:1px solid ${_sectionBorder};border-radius:${isPhantom?'10px':'8px'};padding:10px 14px;margin-bottom:12px;">`;
+            html += `<div style="background:#0a0e1a;border:1px solid ${_sectionBorder};border-radius:${_isStyled?'10px':'8px'};padding:10px 14px;margin-bottom:12px;">`;
             html += _sectionLabel('LIVE MARKET');
             html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:10px;">`;
             html += `<div>YES: <span style="color:#00ff88;">${yBid||'?'}¢</span> / <span style="color:#8892a6;">${yAsk||'?'}¢</span> <span style="color:#555;">(${(yAsk&&yBid)?(yAsk-yBid):0}¢ spread)</span></div>`;
@@ -8736,8 +8778,8 @@ async function showBotDetail(botId) {
         if (isApex && rungs && rungs.length > 0) {
             const stageColors = { profit:'#00ff88', scratch:'#ffaa00', panic:'#ff4444' };
             const stageLabels = { profit:'PROFIT', scratch:'SCRATCH', panic:'PANIC', posted:'POSTED', completed:'DONE', anchor_filled:'FILLING' };
-            html += `<div style="background:#0a0e1a;border:1px solid #1e2740;border-radius:8px;padding:10px 14px;margin-bottom:12px;">`;
-            html += `<div style="color:#8892a6;font-size:10px;font-weight:700;margin-bottom:6px;">RUNGS (${rungs.length})</div>`;
+            html += `<div style="background:#0a0e1a;border:1px solid ${_sectionBorder};border-radius:10px;padding:10px 14px;margin-bottom:12px;">`;
+            html += _sectionLabel(`RUNGS (${rungs.length})`);
             html += `<div style="font-size:10px;">`;
             rungs.forEach((r, i) => {
                 const rs = r.status || 'posted';
@@ -8791,7 +8833,7 @@ async function showBotDetail(botId) {
         }
 
         // ── Order IDs section (collapsed by default) ──
-        html += `<div style="background:#0a0e1a;border:1px solid ${_sectionBorder};border-radius:${isPhantom?'10px':'8px'};padding:10px 14px;margin-bottom:12px;">`;
+        html += `<div style="background:#0a0e1a;border:1px solid ${_sectionBorder};border-radius:${_isStyled?'10px':'8px'};padding:10px 14px;margin-bottom:12px;">`;
         html += `<div onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none';this.querySelector('span').textContent=this.nextElementSibling.style.display==='none'?'▸':'▾'" style="color:#8892a6;font-size:10px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:4px;"><span>▸</span> ORDER IDS</div>`;
         html += `<div style="display:none;margin-top:6px;">`;
         html += `<div style="font-size:10px;font-family:monospace;color:#556;word-break:break-all;">`;
@@ -8804,8 +8846,8 @@ async function showBotDetail(botId) {
 
         // ── Activity Log section (collapsed by default) ──
         const events = logResp.events || logResp.log || [];
-        html += `<div style="background:#0a0e1a;border:1px solid ${_sectionBorder};border-radius:${isPhantom?'10px':'8px'};padding:10px 14px;margin-bottom:12px;">`;
-        const _evtLogColor = isPhantom ? '#ff66aa' : '#ffaa00';
+        html += `<div style="background:#0a0e1a;border:1px solid ${_sectionBorder};border-radius:${_isStyled?'10px':'8px'};padding:10px 14px;margin-bottom:12px;">`;
+        const _evtLogColor = isPhantom ? '#ff66aa' : isApex ? '#00d4ff' : '#ffaa00';
         html += `<div onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none';this.querySelector('span').textContent=this.nextElementSibling.style.display==='none'?'▸':'▾'" style="color:${_evtLogColor};font-size:10px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:4px;"><span>▸</span> EVENT LOG (${events.length})</div>`;
         html += `<div style="display:none;margin-top:6px;">`;
         if (events.length === 0) {

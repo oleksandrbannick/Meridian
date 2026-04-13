@@ -7656,7 +7656,7 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
         # Post at the actual target — don't cap at bid. Being best bid is fine when exiting.
         # Snap-to-profit in walk_exit handles snapping down if market improves.
         width = bot.get('start_gap', 4) * 2
-        exit_price = max(1, min(98, 100 - avg_held - width // 2))
+        exit_price = max(1, min(98, 100 - avg_held - width))
         exit_oid = bot.get(f'_{exit_side}_exit_oid')
         price_kwarg = {f'{exit_side}_price': exit_price}
 
@@ -7685,7 +7685,7 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
             bot['_exit_side'] = exit_side
             bot['_exit_held_side'] = held_side
             bot['_exit_avg_cost'] = avg_held
-            bot['_exit_target_price'] = max(1, min(98, 100 - avg_held - width // 2))  # original target before walk
+            bot['_exit_target_price'] = max(1, min(98, 100 - avg_held - width))  # original target before walk
             # Dynamic target recalc: if new fills shifted avg cost and target changed, reset soak
             if exit_oid and _old_target > 0 and bot['_exit_target_price'] != _old_target:
                 bot['_exit_soak_start'] = time.time()
@@ -7771,7 +7771,7 @@ def _apex_mm_walk_up(bot_id, bot):
     ticker = bot.get('ticker', '')
     current_price = bot.get('_exit_price', 0)
     width = bot.get('start_gap', 4) * 2
-    target_price = bot.get('_exit_target_price', max(1, 100 - avg_held - width // 2))
+    target_price = bot.get('_exit_target_price', max(1, 100 - avg_held - width))
     wall_price = max(target_price + 1, min(99, 100 - avg_held))  # 100c combined = breakeven
     net_held = abs(net_yes - net_no)
 
@@ -8455,7 +8455,12 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
                 price_str = str(price)
                 existing = orders_dict.get(price_str)
                 if existing and existing.get('oid'):
-                    continue  # order still live — keep it
+                    # Check if fully filled (consumed) — stale oid from closed Kalshi order
+                    if existing.get('fill_qty', 0) >= existing.get('qty', 1):
+                        existing['oid'] = None  # clear stale oid so rung gets reposted
+                        print(f'🔄 APEX MM REFILL: {bot_id} clearing consumed {side.upper()} @{price}c ({existing["fill_qty"]}/{existing["qty"]})')
+                    else:
+                        continue  # order still live with remaining qty — keep it
                 # Missing or consumed rung — needs repost
                 missing_specs.append({
                     'ticker': ticker, 'side': side, 'action': 'buy',

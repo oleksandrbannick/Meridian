@@ -7084,55 +7084,47 @@ function _renderWatchBotCard(bot, botId, container, gameScores) {
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <div style="background:#060a14;border:1px solid #00ff8833;border-radius:8px;padding:10px;">
-                <div style="color:#00ff88;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">◎ POSITION · ${side.toUpperCase()}${orderFilled ? ' · FILLED ✓' : ''}</div>
+                <div style="color:#00ff88;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">◎ POSITION · ${side.toUpperCase()}</div>
                 <div style="color:#fff;font-weight:700;font-size:14px;margin-bottom:4px;">${entry}¢ <span style="color:#8892a6;font-size:11px;font-weight:600;">×${watchQty}</span></div>
-                <div style="color:#555;font-size:10px;margin-bottom:6px;">cost <strong style="color:#00ff88;">$${costDollars}</strong>${orderFilled && curBidNum > 0 ? ` · value <strong style="color:${curBidNum >= entry ? '#00ff88' : '#ff4444'};">$${valueDollars}</strong>` : ''}</div>
-                <div style="display:flex;align-items:center;gap:6px;">
-                    <div style="flex:1;height:6px;background:#1a2540;border-radius:3px;overflow:hidden;">
-                        <div style="width:${fillPct}%;height:100%;background:${fillCol};border-radius:3px;transition:width 0.3s;"></div>
-                    </div>
-                    <span style="color:${fillCol};font-size:10px;font-weight:700;">${fillQty}/${watchQty}</span>
-                </div>
+                <div style="color:#555;font-size:10px;">cost <strong style="color:#00ff88;">$${costDollars}</strong>${orderFilled && curBidNum > 0 ? ` · value <strong style="color:${curBidNum >= entry ? '#00ff88' : '#ff4444'};">$${valueDollars}</strong>` : ''}</div>
             </div>
             ${isSLSelling ? `
             <div style="background:#060a14;border:1px solid #ff444444;border-radius:8px;padding:10px;">
-                <div style="color:#ff4444;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">🛑 STOP-LOSS · SELLING</div>
-                <div style="color:#fff;font-weight:700;font-size:14px;margin-bottom:4px;">@ ${sellPrice || liveAsk || '?'}¢</div>
-                <div style="color:#555;font-size:10px;margin-bottom:6px;">ask <strong style="color:#ff4444;">${liveAsk || '?'}¢</strong> · bid <strong style="color:#ff666688;">${liveBid || '?'}¢</strong>${sellAge ? ` · <strong style="color:#ff8800;">${sellAge}</strong>` : ''}</div>
-                <div style="display:flex;align-items:center;gap:6px;">
-                    <div style="flex:1;height:6px;background:#1a2540;border-radius:3px;overflow:hidden;">
-                        <div style="width:100%;height:100%;background:#ff4444;border-radius:3px;"></div>
-                    </div>
-                    <span style="color:#ff4444;font-size:10px;font-weight:700;">${watchQty}× selling</span>
-                </div>
+                <div style="color:#ff4444;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">🛑 SL SELLING · @ ${sellPrice || liveAsk || '?'}¢</div>
+                <div style="color:#555;font-size:10px;margin-bottom:4px;">ask <strong style="color:#ff4444;">${liveAsk || '?'}¢</strong> · bid <strong style="color:#ff666688;">${liveBid || '?'}¢</strong></div>
+                <div style="color:#ff8800;font-size:10px;font-weight:700;">following ask${sellAge ? ` · ${sellAge}` : ''}</div>
             </div>
             ` : isStopped && exitPrice ? `
             <div style="background:#060a14;border:1px solid ${accentCol}33;border-radius:8px;padding:10px;">
-                <div style="color:${accentCol};font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">${exitReason === 'stop_loss' ? '🛑 STOP-LOSS EXIT' : exitReason === 'take_profit' ? '✅ TAKE-PROFIT' : _scoutSettled ? '🏁 SETTLED' : '⏹ MANUAL EXIT'}</div>
-                <div style="color:#fff;font-weight:700;font-size:14px;margin-bottom:4px;">${exitPrice}¢</div>
-                <div style="color:#555;font-size:10px;margin-bottom:6px;">${entry}¢ → ${exitPrice}¢ · <strong style="color:${exitPnl >= 0 ? '#00ff88' : '#ff4444'};">${exitPnl >= 0 ? '+' : ''}${exitPnl}¢</strong></div>
-                <div style="display:flex;align-items:center;gap:6px;">
-                    <div style="flex:1;height:6px;background:#1a2540;border-radius:3px;overflow:hidden;"><div style="width:0%;height:100%;"></div></div>
-                    <span style="color:${accentCol};font-size:10px;font-weight:700;">SOLD</span>
-                </div>
+                <div style="color:${accentCol};font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">${exitReason === 'stop_loss' ? '🛑 STOP-LOSS' : exitReason === 'take_profit' ? '✅ TAKE-PROFIT' : _scoutSettled ? '🏁 SETTLED' : '⏹ MANUAL'}</div>
+                <div style="color:#fff;font-weight:700;font-size:14px;margin-bottom:4px;">${entry}¢ → ${exitPrice}¢</div>
+                <div style="color:${exitPnl >= 0 ? '#00ff88' : '#ff4444'};font-size:10px;font-weight:700;">${exitPnl >= 0 ? '+' : ''}${exitPnl}¢ ($${(Math.abs(exitPnl) / 100).toFixed(2)})</div>
             </div>
             ` : `
             <div style="background:#060a14;border:1px solid #ffd74033;border-radius:8px;padding:10px;${!orderFilled ? 'opacity:0.6;' : ''}">
-                <div style="color:#ffd740;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">📡 MARKET${hasTPOrder ? ' · TP LIVE 📤' : ''}</div>
-                <div style="color:#555;font-size:10px;margin-bottom:6px;">bid <strong style="color:#ffd740;">${liveBid || '?'}¢</strong> · ask <strong style="color:#ffd740;">${liveAsk || '?'}¢</strong></div>
-                ${sl > 0 || tp > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;">
+                <div style="color:#ffd740;font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">📡 MARKET${hasTPOrder ? ' · TP @ ' + tpPrice + '¢ 📤' : ''}</div>
+                <div style="color:#555;font-size:10px;margin-bottom:4px;">bid <strong style="color:#ffd740;">${liveBid || '?'}¢</strong> · ask <strong style="color:#ffd740;">${liveAsk || '?'}¢</strong></div>
+                ${sl > 0 || tp > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;">
                     <span style="color:#ff6666;font-size:10px;font-weight:700;">SL ${sl > 0 ? slPrice + '¢' : 'off'}${distSL !== null ? ' <span style="color:#ff666688;font-size:9px;">(' + distSL + '¢)</span>' : ''}</span>
                     <span style="color:#00ff88;font-size:10px;font-weight:700;">TP ${tp > 0 ? tpPrice + '¢' : 'off'}${distTP !== null ? ' <span style="color:#00ff8888;font-size:9px;">(' + distTP + '¢)</span>' : ''}</span>
-                </div>` : ''}
-                ${hasTPOrder ? `<div style="display:flex;align-items:center;gap:6px;margin-top:4px;">
-                    <div style="flex:1;height:4px;background:#1a2540;border-radius:2px;overflow:hidden;">
-                        <div style="width:100%;height:100%;background:#00ff8844;border-radius:2px;"></div>
-                    </div>
-                    <span style="color:#00ff88;font-size:9px;font-weight:700;">sell @ ${tpPrice}¢</span>
                 </div>` : ''}
             </div>
             `}
         </div>
+        ${(() => {
+            // ONE fill bar — fills on entry, drains on exit
+            let barPct, barCol, barLabel;
+            if (isStopped) {
+                barPct = 0; barCol = accentCol; barLabel = 'SOLD';
+            } else if (isSLSelling) {
+                barPct = 100; barCol = '#ff4444'; barLabel = watchQty + '× selling';
+            } else if (orderFilled) {
+                barPct = 100; barCol = '#00ff88'; barLabel = watchQty + '/' + watchQty + ' held';
+            } else {
+                barPct = fillPct; barCol = fillQty > 0 ? '#ffaa00' : '#333'; barLabel = fillQty + '/' + watchQty;
+            }
+            return '<div style="display:flex;align-items:center;gap:6px;margin-top:6px;"><div style="flex:1;height:6px;background:#1a2540;border-radius:3px;overflow:hidden;"><div style="width:' + barPct + '%;height:100%;background:' + barCol + ';border-radius:3px;transition:width 0.3s;"></div></div><span style="color:' + barCol + ';font-size:10px;font-weight:700;">' + barLabel + '</span></div>';
+        })()}
         ${!isStopped && !isSLSelling && orderFilled && curBidNum > 0 && (sl > 0 || tp > 0) ? zoneBarHtml : ''}
         ${orderFilled && !isStopped && unrealizedPnl !== 0 ? `
         <div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding:6px 10px;background:#060a14;border:1px solid ${unrealColor}33;border-radius:6px;font-size:11px;">

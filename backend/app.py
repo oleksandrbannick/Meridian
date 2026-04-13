@@ -3966,52 +3966,42 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
         _fav_depth = round(_lob.get_total_depth(fav_side, 1)) if _lob and _lob.last_update_ts > 0 else 0
         _taker_timer = _phantom_taker_depth_tier(_fav_depth)
 
-        # Allow re-taker on partial fills: if taker fired but didn't fully fill, reset for another try
-        if bot.get('_taker_fired') and bot.get('fav_fill_qty', 0) > 0:
-            _total_qty = bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1))
-            if bot.get('fav_fill_qty', 0) < _total_qty:
-                bot['_taker_fired'] = False  # partial fill — allow re-taker for remaining qty
-                posted_at = time.time()  # reset timer for the remaining contracts
-                bot['fav_posted_at'] = posted_at
-                hedge_age = 0
-
-        _fav_spread = (fav_ask - fav_bid) if fav_ask > 0 and fav_bid > 0 else 0
-        if fav_ask > 0 and hedge_age >= _taker_timer and not bot.get('_taker_fired') and _fav_spread <= 1:
-            combined_at_ask = dog_price + fav_ask
-            # No threshold — timer expired, cross the spread (only if spread is tight)
-            if not _phantom_drop_lock.acquire(blocking=False):
+        # ── Timer expired: jump to bid+1 (aggressive maker, not taker) ──
+        # If bid+1 == ask, this crosses the spread (taker). If spread > 1c, you're
+        # first in queue at bid+1 — better position without paying spread cost.
+        if fav_bid > 0 and hedge_age >= _taker_timer and not bot.get('_taker_fired'):
+            _target = fav_bid + 1
+            if _target > fav_price:  # only if bid+1 is above current posted price
+                if not _phantom_drop_lock.acquire(blocking=False):
+                    return
+                try:
+                    fav_oid = bot.get('fav_order_id')
+                    if fav_oid:
+                        qty = bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1))
+                        amend_kwargs = {f'{fav_side}_price': _target}
+                        api_rate_limiter.wait(priority=True)
+                        kalshi_client.amend_order(fav_oid, ticker=hedge_ticker, side=fav_side,
+                                                  count=qty, **amend_kwargs)
+                        _is_taker = fav_ask > 0 and _target >= fav_ask
+                        bot['fav_price'] = _target
+                        bot['_taker_fired'] = True
+                        bot['_fav_was_taker'] = _is_taker
+                        _depth_label = 'THIN' if _fav_depth < 200 else ('MOD' if _fav_depth < 500 else 'THICK')
+                        _mode = 'TAKER (bid+1=ask)' if _is_taker else f'BID+1 (ask={fav_ask}¢)'
+                        combined = dog_price + _target
+                        print(f'⚡ WS PHANTOM {_mode}: {bot_id} fav→{_target}¢ (combined={combined}¢, waited {int(hedge_age)}s, depth={_fav_depth} [{_depth_label}])')
+                        bot_log('PHANTOM_WS_TAKER', bot_id, {
+                            'fav_price': _target, 'dog_price': dog_price,
+                            'combined': combined, 'hedge_age_s': int(hedge_age),
+                            'was_price': fav_price, 'fav_ask': fav_ask,
+                            'is_taker': _is_taker, 'fav_bid': fav_bid,
+                            'fav_depth': _fav_depth, 'depth_tier': _depth_label,
+                            'taker_timer': _taker_timer,
+                        })
+                        save_state()
+                finally:
+                    _phantom_drop_lock.release()
                 return
-            try:
-                fav_oid = bot.get('fav_order_id')
-                if fav_oid:
-                    qty = bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1))
-                    amend_kwargs = {f'{fav_side}_price': fav_ask}
-                    api_rate_limiter.wait(priority=True)
-                    kalshi_client.amend_order(fav_oid, ticker=hedge_ticker, side=fav_side,
-                                              count=qty, **amend_kwargs)
-                    bot['fav_price'] = fav_ask
-                    bot['_taker_fired'] = True
-                    bot['_fav_was_taker'] = True
-                    _depth_label = 'THIN' if _fav_depth < 200 else ('MOD' if _fav_depth < 500 else 'THICK')
-                    print(f'⚡ WS PHANTOM TAKER: {bot_id} fav→{fav_ask}¢ (ask, combined={combined_at_ask}¢, waited {int(hedge_age)}s, depth={_fav_depth} [{_depth_label}] timer={_taker_timer}s)')
-                    bot_log('PHANTOM_WS_TAKER', bot_id, {
-                        'fav_price': fav_ask, 'dog_price': dog_price,
-                        'combined': combined_at_ask, 'hedge_age_s': int(hedge_age),
-                        'was_price': fav_price,
-                        'fav_depth': _fav_depth, 'depth_tier': _depth_label,
-                        'taker_timer': _taker_timer,
-                    })
-                    save_state()
-            finally:
-                _phantom_drop_lock.release()
-            return
-
-        # Timer expired but spread too wide — log periodically
-        if fav_ask > 0 and hedge_age >= _taker_timer and not bot.get('_taker_fired') and _fav_spread > 1:
-            _last_wide = bot.get('_taker_wide_log_at', 0)
-            if time.time() - _last_wide >= 10:
-                print(f'⏳ PHANTOM TAKER SKIP (wide spread): {bot_id} spread={_fav_spread}¢ (bid={fav_bid} ask={fav_ask}) age={int(hedge_age)}s')
-                bot['_taker_wide_log_at'] = time.time()
 
         # Only snap if bid is ABOVE posted price (we're behind the market)
         if fav_bid <= fav_price:

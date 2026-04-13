@@ -6056,13 +6056,16 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     const tierCol = tier === 'THIN' ? '#ff4444' : tier === 'MOD' ? '#ffaa00' : '#00ff88';
                     const combined = avgDogPrice + (favAsk || favBid || favPrice);
                     const fdLabel = fd >= 1000 ? (fd/1000).toFixed(1) + 'K' : fd;
+                    const bidPlus1 = (favBid || 0) + 1;
+                    const spread = (favAsk || 0) - (favBid || 0);
                     if (left > 0) {
                         return `<div style="color:${tierCol};font-size:9px;font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:6px;">
                             <span style="background:${tierCol}18;padding:1px 5px;border-radius:3px;">${tier} · ${fdLabel}</span>
-                            <span>taker in ${Math.ceil(left)}s</span>
+                            <span>bid+1 in ${Math.ceil(left)}s</span>
                         </div>`;
                     } else {
-                        return `<div style="color:#ff8800;font-size:9px;font-weight:700;margin-bottom:4px;">⚡ TAKER READY · ${tier} · combined ${combined}¢</div>`;
+                        const mode = spread <= 1 ? 'CROSS' : `BID+1→${bidPlus1}¢`;
+                        return `<div style="color:#ff8800;font-size:9px;font-weight:700;margin-bottom:4px;">⚡ ${mode} · ${tier} · spread ${spread}¢</div>`;
                     }
                 })() : ''}
                 ${favPrice > 0 ? `

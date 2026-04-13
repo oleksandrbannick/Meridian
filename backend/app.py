@@ -12357,6 +12357,10 @@ def _handle_phantom(bot_id, bot, actions):
             _phantom_drop_lock.acquire()
             try:
                 fav_order_id = bot.get('fav_order_id', fav_order_id)
+                # Re-check inside lock — WS snap may have already moved price
+                _locked_price = bot.get('fav_price', 0)
+                if _locked_price == new_fav_price or not fav_order_id:
+                    return  # WS snap already handled it or order gone
                 amend_kwargs = {'yes_price': new_fav_price} if fav_side == 'yes' else {'no_price': new_fav_price}
                 api_rate_limiter.wait()
                 _walk_resp = kalshi_client.amend_order(

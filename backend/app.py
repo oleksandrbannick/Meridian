@@ -11694,8 +11694,8 @@ def _handle_phantom(bot_id, bot, actions):
             return
 
         dog_price = bot['dog_price']
-        # Post at fav bid — no ceiling cap, arb completes at whatever price
-        hedge_price = fav_bid
+        # Post at fav bid, or bid+1 if in bid+1 mode
+        hedge_price = (fav_bid + 1) if bot.get('_taker_fired') else fav_bid
         if hedge_price < 1:
             actions.append({'bot_id': bot_id, 'action': 'dog_filled_waiting_fav_bid'})
             return

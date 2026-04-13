@@ -8319,6 +8319,16 @@ def _apex_mm_fresh_ladder(bot_id, bot):
             print(f'⚠ APEX MM FRESH LADDER: {bot_id} no prices — cannot post')
             return False
 
+    # Drift guard: don't post into a decided market
+    _drift_max = max(bot.get('live_yes_bid', 0), bot.get('live_no_bid', 0))
+    if _drift_max >= 80:
+        print(f'🛡️ APEX MM FRESH LADDER DRIFT BLOCK: {bot_id} max_bid={_drift_max}c — too decided, pulling instead')
+        bot['status'] = 'mm_depth_pulled'
+        bot['_drift_pulled'] = True
+        bot['_last_pull_reason'] = f'drift guard {_drift_max}c (market decided)'
+        save_state()
+        return False
+
     # Apply any deferred edits now that we're flat
     _pending = bot.pop('_pending_edit', None)
     if _pending:
@@ -14089,15 +14099,15 @@ def _handle_apex(bot_id, bot, actions):
                 bot['_sl_breach_peak'] = None
                 bot['_sl_breach_phase'] = None
 
-    # 0.5. Active drift guard — pull ladder if market is decided (one side > 90c)
+    # 0.5. Active drift guard — pull ladder if market is decided (one side > 80c)
     _active_max_bid = max(bot.get('live_yes_bid', 0), bot.get('live_no_bid', 0))
-    if _active_max_bid >= 90:
+    if _active_max_bid >= 80:
         net_yes = bot.get('net_yes', 0)
         net_no = bot.get('net_no', 0)
         if net_yes > 0 or net_no > 0:
-            _apex_mm_begin_exit(bot_id, bot, f'active_drift_guard (max_bid={_active_max_bid}c >= 90c)')
+            _apex_mm_begin_exit(bot_id, bot, f'active_drift_guard (max_bid={_active_max_bid}c >= 80c)')
         else:
-            _apex_mm_pull_all(bot_id, bot, f'active_drift_guard (max_bid={_active_max_bid}c >= 90c)')
+            _apex_mm_pull_all(bot_id, bot, f'active_drift_guard (max_bid={_active_max_bid}c >= 80c)')
         print(f'🛡️ APEX MM ACTIVE DRIFT GUARD: {bot_id} max_bid={_active_max_bid}c — pulling/exiting')
         return
 

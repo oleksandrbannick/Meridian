@@ -14073,6 +14073,40 @@ def _handle_apex(bot_id, bot, actions):
     # 3. Inventory limit check
     _apex_mm_check_inventory(bot_id, bot)
 
+    # 3.5. Hedge-side ladder pull: when holding inventory, cancel hedge-side
+    # LADDER rungs (not the exit order). Entry side stays to keep accumulating.
+    net_yes = bot.get('net_yes', 0)
+    net_no = bot.get('net_no', 0)
+    if net_yes > 0 or net_no > 0:
+        # Hedge side = opposite of held side
+        hedge_side_key = 'no_orders' if net_yes > net_no else 'yes_orders'
+        hedge_side = 'no' if net_yes > net_no else 'yes'
+        exit_oid = bot.get(f'_{hedge_side}_exit_oid')
+        _hedge_cancelled = 0
+        for price_str, level in list(bot.get(hedge_side_key, {}).items()):
+            oid = level.get('oid')
+            if oid and oid != exit_oid:
+                cr = _safe_cancel(oid, f'apex_mm_hedge_pull_{bot_id}')
+                if isinstance(cr, tuple) and cr[0] == 'filled':
+                    # Late fill on hedge-side ladder rung — count it
+                    _kf = cr[1]
+                    _ws = max(level.get('fill_qty', 0), bot.get('_counted_order_fills', {}).get(oid, 0))
+                    _nf = max(0, _kf - _ws)
+                    if _nf > 0:
+                        _pr = int(price_str)
+                        bot[f'net_{hedge_side}'] = bot.get(f'net_{hedge_side}', 0) + _nf
+                        bot[f'total_{hedge_side}_cost'] = bot.get(f'total_{hedge_side}_cost', 0) + (_pr * _nf)
+                        _n = bot[f'net_{hedge_side}']
+                        bot[f'avg_{hedge_side}_cost'] = round(bot[f'total_{hedge_side}_cost'] / _n) if _n > 0 else 0
+                        bot.setdefault('_counted_order_fills', {})[oid] = _kf
+                        print(f'🚨 HEDGE PULL LATE FILL: {bot_id} {hedge_side.upper()} +{_nf}x @{_pr}c')
+                elif cr and cr != '404':
+                    _hedge_cancelled += 1
+                level['oid'] = None
+        if _hedge_cancelled > 0:
+            print(f'🛡️ APEX MM HEDGE PULL: {bot_id} cancelled {_hedge_cancelled} {hedge_side} ladder rungs (keeping exit)')
+            save_state()
+
     # 4. Unrealized P&L stop
     if _apex_mm_check_loss_limit(bot_id, bot):
         return

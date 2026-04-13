@@ -6529,8 +6529,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     };
 
     let yesLadder = '', noLadder = '';
-    for (const [price, level] of sortedYes) yesLadder += _rungHtml(price, level, '#00ff88');
-    for (const [price, level] of sortedNo) noLadder += _rungHtml(price, level, '#ff4444');
+    for (const [price, level] of sortedYes) yesLadder += _rungHtml(price, level, '#00d4ff');
+    for (const [price, level] of sortedNo) noLadder += _rungHtml(price, level, '#ff7043');
 
     const yesPaused = bot._yes_side_paused;
     const noPaused = bot._no_side_paused;
@@ -6570,7 +6570,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                         <span style="color:#00d4ff;text-align:right;">${rt.entry_price}c</span>
                         <span style="color:#ff7043;text-align:right;">${rt.exit_price}c</span>
                         <span style="color:${combCol};font-weight:700;text-align:right;">${rt.combined}c</span>
-                        <span style="color:#a0aec0;text-align:right;">x${rt.qty}</span>
+                        <span style="color:#b2ff59;text-align:right;">x${rt.qty}</span>
                         <span style="color:${pCol};font-weight:700;text-align:right;">${rt.pnl >= 0 ? '+' : ''}${rt.pnl}c</span>
                     </div>`;
                 }).join('') : ''}
@@ -6589,7 +6589,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                             <span style="color:${heldCol};text-align:right;">${ex.held_avg}c</span>
                             <span style="color:${exitCol};text-align:right;">${sellPrice}c</span>
                             <span style="text-align:right;">${combPrice > 0 ? `<span style="color:${combCol};font-weight:700;">${combPrice}c</span>` : ''}</span>
-                            <span style="color:#a0aec0;text-align:right;">x${ex.qty}</span>
+                            <span style="color:#b2ff59;text-align:right;">x${ex.qty}</span>
                             <span style="color:${pCol};font-weight:700;text-align:right;">${ex.pnl >= 0 ? '+' : ''}${ex.pnl}c</span>
                         </div>`;
                     }).join('') + '</div>' : ''}
@@ -6662,8 +6662,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         ${historyHtml}
 
         <div style="display:flex;gap:6px;flex-wrap:wrap;padding-top:4px;font-size:9px;color:#334;">
-            <span style="color:#ff7043;">W:${width}</span>
-            <span>Mid:${midpoint}</span>
+            <span style="color:#00d4ff;">W:${width}</span>
+            <span style="color:#e0e0e0;">Mid:${midpoint}</span>
             <span style="color:#ff7043;">${bot.base_qty || bot.qty_per_level || '?'}x${bot.levels || '?'}${bot.auto_scale !== false ? ' scaled' : ''}</span>
             ${room >= 0 ? `<span style="color:${roomCol};">${room <= 2 ? '! ' : ''}Room:${room}</span>` : ''}
             ${obiLabel}

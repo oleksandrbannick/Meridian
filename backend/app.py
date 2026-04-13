@@ -14241,11 +14241,9 @@ def _handle_apex(bot_id, bot, actions):
     if _apex_mm_check_loss_limit(bot_id, bot):
         return
 
-    # 5. Smart mode check (consecutive losses)
-    smart_limit = bot.get('smart_mode', 0)
-    if smart_limit > 0 and bot.get('consecutive_losses', 0) >= smart_limit:
-        _apex_mm_begin_exit(bot_id, bot, f'smart_stop ({bot["consecutive_losses"]} consecutive losses)')
-        return
+    # 5. Smart mode check — Apex MM uses dollar loss limit (checked in step 4 above),
+    # NOT consecutive losses. The consecutive_losses field is tracked for stats only.
+    # _smart_mode_should_repeat handles the restart/stop decision after each exit cycle.
 
     # 6. Walk-up: if exit order stuck, gradually amend toward breakeven
     _apex_mm_walk_up(bot_id, bot)

@@ -3968,13 +3968,6 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
         posted_at = bot.get('fav_posted_at', bot.get('dog_filled_at', 0))
         hedge_age = time.time() - posted_at if posted_at > 0 else 0
 
-        # Reset bid+1 flag on partial fills so it can re-fire for remaining qty
-        if bot.get('_taker_fired') and bot.get('fav_fill_qty', 0) > 0:
-            _total_qty = bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1))
-            if bot.get('fav_fill_qty', 0) < _total_qty:
-                bot['_taker_fired'] = False
-                bot['fav_posted_at'] = time.time()  # reset timer for remaining contracts
-
         # Read real-time fav depth at bid level (1 level = what the card shows)
         _lob = _local_orderbooks.get(hedge_ticker)
         _fav_depth = round(_lob.get_total_depth(fav_side, 1)) if _lob and _lob.last_update_ts > 0 else 0
@@ -4017,12 +4010,12 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
                     _phantom_drop_lock.release()
                 return
 
-        # Only snap if bid is ABOVE posted price (we're behind the market)
-        if fav_bid <= fav_price:
-            continue
+        # Snap target: bid+1 if in bid+1 mode, otherwise bid
+        snap_target = (fav_bid + 1) if bot.get('_taker_fired') else fav_bid
 
-        # No ceiling cap — snap to bid regardless of combined price
-        snap_target = fav_bid
+        # Skip if already at target (no change needed)
+        if snap_target == fav_price:
+            continue
 
         # Acquire lock — prevents race with monitor walk and instant drop
         if not _phantom_drop_lock.acquire(blocking=False):
@@ -4055,11 +4048,13 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
             bot['fav_walk_count'] = bot.get('fav_walk_count', 0) + 1
             _snap_dog_price = bot.get('dog_price', 0)
             combined = _snap_dog_price + snap_target
-            print(f'⚡ WS PHANTOM SNAP UP: {bot_id} fav {fav_price}→{snap_target}¢ (bid={fav_bid}¢ combined={combined}¢)')
-            bot_log('PHANTOM_WS_INSTANT_SNAP_UP', bot_id, {
+            _snap_dir = '↑' if snap_target > fav_price else '↓'
+            _snap_mode = 'BID+1' if bot.get('_taker_fired') else 'BID'
+            print(f'⚡ WS PHANTOM SNAP {_snap_dir} {_snap_mode}: {bot_id} fav {fav_price}→{snap_target}¢ (bid={fav_bid}¢ combined={combined}¢)')
+            bot_log('PHANTOM_WS_INSTANT_SNAP', bot_id, {
                 'old_price': fav_price, 'new_price': snap_target,
                 'fav_bid': fav_bid, 'dog_price': _snap_dog_price,
-                'combined': combined,
+                'combined': combined, 'mode': _snap_mode,
             })
             save_state()
         except Exception as e:

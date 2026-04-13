@@ -6131,7 +6131,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             return '';
         })()}
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;">
-            <span style="color:#ff66aa;font-weight:600;">Depth: ${bot.anchor_depth || targetWidth}¢${bot.auto_depth ? ' <span style="color:#64ffda;font-size:8px;">AUTO</span>' : ''}</span>${(() => {
+            <span style="color:#ff66aa;font-weight:600;">Depth: ${bot.anchor_depth || targetWidth}¢${bot.auto_depth ? ' <span style="color:#64ffda;font-size:8px;">AUTO</span>' : ''}</span><span style="color:#b2ff59;">×${qty}</span>${(() => {
                 const _ppi = bot._live_ppi != null ? bot._live_ppi : bot._last_ppi;
                 if (_ppi != null) {
                     const _ppiCol = _ppi >= 90 ? '#00ff88' : _ppi >= 75 ? '#00ccff' : _ppi >= 55 ? '#ffaa00' : _ppi >= 35 ? '#ff8800' : '#ff4444';
@@ -6167,7 +6167,6 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 const favD = bot._fav_depth_top3 != null ? bot._fav_depth_top3 : '?';
                 return `<span style="color:${color};font-size:9px;font-weight:600;background:${color}15;padding:1px 5px;border-radius:3px;" title="OBI: ${obi} | Dog depth: ${dogD} | Fav depth: ${favD}">OBI: ${label}</span>`;
             })() : ''}
-            <span style="color:#b2ff59;">×${qty}</span>
             ${isLadder && bot.avg_fill_price > 0 ? `<span style="color:#ffaa00;">Avg: ${bot.avg_fill_price}¢</span>` : ''}
             ${!_isCompletedSummary && bot.smart_mode ? `<span style="color:#00e5ff;font-weight:700;">Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L</span>` : !_isCompletedSummary && bot.repeat_count > 0 ? `<span style="color:#aa66ff;">🔄 ${(bot.repeats_done || 0) + 1}/${bot.repeat_count + 1}</span>` : ''}
             ${_isCompletedSummary && bot.smart_mode ? `<span style="color:#8892a6;">Streak: <strong style="color:${(bot.consecutive_losses || 0) >= 2 ? '#ff4444' : (bot.consecutive_losses || 0) >= 1 ? '#ffaa00' : '#00ff88'};">${bot.consecutive_losses || 0}L</strong></span>` : ''}

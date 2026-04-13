@@ -14550,7 +14550,7 @@ def _run_monitor():
         with _pending_ws_actions_lock:
             actions = list(_pending_ws_actions)
             _pending_ws_actions.clear()
-        active_statuses = ('fav_posted', 'both_posted', 'pending_fills', 'yes_filled', 'no_filled', 'amending_no', 'amending_yes', 'watching', 'waiting_repeat', 'waiting', 'one_filled', 'both_filled', 'one_leg_timeout', 'dog_anchor_posted', 'dog_filled', 'fav_hedge_posted', 'market_making_active', 'mm_depth_pulled', 'mm_exiting', 'awaiting_settlement', 'depth_pulled')
+        active_statuses = ('fav_posted', 'both_posted', 'pending_fills', 'yes_filled', 'no_filled', 'amending_no', 'amending_yes', 'watching', 'sl_selling', 'waiting_repeat', 'waiting', 'one_filled', 'both_filled', 'one_leg_timeout', 'dog_anchor_posted', 'dog_filled', 'fav_hedge_posted', 'market_making_active', 'mm_depth_pulled', 'mm_exiting', 'awaiting_settlement', 'depth_pulled')
 
         # ── Auto-phase: switch pregame → live when game is in progress ──
         for bot_id, bot in list(active_bots.items()):
@@ -15465,6 +15465,85 @@ def _run_monitor():
                     if not bot.get('order_filled', False):
                         continue
 
+                    # ── SL SELLING: monitor the sell order for fills ──
+                    if bot.get('status') == 'sl_selling':
+                        _sl_sell_oid = bot.get('sl_order_id')
+                        if not _sl_sell_oid:
+                            bot['status'] = 'watching'  # lost the order ID, go back to watching
+                            continue
+                        try:
+                            api_read_limiter.wait()
+                            _sl_check = kalshi_client.get_order(_sl_sell_oid)
+                            _sl_obj = _sl_check.get('order', _sl_check)
+                            _sl_filled = _parse_fill_count(_sl_obj) or 0
+                            _sl_order_status = _sl_obj.get('status', '')
+
+                            if _sl_filled >= qty:
+                                # Fully filled — record the SL exit
+                                actual_sell = bot.get('sl_posted_price', 0) or cur_bid
+                                loss = (entry - actual_sell) * qty
+                                bot['status'] = 'stopped'
+                                bot['stopped_at'] = now
+                                bot['exit_price'] = actual_sell
+                                bot['exit_pnl'] = -loss
+                                session_pnl['gross_loss_cents'] += loss
+                                session_pnl['stopped_bots'] += 1
+                                _record_trade({
+                                    'bot_id': bot_id, 'ticker': ticker, 'type': 'watch',
+                                    'side': watch_side, 'entry_price': entry,
+                                    'exit_bid': actual_sell, 'quantity': qty,
+                                    'loss_cents': loss, 'result': 'stop_loss_watch',
+                                    'timestamp': now,
+                                    'placed_at': bot.get('created_at', now),
+                                    'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                                    'stop_loss_cents': sl,
+                                    'game_context': _get_game_context(ticker),
+                                }, bot)
+                                actions.append({'bot_id': bot_id, 'action': 'stop_loss_watch', 'loss_cents': loss})
+                                bot_log('WATCH_SL_FILLED', bot_id, {'entry': entry, 'exit': actual_sell, 'loss_cents': loss, 'filled': _sl_filled})
+                                print(f'🛑 SCOUT SL COMPLETE: {bot_id} — sell filled {_sl_filled}x @{actual_sell}¢, loss {loss}¢')
+                                save_state()
+                            elif _sl_filled > 0 and _sl_filled < qty:
+                                # Partial fill — record partial, keep selling remainder
+                                actual_sell = bot.get('sl_posted_price', 0) or cur_bid
+                                partial_loss = (entry - actual_sell) * _sl_filled
+                                remaining = qty - _sl_filled
+                                bot['quantity'] = remaining
+                                bot['fill_qty'] = remaining
+                                _record_trade({
+                                    'bot_id': bot_id, 'ticker': ticker, 'type': 'watch',
+                                    'side': watch_side, 'entry_price': entry,
+                                    'exit_bid': actual_sell, 'quantity': _sl_filled,
+                                    'loss_cents': abs(partial_loss), 'result': 'stop_loss_watch',
+                                    'timestamp': now,
+                                    'placed_at': bot.get('created_at', now),
+                                    'team_label': ticker.split('-')[-1] if '-' in ticker else '',
+                                    'stop_loss_cents': sl,
+                                    'game_context': _get_game_context(ticker),
+                                    'note': f'Partial SL: {_sl_filled}/{qty} filled',
+                                }, bot)
+                                session_pnl['gross_loss_cents'] += abs(partial_loss)
+                                bot_log('WATCH_SL_PARTIAL', bot_id, {'filled': _sl_filled, 'remaining': remaining})
+                                print(f'📊 SCOUT SL PARTIAL: {bot_id} — {_sl_filled}/{qty} sold, {remaining} remaining')
+                                # Post new sell for remainder
+                                bot.pop('sl_order_id', None)
+                                _new_oid, _new_price = execute_maker_sell(ticker, watch_side, remaining, reason=f'watch_SL_remainder_{bot_id}')
+                                if _new_oid:
+                                    bot['sl_order_id'] = _new_oid
+                                    bot['sl_posted_price'] = _new_price
+                                save_state()
+                            elif _sl_order_status in ('canceled', 'cancelled'):
+                                # Sell was cancelled externally — go back to watching
+                                bot['status'] = 'watching'
+                                bot.pop('sl_order_id', None)
+                                bot.pop('sl_posted_price', None)
+                                print(f'⚠ SCOUT SL order cancelled for {bot_id} — back to watching')
+                                save_state()
+                            # else: still resting, _pending_maker_sells handles ask-following
+                        except Exception as _sl_chk_err:
+                            print(f'⚠ SL sell check failed for {bot_id}: {_sl_chk_err}')
+                        continue
+
                     # ── Step 3: If no SL/TP configured, just keep watching (track until settlement) ──
                     if not has_sl_tp:
                         continue
@@ -15521,36 +15600,21 @@ def _run_monitor():
                                 pass
                             bot.pop('tp_order_id', None)
                         _sl_oid, _sl_price = execute_maker_sell(ticker, watch_side, qty, reason=f'watch_SL_{bot_id}')
-                        sold = bool(_sl_oid)
-                        if sold:
-                            actual_sell = _sl_price or cur_bid
-                            loss = (entry - actual_sell) * qty
-                            bot['status'] = 'stopped'
-                            bot['stopped_at'] = now
-                            bot['exit_price'] = actual_sell
+                        if _sl_oid:
+                            # Don't mark stopped yet — transition to sl_selling, monitor the sell
+                            bot['status'] = 'sl_selling'
+                            bot['sl_order_id'] = _sl_oid
+                            bot['sl_posted_price'] = _sl_price
+                            bot['sl_posted_at'] = now
                             bot['exit_reason'] = 'stop_loss'
-                            bot['exit_pnl'] = -loss
-                            session_pnl['gross_loss_cents'] += loss
-                            session_pnl['stopped_bots'] += 1
-                            _record_trade({
-                        'bot_id': bot_id, 'ticker': ticker, 'type': 'watch',
-                        'side': watch_side, 'entry_price': entry,
-                        'exit_bid': actual_sell, 'quantity': qty,
-                        'loss_cents': loss, 'result': 'stop_loss_watch',
-                        'timestamp': now,
-                        'placed_at': bot.get('created_at', now),
-                        'team_label': ticker.split('-')[-1] if '-' in ticker else '',
-                        'stop_loss_cents': sl,
-                        'game_context': _get_game_context(ticker),
-                    }, bot)
-                            actions.append({'bot_id': bot_id, 'action': 'stop_loss_watch',
-                                           'loss_cents': loss})
-                            bot_log('WATCH_SL_FIRED', bot_id, {'entry': entry, 'exit': actual_sell, 'loss_cents': loss, 'sl_trigger': entry - sl, 'live_bid': cur_bid})
+                            save_state()
+                            actions.append({'bot_id': bot_id, 'action': 'stop_loss_watch_selling',
+                                           'sell_price': _sl_price, 'oid': _sl_oid})
+                            bot_log('WATCH_SL_SELLING', bot_id, {'entry': entry, 'sell_price': _sl_price, 'sl_trigger': entry - sl, 'live_bid': cur_bid, 'oid': _sl_oid})
+                            print(f'🛑 SCOUT SL SELLING: {bot_id} — posted sell @{_sl_price}¢, monitoring for fill')
                         else:
-                            bot_log('WATCH_SL_FAILED', bot_id, {'sell_info': str(sell_info)}, level='ERROR')
                             print(f'⚠ Watch SL sell FAILED for {bot_id} — will retry next cycle')
-                            actions.append({'bot_id': bot_id, 'action': 'stop_loss_watch_FAILED',
-                                           'info': str(sell_info)})
+                            actions.append({'bot_id': bot_id, 'action': 'stop_loss_watch_FAILED'})
                     # Take-profit — check resting TP order first
                     elif tp > 0 and cur_bid >= entry + tp:
                         # SAFETY: re-check bot hasn't already been stopped

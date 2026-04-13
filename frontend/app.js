@@ -6992,6 +6992,9 @@ function _renderWatchBotCard(bot, botId, container, gameScores) {
         else if (exitReason === 'stop_loss') { statusLabel = 'SL EXIT'; accentCol = '#ff4444'; }
         else if (exitReason === 'take_profit') { statusLabel = 'TP HIT'; accentCol = '#00ff88'; }
         else { statusLabel = bot.status === 'stopped' ? 'STOPPED' : 'DONE'; accentCol = '#888'; }
+    } else if (bot.status === 'sl_selling') {
+        statusLabel = '🛑 SL SELLING';
+        accentCol = '#ff4444';
     } else if (!orderFilled) {
         statusLabel = fillQty > 0 ? `FILLING ${fillQty}/${watchQty}` : 'PENDING';
         accentCol = '#ffd740';

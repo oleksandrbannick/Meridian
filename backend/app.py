@@ -15663,6 +15663,8 @@ def _run_monitor():
                                 continue  # will be picked up by one_leg_timeout settler next cycle
                             bot['status'] = 'completed'
                             bot['completed_at'] = now_m
+                            bot['_market_settled_at'] = now_m
+                            bot['_smart_stop_reason'] = 'final'
                             bot['result'] = 'market_dead_unfilled'
                             print(f'📐 MIDDLE MARKET DEAD: {bot_id} — markets inactive, no fills, cancelling')
                             actions.append({'bot_id': bot_id, 'action': 'middle_market_dead'})
@@ -16046,6 +16048,8 @@ def _run_monitor():
                     total_profit = profit_a + profit_b - total_fee
                     bot['status'] = 'completed'
                     bot['completed_at'] = now_s
+                    bot['_market_settled_at'] = now_s
+                    bot['_smart_stop_reason'] = 'final'
                     bot['leg_a_result'] = 'sold_early' if leg_a_sold else ('win' if leg_a_win else 'loss')
                     bot['leg_b_result'] = 'sold_early' if leg_b_sold else ('win' if leg_b_win else 'loss')
                     bot['middle_hit'] = middle_hit
@@ -16123,6 +16127,8 @@ def _run_monitor():
                     profit = ((100 - fill_price) * qty_s if filled_leg_win else (-fill_price * qty_s)) - one_leg_fee
                     bot['status'] = 'completed'
                     bot['completed_at'] = now_s
+                    bot['_market_settled_at'] = now_s
+                    bot['_smart_stop_reason'] = 'final'
                     bot[f'leg_{filled_leg}_result'] = 'win' if filled_leg_win else 'loss'
                     bot[f'leg_{unfilled_leg}_result'] = 'cancelled'
                     if profit > 0:

@@ -3968,6 +3968,13 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
         posted_at = bot.get('fav_posted_at', bot.get('dog_filled_at', 0))
         hedge_age = time.time() - posted_at if posted_at > 0 else 0
 
+        # Reset bid+1 flag on partial fills so it can re-fire for remaining qty
+        if bot.get('_taker_fired') and bot.get('fav_fill_qty', 0) > 0:
+            _total_qty = bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1))
+            if bot.get('fav_fill_qty', 0) < _total_qty:
+                bot['_taker_fired'] = False
+                bot['fav_posted_at'] = time.time()  # reset timer for remaining contracts
+
         # Read real-time fav depth at bid level (1 level = what the card shows)
         _lob = _local_orderbooks.get(hedge_ticker)
         _fav_depth = round(_lob.get_total_depth(fav_side, 1)) if _lob and _lob.last_update_ts > 0 else 0

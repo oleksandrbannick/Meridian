@@ -7671,16 +7671,33 @@ def _apex_mm_walk_up(bot_id, bot):
     # Absolute age since exit was first posted (never resets)
     total_age = now - (bot.get('_exit_posted_at') or soak_start)
 
-    # ── ABSOLUTE SNAP OVERRIDE: bid moved >2c from target — snap NOW, ignore soak ──
-    _target_dist = abs(live_exit_bid - target_price) if live_exit_bid > 0 else 999
-    if _target_dist > 2 and live_exit_bid > 0 and total_age > 3:
-        pass  # fall through to snap/walk logic — market is running, don't wait
-
-    elif age < SOAK_SECONDS and live_combined <= 100:
-        return  # still in soak and not underwater — hold for fill at target
+    # ── SOAK: protect target price ──
+    # While in soak AND profitable/breakeven, hold at target. Let it fill.
+    # Only bypass soak when underwater (combined > 100) — need to walk to wall.
+    if age < SOAK_SECONDS and live_combined <= 100:
+        # Even during soak, follow bid DOWN for better profit (snap-back)
+        if live_exit_bid < current_price - 1 and live_exit_bid > 0:
+            snap_price = max(1, live_exit_bid)
+            try:
+                price_kwarg = {f'{exit_side}_price': snap_price}
+                api_rate_limiter.wait()
+                kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
+                                          count=net_held, action='buy', **price_kwarg)
+                bot['_exit_price'] = snap_price
+                bot['_wall_parked'] = False
+                if snap_price <= target_price:
+                    bot['_exit_soak_start'] = now
+                    bot['_exit_walk_count'] = 0
+                print(f'📊 APEX MM SNAP-BACK (soak): {bot_id} {exit_side.upper()} {current_price}→{snap_price}c (bid improved, combined={avg_held + snap_price}c)')
+                bot_log('APEX_MM_SNAP_BACK', bot_id, {'old': current_price, 'new': snap_price, 'bid': live_exit_bid, 'combined': avg_held + snap_price, 'in_soak': True})
+            except Exception as e:
+                if 'filled' in str(e).lower():
+                    print(f'⚡ APEX MM SNAP-BACK FILLED (soak): {bot_id}')
+        return  # hold position during soak — don't snap UP past target
 
     # ── BREATHING GUARD: bid within 2c of target — extend soak once ──
-    elif _target_dist <= 2 and live_combined <= 100 and total_age < MAX_SOAK_SECONDS:
+    _target_dist = abs(live_exit_bid - target_price) if live_exit_bid > 0 else 999
+    if _target_dist <= 2 and live_combined <= 100 and total_age < MAX_SOAK_SECONDS:
         if age >= SOAK_SECONDS:
             bot['_exit_soak_start'] = now  # one extension, capped by MAX_SOAK_SECONDS
         return
@@ -7705,21 +7722,27 @@ def _apex_mm_walk_up(bot_id, bot):
                 print(f'⚡ APEX MM SNAP-BACK FILLED: {bot_id}')
         return
 
-    # ── GREEN ZONE: combined <= 99c → snap to bid, take the profit ──
-    if live_combined <= 99 and live_exit_bid > current_price:
+    # ── GREEN ZONE: combined <= 99c → snap toward bid, but NEVER above target ──
+    # Target is the profit-maximizing price. If bid is above target, you're the
+    # cheapest buyer in the book — highest fill probability. Stay at target.
+    # Only snap up TO target (if currently below it), never past it.
+    _green_snap = min(live_exit_bid, target_price)  # cap at target
+    if live_combined <= 99 and _green_snap > current_price:
         try:
-            price_kwarg = {f'{exit_side}_price': live_exit_bid}
+            price_kwarg = {f'{exit_side}_price': _green_snap}
             api_rate_limiter.wait()
             kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
                                       count=net_held, action='buy', **price_kwarg)
             old_price = current_price
-            bot['_exit_price'] = live_exit_bid
+            bot['_exit_price'] = _green_snap
             bot['_wall_parked'] = False
-            bot['_exit_walk_count'] = bot.get('_exit_walk_count', 0) + (live_exit_bid - old_price)
-            print(f'💚 APEX MM SNAP-PROFIT: {bot_id} {exit_side.upper()} {old_price}→{live_exit_bid}c (combined={live_combined}c, +{100 - live_combined}c profit)')
+            bot['_exit_walk_count'] = bot.get('_exit_walk_count', 0) + (_green_snap - old_price)
+            _snap_combined = avg_held + _green_snap
+            print(f'💚 APEX MM SNAP-PROFIT: {bot_id} {exit_side.upper()} {old_price}→{_green_snap}c (combined={_snap_combined}c, +{100 - _snap_combined}c profit, bid={live_exit_bid}c, target={target_price}c)')
             bot_log('APEX_MM_SNAP_PROFIT', bot_id, {
-                'old': old_price, 'new': live_exit_bid, 'bid': live_exit_bid,
-                'combined': live_combined, 'profit': 100 - live_combined,
+                'old': old_price, 'new': _green_snap, 'bid': live_exit_bid,
+                'combined': _snap_combined, 'profit': 100 - _snap_combined,
+                'target': target_price, 'capped': _green_snap < live_exit_bid,
             })
         except Exception as e:
             if 'filled' in str(e).lower():

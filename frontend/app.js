@@ -3414,7 +3414,7 @@ function displayOrderbookLadder(orderbook) {
     // Gate 2: Exit capacity — 75% of fav ask L1 (taker exit if spread = 1c)
     const _exitQty = _favAskTOB > 0 ? Math.floor(_favAskTOB * 0.75) : 99;
     // Suggested = min of both gates
-    let suggestedQty = Math.min(99, Math.max(1, Math.min(_camoQty, _exitQty)));
+    let suggestedQty = Math.max(1, Math.min(_camoQty, _exitQty));
     // Ghost liquidity check: need 3x structural support behind you
     if (_favTop3 > 0 && suggestedQty > Math.floor(_favTop3 / 3)) {
         suggestedQty = Math.max(1, Math.floor(_favTop3 / 3));
@@ -3422,7 +3422,7 @@ function displayOrderbookLadder(orderbook) {
     // Spoof override: force conservative if L1 looks fake
     if (_spoofed) suggestedQty = Math.min(suggestedQty, Math.max(1, Math.floor(_favBidTOB * 0.10)));
     // Max safe = slightly more aggressive gates (30% camo, 90% exit)
-    let maxSafeQty = Math.min(99, Math.max(suggestedQty, Math.min(Math.floor(_favBidTOB * 0.30), _favAskTOB > 0 ? Math.floor(_favAskTOB * 0.90) : 99)));
+    let maxSafeQty = Math.max(suggestedQty, Math.min(Math.floor(_favBidTOB * 0.30), _favAskTOB > 0 ? Math.floor(_favAskTOB * 0.90) : 9999));
     if (_spoofed) maxSafeQty = Math.min(maxSafeQty, Math.max(1, Math.floor(_favBidTOB * 0.15)));
     // Tier labels for display
     const _effectiveTier = _spoofed ? 0 : _favBidTOB >= 5000 ? 3 : _favBidTOB >= 500 ? 2 : 1;
@@ -3570,7 +3570,7 @@ function displayOrderbookLadder(orderbook) {
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;padding-top:6px;border-top:1px solid #1e274033;">
             <span style="color:#8892a6;font-size:9px;">Room: <span style="color:${roomCol};font-weight:700;">${hedgeRoom}¢</span> <span style="color:${roomCol};">${roomLabel}</span></span>
-            <span style="color:#8892a6;font-size:9px;">Qty: <span style="color:#00ff88;font-weight:700;">${suggestedQty}</span> <span style="color:#555;">rec</span> · <span style="color:#ffaa00;font-weight:700;">${maxSafeQty}</span> <span style="color:#555;">max</span> · <span style="color:${qtyTierCol};font-weight:600;">${qtyTier}</span> <span style="color:#555;">(bid:${_favBidTOB >= 1000 ? (_favBidTOB/1000).toFixed(1) + 'K' : _favBidTOB} ask:${_favAskTOB >= 1000 ? (_favAskTOB/1000).toFixed(1) + 'K' : _favAskTOB})</span></span>
+            <span style="font-size:9px;"><span style="background:#00ff8812;border:1px solid #00ff8833;border-radius:3px;padding:1px 5px;color:#00ff88;font-weight:700;">×${suggestedQty} rec</span> <span style="background:#ffaa0012;border:1px solid #ffaa0033;border-radius:3px;padding:1px 5px;color:#ffaa00;font-weight:700;">×${maxSafeQty} max</span> <span style="color:${qtyTierCol};font-weight:600;">${qtyTier}</span> <span style="color:#555;">(L1 bid:${_favBidTOB >= 1000 ? (_favBidTOB/1000).toFixed(1) + 'K' : _favBidTOB} ask:${_favAskTOB >= 1000 ? (_favAskTOB/1000).toFixed(1) + 'K' : _favAskTOB})</span></span>
         </div>
     </div>`;
     const ladderEl = document.getElementById('orderbook-ladder');
@@ -3854,7 +3854,7 @@ function setTradeMode(mode) {
         // Apply saved base qty — but cap at max safe qty for this market's liquidity
         if (_savedPhantom?.baseQty > 1 && _anchorRungs.length > 0) {
             const _dc = (window._obDepthCache || {})[(currentArbMarket || {}).ticker || ''];
-            const _maxQ = _dc?.maxSafeQty || 99;
+            const _maxQ = _dc?.maxSafeQty || 9999;
             _anchorRungs[0].qty = Math.min(_savedPhantom.baseQty, _maxQ);
             renderAnchorRungs(true);
         }
@@ -4233,7 +4233,7 @@ function updateRungPrice(idx, val) {
 
 function updateRungQty(idx, val) {
     const v = parseInt(val);
-    if (v >= 1 && v <= 99) {
+    if (v >= 1 && v <= 9999) {
         _anchorRungs[idx].qty = v;
     }
     updateAnchorPreview();
@@ -4276,11 +4276,11 @@ function renderAnchorRungs(force) {
                 <span style="color:#8892a6;font-size:9px;">QTY</span>
                 ${(() => {
                     const _dc2 = (window._obDepthCache || {})[(currentArbMarket || {}).ticker || ''];
-                    const _maxQ = _dc2?.maxSafeQty || 99;
+                    const _maxQ = _dc2?.maxSafeQty || 9999;
                     const _sugQ = _dc2?.suggestedQty || 1;
                     const _over = rung.qty > _maxQ;
                     const _qtyBorder = _over ? '#ff4444' : rung.qty > _sugQ ? '#ffaa0044' : '#1e2740';
-                    return `<input type="number" min="1" max="99" value="${rung.qty}" onchange="updateRungQty(0, this.value)"
+                    return `<input type="number" min="1" max="9999" value="${rung.qty}" onchange="updateRungQty(0, this.value)"
                     onfocus="window._anchorInputFocused=true" onblur="window._anchorInputFocused=false"
                     style="width:40px;padding:4px 6px;background:#0a0e1a;border:1px solid ${_qtyBorder};border-radius:4px;color:${_over ? '#ff4444' : '#fff'};font-size:13px;font-weight:700;text-align:center;">`;
                 })()}
@@ -6166,7 +6166,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             return '';
         })()}
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;">
-            <span style="color:#ff66aa;font-weight:600;">Depth: ${bot.anchor_depth || targetWidth}¢${bot.auto_depth ? ' <span style="color:#64ffda;font-size:8px;">AUTO</span>' : ''}</span><span style="color:#b2ff59;">×${qty}</span>${bot._rec_qty != null ? (() => { const _rq = bot._rec_qty, _mq = bot._max_qty || _rq; const _col = qty <= _rq ? '#00ff88' : qty <= _mq ? '#ffaa00' : '#ff4444'; const _icon = qty <= _rq ? '✓' : qty <= _mq ? '⚡' : '⚠'; return `<span style="color:${_col};font-size:9px;font-weight:600;" title="Rec: ${_rq} · Max: ${_mq} · Fav bid L1: ${bot._fav_bid_l1 || '?'} · Fav ask L1: ${bot._fav_ask_l1 || '?'}">${_icon}rec:${_rq}${qty > _rq ? ' max:' + _mq : ''}</span>`; })() : ''}${(() => {
+            <span style="color:#ff66aa;font-weight:600;">Depth: ${bot.anchor_depth || targetWidth}¢${bot.auto_depth ? ' <span style="color:#64ffda;font-size:8px;">AUTO</span>' : ''}</span>${bot._rec_qty != null ? (() => { const _rq = bot._rec_qty, _mq = bot._max_qty || _rq; const _ok = qty <= _rq; const _warn = qty > _rq && qty <= _mq; const _over = qty > _mq; const _col = _ok ? '#00ff88' : _warn ? '#ffaa00' : '#ff4444'; const _bg = _ok ? '#00ff8812' : _warn ? '#ffaa0012' : '#ff444412'; const _border = _ok ? '#00ff8833' : _warn ? '#ffaa0033' : '#ff444433'; return `<span style="background:${_bg};border:1px solid ${_border};border-radius:4px;padding:1px 6px;font-size:9px;font-weight:700;color:${_col};" title="Rec: ${_rq} · Max: ${_mq} · Fav bid L1: ${bot._fav_bid_l1 || '?'} · Fav ask L1: ${bot._fav_ask_l1 || '?'}">×${qty}${_ok ? '' : _warn ? ' · rec ' + _rq : ' · max ' + _mq}</span>`; })() : `<span style="color:#b2ff59;">×${qty}</span>`}${(() => {
                 const _ppi = bot._live_ppi != null ? bot._live_ppi : bot._last_ppi;
                 if (_ppi != null) {
                     const _ppiCol = _ppi >= 90 ? '#00ff88' : _ppi >= 75 ? '#00ccff' : _ppi >= 55 ? '#ffaa00' : _ppi >= 35 ? '#ff8800' : '#ff4444';

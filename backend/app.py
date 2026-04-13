@@ -1480,14 +1480,14 @@ def _qty_rec(fav):
     if tob <= 0: return 1
     tier = _qty_tier(fav)
     rate = {1: 0.15, 2: 0.25, 3: 0.40}[tier]
-    return min(99, max(1, int(tob * rate)))
+    return max(1, int(tob * rate))
 
 def _qty_max(fav):
     tob = fav.get('top1Qty', 0)
     if tob <= 0: return 1
     tier = _qty_tier(fav)
     rate = {1: 0.25, 2: 0.40, 3: 0.50}[tier]
-    return min(99, max(1, int(tob * rate)))
+    return max(1, int(tob * rate))
 
 
 @app.route('/api/depth-rec/<ticker>', methods=['GET'])

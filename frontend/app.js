@@ -4272,19 +4272,23 @@ function renderAnchorRungs(force) {
                     style="width:48px;padding:4px 6px;background:#0a0e1a;border:1px solid ${_anchorAutoPrice ? '#00ff8844' : '#1e2740'};border-radius:4px;color:#ffaa00;font-size:13px;font-weight:800;text-align:center;${_anchorAutoPrice ? 'opacity:0.8;' : ''}">
                 <span style="color:#ffaa0066;font-size:10px;">¢</span>
             </div>
-            <div style="display:flex;align-items:center;gap:3px;">
-                <span style="color:#8892a6;font-size:9px;">QTY</span>
-                ${(() => {
-                    const _dc2 = (window._obDepthCache || {})[(currentArbMarket || {}).ticker || ''];
-                    const _maxQ = _dc2?.maxSafeQty || 9999;
-                    const _sugQ = _dc2?.suggestedQty || 1;
-                    const _over = rung.qty > _maxQ;
-                    const _qtyBorder = _over ? '#ff4444' : rung.qty > _sugQ ? '#ffaa0044' : '#1e2740';
-                    return `<input type="number" min="1" max="9999" value="${rung.qty}" onchange="updateRungQty(0, this.value)"
-                    onfocus="window._anchorInputFocused=true" onblur="window._anchorInputFocused=false"
-                    style="width:40px;padding:4px 6px;background:#0a0e1a;border:1px solid ${_qtyBorder};border-radius:4px;color:${_over ? '#ff4444' : '#fff'};font-size:13px;font-weight:700;text-align:center;">`;
-                })()}
-            </div>
+            ${(() => {
+                const _dc2 = (window._obDepthCache || {})[(currentArbMarket || {}).ticker || ''];
+                const _rq = _dc2?.suggestedQty || 0;
+                const _mq = _dc2?.maxSafeQty || 0;
+                const _ok = !_rq || rung.qty <= _rq;
+                const _warn = _rq && rung.qty > _rq && rung.qty <= _mq;
+                const _over = _mq && rung.qty > _mq;
+                const _qtyBorder = _over ? '#ff4444' : _warn ? '#ffaa00' : _ok && _rq ? '#00ff8844' : '#1e2740';
+                const _qtyCol = _over ? '#ff4444' : '#fff';
+                return `<div style="display:flex;align-items:center;gap:0;background:#0a0e1a;border:1px solid ${_qtyBorder};border-radius:5px;overflow:hidden;">
+                    <span style="color:#8892a6;font-size:8px;padding:4px 5px;border-right:1px solid #1e2740;">QTY</span>
+                    <input type="number" min="1" max="9999" value="${rung.qty}" onchange="updateRungQty(0, this.value)"
+                        onfocus="window._anchorInputFocused=true" onblur="window._anchorInputFocused=false"
+                        style="width:44px;padding:4px 4px;background:transparent;border:none;color:${_qtyCol};font-size:13px;font-weight:700;text-align:center;outline:none;">
+                    ${_rq ? `<span style="border-left:1px solid #1e2740;padding:4px 5px;font-size:8px;font-weight:700;color:#00ff88;background:#00ff8808;">${_rq}</span><span style="border-left:1px solid #1e2740;padding:4px 5px;font-size:8px;font-weight:700;color:${_over ? '#ff4444' : '#ffaa00'};background:${_over ? '#ff444408' : '#ffaa0008'};">${_mq}</span>` : ''}
+                </div>`;
+            })()}
             <span style="color:#555;font-size:9px;">${baseLabel} ${anchorBase}¢ <span style="color:#ffaa00;">−${offset}¢</span></span>
         </div>
     </div>`;

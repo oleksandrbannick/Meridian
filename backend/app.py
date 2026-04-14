@@ -21890,7 +21890,6 @@ def get_orphaned_positions():
     try:
         # Build per-ticker managed qty from active bots
         _managed_qty = {}  # (ticker, side) → total qty managed by bots
-        _mm_tickers = set()  # tickers with active MM bots — exempt from orphan checks
         for _bid, b in active_bots.items():
             _st = b.get('status', '')
             if _st in ('completed', 'stopped', 'cancelled'):
@@ -21913,19 +21912,28 @@ def get_orphaned_positions():
                     fk = (_ht, fav_side)
                     _managed_qty[fk] = _managed_qty.get(fk, 0) + fav_qty
             elif cat == 'ladder_arb' or btype == 'apex_mm':
-                # MM bots actively churn fills — Kalshi position snapshot will transiently
-                # disagree with bot inventory. Exempt active MM tickers entirely to prevent
-                # false-positive orphans. Only flag if bot is exiting/stopped.
-                if _st in ('market_making_active', 'mm_depth_pulled'):
-                    _mm_tickers.add(t)
                 net_yes = int(b.get('net_yes', 0))
                 net_no = int(b.get('net_no', 0))
-                if net_yes > 0:
-                    k = (t, 'yes')
-                    _managed_qty[k] = _managed_qty.get(k, 0) + net_yes
-                elif net_no > 0:
-                    k = (t, 'no')
-                    _managed_qty[k] = _managed_qty.get(k, 0) + net_no
+                # MM manages positions that show as a NET on Kalshi.
+                # Bot tracks net_yes/net_no separately, but Kalshi auto-nets to one side.
+                # Register managed qty on the Kalshi-net side so orphan math works.
+                _kalshi_net = net_yes - net_no  # positive = YES, negative = NO
+                if _kalshi_net > 0:
+                    _managed_qty[(t, 'yes')] = _managed_qty.get((t, 'yes'), 0) + _kalshi_net
+                elif _kalshi_net < 0:
+                    _managed_qty[(t, 'no')] = _managed_qty.get((t, 'no'), 0) + abs(_kalshi_net)
+                # Also account for inventory limit — bot has orders out that can fill
+                # and create positions up to this limit. Use limit as managed capacity
+                # for the OPPOSITE side of current inventory to prevent false positives
+                # when fills flip the position between snapshots.
+                if _st in ('market_making_active', 'mm_depth_pulled'):
+                    _inv_limit = int(b.get('inventory_limit', 0))
+                    if _inv_limit > 0:
+                        # Bot can accumulate up to inv_limit on either side
+                        for _ms in ('yes', 'no'):
+                            _cur = _managed_qty.get((t, _ms), 0)
+                            if _cur < _inv_limit:
+                                _managed_qty[(t, _ms)] = _inv_limit
             elif btype == 'watch':
                 ws = b.get('side', 'yes')
                 wq = int(b.get('fill_qty', b.get('quantity', 0)))
@@ -21950,9 +21958,6 @@ def get_orphaned_positions():
                 continue
             side = 'yes' if pos_fp > 0 else 'no'
             total_qty = int(abs(pos_fp))
-            # Skip tickers with active MM bots — position churn causes transient mismatches
-            if ticker in _mm_tickers:
-                continue
             managed = _managed_qty.get((ticker, side), 0)
             orphan_qty = max(0, total_qty - managed)
             if orphan_qty > 0:

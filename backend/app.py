@@ -12702,9 +12702,9 @@ def _handle_phantom(bot_id, bot, actions):
                     if _need_hedge > 0:
                         bot['_partial_hedge_qty'] = _need_hedge  # hedge just the gap
                         bot['quantity'] = _need_hedge  # monitor reads qty from here
-                        bot['dog_fill_qty'] = _dog_fills
-                        bot['_dog_reconciled'] = False
-                        bot['_last_dog_reconcile'] = 0
+                        bot['dog_fill_qty'] = _need_hedge  # ONLY the unhedged amount, not all Kalshi fills
+                        bot['_dog_reconciled'] = True  # prevent reconciliation from re-counting old fills
+                        bot['_last_dog_reconcile'] = time.time()
                         bot['_trade_recorded'] = False
                         bot['_hedge_fired'] = False
                         # Clear fav_order_id so monitor's dog_filled handler posts fresh

@@ -6363,16 +6363,18 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const ageStr = ageMin >= 60 ? `${Math.floor(ageMin/60)}h ${ageMin%60}m` : `${ageMin}m`;
     const status = bot.status || 'market_making_active';
     const isCompleted = status === 'completed' || status === 'stopped';
+    const isAwaitingSettlement = status === 'awaiting_settlement';
 
     const _exitReason = bot._exit_reason || '';
-    const _isDriftStop = _exitReason.includes('drift_stop');
+    const _isDriftStop = _exitReason.includes('drift_stop') || _exitReason.includes('drift_guard');
     const _isTimeStop = _exitReason.includes('time_stop');
-    const _isSmartStop = _exitReason.includes('smart_stop');
+    const _isSmartStop = _exitReason.includes('smart_stop') || bot._smart_stop_reason === 'manual';
     const _apexSettled = bot._market_settled_at > 0 || bot._smart_stop_reason === 'final';
     const statusMap = {
         'market_making_active': ['ACTIVE', '#00d4ff'],
         'mm_depth_pulled': ['PULLED', '#ffaa00'],
         'mm_exiting': ['EXITING', '#ff8800'],
+        'awaiting_settlement': [_isDriftStop ? '⏳ DRIFT STOP' : _isTimeStop ? '⏳ TIME STOP' : _isSmartStop ? '⏳ SMART STOP' : '⏳ AWAITING', '#818cf8'],
         'completed': [_apexSettled ? '🏁 SETTLED' : _isDriftStop ? 'DRIFT STOP' : _isTimeStop ? 'TIME STOP' : _isSmartStop ? 'SMART STOP' : 'DONE',
                       _apexSettled ? '#ffaa00' : (_isDriftStop || _isTimeStop || _isSmartStop ? '#ff8800' : '#00ff88')],
         'stopped': [bot._pending_sells?.length ? '📤 SELLING' : 'STOPPED', bot._pending_sells?.length ? '#ffaa00' : '#ff4444'],
@@ -6654,13 +6656,16 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         statusSubHtml = `<div style="color:#ffaa00;font-size:9px;margin-bottom:6px;padding:3px 8px;background:#ffaa0008;border-radius:4px;">Entry pulled: ${bot._last_pull_reason}</div>`;
     } else if (status === 'mm_exiting' && _exitReason) {
         statusSubHtml = `<div style="color:#ff8800;font-size:9px;margin-bottom:6px;padding:3px 8px;background:#ff880008;border-radius:4px;">${_exitReason}</div>`;
+    } else if (isAwaitingSettlement && _exitReason) {
+        statusSubHtml = `<div style="color:#818cf8;font-size:9px;margin-bottom:6px;padding:3px 8px;background:#818cf808;border-radius:4px;">Exit: ${_exitReason}</div>`;
     } else if (isCompleted && _exitReason) {
         statusSubHtml = `<div style="color:#ff8800;font-size:9px;margin-bottom:6px;padding:3px 8px;background:#ff880008;border-radius:4px;">Exit: ${_exitReason}</div>`;
     }
 
     // ── BUILD CARD ──
     const item = document.createElement('div');
-    item.style.cssText = `background:#0c1018;border:1px solid #00d4ff18;border-left:3px solid #00d4ff;border-radius:10px;padding:12px;margin-bottom:8px;box-shadow:0 0 12px rgba(0,212,255,0.04);cursor:pointer;`;
+    const _borderAccent = isAwaitingSettlement ? '#818cf8' : isCompleted ? (_apexSettled ? '#00ff88' : '#ff8800') : '#00d4ff';
+    item.style.cssText = `background:#0c1018;border:1px solid ${_borderAccent}18;border-left:3px solid ${_borderAccent};border-radius:10px;padding:12px;margin-bottom:8px;box-shadow:0 0 12px rgba(0,212,255,0.04);cursor:pointer;`;
     item.onclick = (e) => { if (!e.target.closest('button') && !e.target.closest('a')) showBotDetail(botId); };
     item.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
@@ -6676,10 +6681,10 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             <div style="display:flex;align-items:center;gap:5px;flex-shrink:0;">
                 <span style="color:${pnlColor};font-weight:800;font-size:13px;">${pnlSign}${totalPnl}c</span>
                 <span style="color:#334;font-size:9px;">${ageStr}</span>
-                ${!isCompleted ? `<button onclick="apexMmModify('${botId}')" style="background:#ff704315;color:#ff7043;border:1px solid #ff704330;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Edit</button>` : ''}
-                ${!bot._smart_stopped && !bot._stop_pending && !bot._smart_stop_pending && !isCompleted ? `<button onclick="stopBot('${botId}')" style="background:#ff880015;color:#ff8800;border:1px solid #ff880030;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
-                ${!isCompleted ? `<button onclick="releaseBot('${botId}')" style="background:#4488ff15;color:#4488ff;border:1px solid #4488ff30;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Release</button>` : ''}
-                ${smartMode > 0 && (bot._smart_stopped || isCompleted) ? `<button onclick="restartSmart('${botId}')" style="background:#00d4ff15;color:#00d4ff;border:1px solid #00d4ff30;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
+                ${!isCompleted && !isAwaitingSettlement ? `<button onclick="apexMmModify('${botId}')" style="background:#ff704315;color:#ff7043;border:1px solid #ff704330;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Edit</button>` : ''}
+                ${!bot._smart_stopped && !bot._stop_pending && !bot._smart_stop_pending && !isCompleted && !isAwaitingSettlement ? `<button onclick="stopBot('${botId}')" style="background:#ff880015;color:#ff8800;border:1px solid #ff880030;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
+                ${!isCompleted && !isAwaitingSettlement ? `<button onclick="releaseBot('${botId}')" style="background:#4488ff15;color:#4488ff;border:1px solid #4488ff30;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Release</button>` : ''}
+                ${smartMode > 0 && (bot._smart_stopped || isCompleted || isAwaitingSettlement) ? `<button onclick="restartSmart('${botId}')" style="background:#00d4ff15;color:#00d4ff;border:1px solid #00d4ff30;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
                 <button onclick="cancelBot('${botId}')" style="background:#ff444415;color:#ff4444;border:1px solid #ff444430;border-radius:5px;padding:3px 7px;font-size:10px;cursor:pointer;">x</button>
             </div>
         </div>
@@ -13210,24 +13215,25 @@ function renderApexMMWidthBreakdown(allTrades) {
         else if (net < 0) widthMap[w].losses++;
         if (t.hold_time_s != null) { widthMap[w].holdTotal += t.hold_time_s; widthMap[w].holdCount++; }
     });
-    const widths = Object.values(widthMap).sort((a, b) => a.width - b.width);
+    const PRESET_WIDTHS = [4, 5, 6, 7, 8, 10, 12];
+    const widths = Object.values(widthMap).filter(d => PRESET_WIDTHS.includes(d.width)).sort((a, b) => a.width - b.width);
 
     widthPanel.innerHTML = widths.length === 0 ? '' : `
-        <h4 style="color:#ff8800;font-size:12px;font-weight:700;margin:0 0 10px 0;text-transform:uppercase;letter-spacing:.05em;">Width Performance${_apexMMActiveWidth !== 'all' ? ` · <span style="color:#ff8800;cursor:pointer;" onclick="selectApexMMWidth('all')">Clear ✕</span>` : ''}</h4>
+        <h4 style="color:#00d4ff;font-size:12px;font-weight:700;margin:0 0 10px 0;text-transform:uppercase;letter-spacing:.05em;">Width Performance${_apexMMActiveWidth !== 'all' ? ` · <span style="color:#ff7043;cursor:pointer;" onclick="selectApexMMWidth('all')">Clear ✕</span>` : ''}</h4>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;">
             ${widths.map(d => {
                 const dCol = d.net >= 0 ? '#00ff88' : '#ff4444';
                 const total = d.wins + d.losses;
                 const avg = d.count > 0 ? (d.net / d.count).toFixed(1) : '0';
                 const isActive = _apexMMActiveWidth === d.width;
-                const borderCol = isActive ? '#ff8800' : 'rgba(0,212,255,0.09)';
-                const bgCol = isActive ? 'rgba(255,136,0,0.08)' : '#0f1419';
+                const borderCol = isActive ? '#ff7043' : 'rgba(0,212,255,0.09)';
+                const bgCol = isActive ? 'rgba(255,112,67,0.08)' : '#0f1419';
                 const avgHold = d.holdCount > 0 ? Math.round(d.holdTotal / d.holdCount) : null;
                 const holdStr = avgHold !== null ? (avgHold < 60 ? `${avgHold}s` : `${Math.floor(avgHold / 60)}m`) : '';
                 const _tierLabel = d.width <= 2 ? 'TIGHT' : d.width <= 4 ? 'STANDARD' : d.width <= 6 ? 'WIDE' : 'MAX';
-                const _tierCol = d.width <= 2 ? '#00ff88' : d.width <= 4 ? '#00d4ff' : d.width <= 6 ? '#ffaa00' : '#ff8800';
+                const _tierCol = d.width <= 2 ? '#00ff88' : d.width <= 4 ? '#00d4ff' : d.width <= 6 ? '#ffaa00' : '#ff7043';
                 return `<div data-width="${d.width}" onclick="selectApexMMWidth(${d.width})" style="background:${bgCol};border-radius:8px;padding:10px;text-align:center;border:1px solid ${borderCol};cursor:pointer;transition:border-color 0.15s,background 0.15s;">
-                    <div style="color:#ff8800;font-size:14px;font-weight:800;">W${d.width}¢</div>
+                    <div style="color:#00d4ff;font-size:14px;font-weight:800;">W${d.width}¢</div>
                     <div style="color:${_tierCol};font-size:8px;font-weight:700;letter-spacing:.05em;margin-top:-2px;">${_tierLabel}</div>
                     <div style="color:${dCol};font-size:13px;font-weight:700;">${d.net >= 0 ? '+' : ''}$${(d.net / 100).toFixed(2)}</div>
                     <div style="color:#555;font-size:10px;">${d.wins}W/${d.losses}L${total > 0 ? ' · ' + Math.round(d.wins / total * 100) + '%' : ''}</div>
@@ -13260,7 +13266,7 @@ function renderApexMMSportBreakdown(allTrades) {
     if (sportEntries.length > 0) {
         const headingScope = selectedHistoryDays.length > 0 ? '' : ' (Lifetime)';
         sportPanel.innerHTML = `
-            <h4 style="color:#ff8800;font-size:12px;font-weight:700;margin:0 0 10px 0;text-transform:uppercase;letter-spacing:.05em;">By Sport${headingScope}${_apexMMActiveSport !== 'all' ? ` · <span style="color:#ff8800;cursor:pointer;" onclick="selectApexMMSport('all')">Clear filter ✕</span>` : ''}</h4>
+            <h4 style="color:#00d4ff;font-size:12px;font-weight:700;margin:0 0 10px 0;text-transform:uppercase;letter-spacing:.05em;">By Sport${headingScope}${_apexMMActiveSport !== 'all' ? ` · <span style="color:#ff7043;cursor:pointer;" onclick="selectApexMMSport('all')">Clear filter ✕</span>` : ''}</h4>
             <div style="display:flex;flex-wrap:wrap;gap:8px;">
                 ${sportEntries.map(([sport, d]) => {
                     const isActive = _apexMMActiveSport === sport;
@@ -13268,11 +13274,11 @@ function renderApexMMSportBreakdown(allTrades) {
                     const icon = _si[sport] || '';
                     const total = d.wins + d.losses;
                     const wr = total > 0 ? Math.round(d.wins / total * 100) : 0;
-                    const borderCol = isActive ? '#ff8800' : 'rgba(0,212,255,0.09)';
-                    const bgCol = isActive ? '#ff880012' : '#0f1419';
+                    const borderCol = isActive ? '#ff7043' : 'rgba(0,212,255,0.09)';
+                    const bgCol = isActive ? '#ff704312' : '#0f1419';
                     return `<div onclick="selectApexMMSport('${sport}')" style="background:${bgCol};border-radius:8px;padding:12px 16px;border:1px solid ${borderCol};text-align:center;min-width:100px;flex:1;cursor:pointer;transition:border-color 0.15s,background 0.15s;">
                         <div style="font-size:16px;margin-bottom:2px;">${icon}</div>
-                        <div style="color:${isActive ? '#ff8800' : '#00d4ff'};font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${sport}</div>
+                        <div style="color:${isActive ? '#ff7043' : '#00d4ff'};font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${sport}</div>
                         <div style="color:${col};font-size:18px;font-weight:800;">${d.net >= 0 ? '+' : ''}$${(d.net / 100).toFixed(2)}</div>
                         <div style="color:#555;font-size:9px;margin-top:2px;">${d.wins}W/${d.losses}L · ${wr}%</div>
                         <div style="color:#3a4560;font-size:9px;">${d.count} trades</div>
@@ -14993,8 +14999,8 @@ async function loadPositions() {
                     <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;">
                         <span class="side-badge ${pos.side}">${pos.side.toUpperCase()}</span>
                         <div style="flex:1;min-width:0;">
-                            <a href="#" onclick="navigateToMarket('${pos.ticker.toUpperCase().split('-').slice(0,2).join('-')}');return false;" style="color:#fff;font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;text-decoration:none;" title="View in Markets tab">${pos.title}</a>
-                            <a href="#" onclick="navigateToMarket('${pos.ticker.toUpperCase().split('-').slice(0,2).join('-')}');return false;" style="color:#555;font-size:10px;margin-top:2px;display:block;text-decoration:none;" title="View in Markets tab">${pos.ticker}</a>
+                            <a href="https://kalshi.com/markets/${pos.ticker.split('-')[0]}/${pos.ticker}" target="_blank" style="color:#fff;font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;text-decoration:none;" title="View on Kalshi">${pos.title}</a>
+                            <a href="https://kalshi.com/markets/${pos.ticker.split('-')[0]}/${pos.ticker}" target="_blank" style="color:#555;font-size:10px;margin-top:2px;display:block;text-decoration:none;" title="View on Kalshi">${pos.ticker}</a>
                         </div>
                     </div>
                     <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">

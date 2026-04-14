@@ -14656,6 +14656,9 @@ def _handle_apex(bot_id, bot, actions):
 def _phantom_set_final_status(bot, bot_id=''):
     """Set bot to 'awaiting_settlement' if cross-market with accumulated positions, else 'completed'.
     Returns the status string that was set."""
+    import traceback
+    _caller = ''.join(traceback.format_stack()[-3:-1])
+    print(f'🔍 _phantom_set_final_status CALLED for {bot_id} from:\n{_caller.strip()}')
     now = time.time()
     _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != bot.get('ticker')
     _has_pos = (bot.get('_cross_settled_qty', 0) > 0 or bot.get('_cross_settled_qty_dog', 0) > 0

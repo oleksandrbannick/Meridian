@@ -21976,7 +21976,6 @@ def get_orphaned_positions():
         return jsonify({'orphaned': [], 'count': 0, 'error': str(e)})
 
 
-@app.route('/api/bot/watch', methods=['POST'])
 def _resume_bots_paused_by_scout(scout_bot_id, ticker):
     """Resume bots that were paused when this scout was assigned.
     Called when scout exits (SL, TP, or manual cancel)."""
@@ -22015,6 +22014,7 @@ def _resume_bots_paused_by_scout(scout_bot_id, ticker):
     return _resumed
 
 
+@app.route('/api/bot/watch', methods=['POST'])
 def watch_position():
     """Attach a watch-bot to an existing Kalshi position for stop-loss / take-profit."""
     try:

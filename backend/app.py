@@ -4338,7 +4338,7 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
             if current_price <= 0:
                 continue
             exit_bid = yes_bid if exit_side == 'yes' else no_bid
-            if exit_bid <= 0 or exit_bid >= current_price - 1:
+            if exit_bid <= 0 or exit_bid >= current_price:
                 continue  # bid not below current — nothing to snap to
 
             snap_price = max(1, exit_bid)
@@ -8014,7 +8014,7 @@ def _apex_mm_walk_up(bot_id, bot):
     # Only bypass soak when underwater (combined > 100) — need to walk to wall.
     if age < SOAK_SECONDS and live_combined <= 100:
         # Even during soak, follow bid DOWN for better profit (snap-back)
-        if live_exit_bid < current_price - 1 and live_exit_bid > 0:
+        if live_exit_bid < current_price and live_exit_bid > 0:
             snap_price = max(1, live_exit_bid)
             try:
                 price_kwarg = {f'{exit_side}_price': snap_price}
@@ -8048,7 +8048,7 @@ def _apex_mm_walk_up(bot_id, bot):
         return
 
     # ── SNAP-BACK: bid improved, follow it down for better fill ──
-    if live_exit_bid < current_price - 1:
+    if live_exit_bid < current_price:
         snap_price = max(1, live_exit_bid)
         try:
             price_kwarg = {f'{exit_side}_price': snap_price}
@@ -8074,10 +8074,10 @@ def _apex_mm_walk_up(bot_id, bot):
                 bot[f'_{exit_side}_exit_oid'] = None
         return
 
-    # ── GREEN ZONE: combined <= 99c → snap to bid for fill ──
-    # Soak already protected target for 15-25s. After soak, go to bid to
-    # actually get filled — sitting below bid means sellers fill others first.
-    _green_snap = live_exit_bid  # go to bid, no cap — soak protected target
+    # ── GREEN ZONE: combined <= 99c → walk 1c at a time toward bid ──
+    # Soak already protected target for 15-25s. After soak, walk toward bid
+    # one cent per tick — don't jump straight to bid.
+    _green_snap = min(current_price + 1, live_exit_bid)  # walk 1c, cap at bid
     if live_combined <= 99 and _green_snap > current_price:
         try:
             price_kwarg = {f'{exit_side}_price': _green_snap}

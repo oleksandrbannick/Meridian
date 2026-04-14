@@ -1524,13 +1524,15 @@ function displayMarkets(markets) {
                 const pnl = (b.net_pnl_cents || 0);
                 pnlMap[t] = (pnlMap[t] || 0) + pnl;
             }
-            // Show pill for ALL bots that exist — stopped/completed included
-            // so user always knows a bot is on this market before trying to place a new one
+            // Show pill for ALL bots — stopped/completed shown dimmed
             if (!t) continue;
             let label = catLabel[b.bot_category] || (b.type === 'middle' ? 'meridian' : (b.type === 'watch' ? 'scout' : null));
             if (!label) continue;
+            const _isDead = b.status === 'completed' || b.status === 'stopped' || b.status === 'cancelled';
             if (!botMap[t]) botMap[t] = {};
-            botMap[t][label] = (botMap[t][label] || 0) + 1;
+            if (!botMap[t][label]) botMap[t][label] = { total: 0, dead: 0 };
+            botMap[t][label].total++;
+            if (_isDead) botMap[t][label].dead++;
             // Track phantom details for side+cross display
             if (label === 'phantom') {
                 if (!phantomDetails[t]) phantomDetails[t] = [];
@@ -1551,7 +1553,9 @@ function displayMarkets(markets) {
                     const lt = b[leg] || '';
                     if (lt && lt !== t) {
                         if (!botMap[lt]) botMap[lt] = {};
-                        botMap[lt].meridian = (botMap[lt].meridian || 0) + 1;
+                        if (!botMap[lt].meridian) botMap[lt].meridian = { total: 0, dead: 0 };
+                        botMap[lt].meridian.total++;
+                        if (_isDead) botMap[lt].meridian.dead++;
                     }
                 }
             }
@@ -2452,11 +2456,13 @@ function createMarketRow(market, label) {
                 }
             } else {
                 const c = BOT_COLORS[bt] || '#818cf8';
-                const n = botTypes[bt];
+                const info = botTypes[bt];
+                const n = info?.total || info || 0;
+                const allDead = info?.dead >= info?.total;
                 const pill = document.createElement('span');
-                pill.style.cssText = `display:inline-flex;align-items:center;gap:2px;padding:2px 6px;background:${c}22;border:1px solid ${c}55;border-radius:4px;font-size:9px;font-weight:700;color:${c};`;
-                pill.innerHTML = `${botIconImg(bt, 14)}${n > 1 ? n : ''}`;
-                pill.title = `${n} active ${bt} bot${n > 1 ? 's' : ''}`;
+                pill.style.cssText = `display:inline-flex;align-items:center;gap:2px;padding:2px 6px;background:${c}${allDead ? '11' : '22'};border:1px solid ${c}${allDead ? '33' : '55'};border-radius:4px;font-size:9px;font-weight:700;color:${c};${allDead ? 'opacity:0.5;' : ''}`;
+                pill.innerHTML = `${botIconImg(bt, 14)}${allDead ? '<span style="font-size:8px;">⏹</span>' : (n > 1 ? n : '')}`;
+                pill.title = allDead ? `${bt} stopped` : `${n} active ${bt} bot${n > 1 ? 's' : ''}`;
                 iconRow.appendChild(pill);
             }
         }
@@ -3553,14 +3559,14 @@ function displayOrderbookLadder(orderbook) {
         <div style="padding:5px 8px;background:${verdictCol}11;border:1px solid ${verdictCol}33;border-radius:5px;margin-bottom:6px;">
             <div style="color:${verdictCol};font-size:10px;font-weight:700;">${verdict}</div>
         </div>
-        <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px;font-size:8px;font-weight:600;">
-            <span style="color:#00ff88;background:#00ff8811;padding:1px 5px;border-radius:3px;">85+ WALL 4¢</span>
-            <span style="color:#00ccff;background:#00ccff11;padding:1px 5px;border-radius:3px;">70+ PRIME 5¢</span>
-            <span style="color:#ffaa00;background:#ffaa0011;padding:1px 5px;border-radius:3px;">55+ SNIPER 6¢</span>
-            <span style="color:#ff8800;background:#ff880011;padding:1px 5px;border-radius:3px;">45+ TRAP 7¢</span>
-            <span style="color:#ff6600;background:#ff660011;padding:1px 5px;border-radius:3px;">40+ DEEP 8¢</span>
-            <span style="color:#ff4400;background:#ff440011;padding:1px 5px;border-radius:3px;">35+ FLOOR 9¢</span>
-            <span style="color:#ff4444;background:#ff444411;padding:1px 5px;border-radius:3px;">&lt;35 KILL</span>
+        <div style="display:flex;gap:3px;margin-bottom:6px;font-size:7px;font-weight:600;overflow-x:auto;">
+            <span style="color:#00ff88;background:#00ff8811;padding:1px 4px;border-radius:3px;white-space:nowrap;">85+ WALL 4¢</span>
+            <span style="color:#00ccff;background:#00ccff11;padding:1px 4px;border-radius:3px;white-space:nowrap;">70+ PRIME 5¢</span>
+            <span style="color:#ffaa00;background:#ffaa0011;padding:1px 4px;border-radius:3px;white-space:nowrap;">55+ SNIPER 6¢</span>
+            <span style="color:#ff8800;background:#ff880011;padding:1px 4px;border-radius:3px;white-space:nowrap;">45+ TRAP 7¢</span>
+            <span style="color:#ff6600;background:#ff660011;padding:1px 4px;border-radius:3px;white-space:nowrap;">40+ DEEP 8¢</span>
+            <span style="color:#ff4400;background:#ff440011;padding:1px 4px;border-radius:3px;white-space:nowrap;">35+ FLOOR 9¢</span>
+            <span style="color:#ff4444;background:#ff444411;padding:1px 4px;border-radius:3px;white-space:nowrap;">&lt;35 KILL</span>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <div style="text-align:center;background:${dogCol}08;border:1px solid ${dogCol}22;border-radius:6px;padding:6px;">
@@ -12295,6 +12301,7 @@ let _phantomActivePeriod = 'all';  // Period filter within sport dropdown
 // _phantomActiveExit removed (ceiling exit system removed)
 let _apexMMActiveSport = 'all';   // Sport filter for Apex MM history
 let _apexMMActiveWidth = 'all';   // Width filter for Apex MM history
+let _apexMMActiveLadder = 'all';  // Ladder (levels) filter for Apex MM history
 let _apexMMActivePeriod = 'all';  // Period filter within Apex MM sport dropdown
 let historyViewMode = 'arb';  // 'arb' | 'bets' | 'middle' | 'dog'
 
@@ -12517,7 +12524,7 @@ async function loadTradeHistoryList() {
     if (!el) return;
     try {
         const dateParam = selectedHistoryDays.length ? `&dates=${selectedHistoryDays.join(',')}` : '';
-        const resp = await fetch(`${API_BASE}/bot/history?limit=999999${dateParam}`);
+        const resp = await fetch(`${API_BASE}/bot/history?limit=2000${dateParam}`);
         const data = await resp.json();
         let trades = (data.trades || []).filter(t => t.type !== 'watch' && t.type !== 'middle' && !['anchor_dog','anchor_ladder'].includes(t.bot_category) && !['anchor_sellback','ladder_sellback'].includes(t.result));
 
@@ -13064,7 +13071,7 @@ async function loadApexMMHistory() {
     try {
         const dateParam = selectedHistoryDays.length ? `&dates=${selectedHistoryDays.join(',')}` : '';
         const [tradeResp, pnlResp] = await Promise.all([
-            fetch(`${API_BASE}/bot/history?limit=999999&category=ladder_arb${dateParam}`),
+            fetch(`${API_BASE}/bot/history?limit=2000&category=ladder_arb${dateParam}`),
             fetch(`${API_BASE}/pnl`),
         ]);
         const tradeData = await tradeResp.json();
@@ -13089,11 +13096,13 @@ async function loadApexMMHistory() {
         window._apexMMPnl = pnl;
         _apexMMActiveSport = 'all';
         _apexMMActiveWidth = 'all';
+        _apexMMActiveLadder = 'all';
         _apexMMActivePeriod = 'all';
 
         // Render panels
         renderApexMMStats(trades, pnl);
         renderApexMMWidthBreakdown(trades);
+        renderApexMMLadderBreakdown(trades);
         renderApexMMSportBreakdown(trades);
         renderApexMMSportDropdown(_apexMMActiveSport, trades);
 
@@ -13236,6 +13245,49 @@ function renderApexMMWidthBreakdown(allTrades) {
                 return `<div data-width="${d.width}" onclick="selectApexMMWidth(${d.width})" style="background:${bgCol};border-radius:8px;padding:10px;text-align:center;border:1px solid ${borderCol};cursor:pointer;transition:border-color 0.15s,background 0.15s;">
                     <div style="color:#00d4ff;font-size:14px;font-weight:800;">W${d.width}¢</div>
                     <div style="color:${_tierCol};font-size:8px;font-weight:700;letter-spacing:.05em;margin-top:-2px;">${_tierLabel}</div>
+                    <div style="color:${dCol};font-size:13px;font-weight:700;">${d.net >= 0 ? '+' : ''}$${(d.net / 100).toFixed(2)}</div>
+                    <div style="color:#555;font-size:10px;">${d.wins}W/${d.losses}L${total > 0 ? ' · ' + Math.round(d.wins / total * 100) + '%' : ''}</div>
+                    ${holdStr ? `<div style="color:#3a4560;font-size:9px;margin-top:2px;">avg hold ${holdStr}</div>` : ''}
+                    <div style="color:#3a4560;font-size:9px;">${d.count} trades · avg ${avg}¢</div>
+                </div>`;
+            }).join('')}
+        </div>`;
+}
+
+// ── Apex MM Ladder Breakdown (by levels count) ──────────────────────────
+
+function renderApexMMLadderBreakdown(allTrades) {
+    const ladderPanel = document.getElementById('apex-mm-ladder-panel');
+    if (!ladderPanel) return;
+
+    const ladderMap = {};
+    allTrades.forEach(t => {
+        const lvl = t.levels || 7;  // default 7 for old trades
+        if (!ladderMap[lvl]) ladderMap[lvl] = { levels: lvl, wins: 0, losses: 0, net: 0, count: 0, holdTotal: 0, holdCount: 0 };
+        const net = (t.profit_cents || 0) - (t.loss_cents || 0);
+        ladderMap[lvl].net += net;
+        ladderMap[lvl].count++;
+        if (net > 0) ladderMap[lvl].wins++;
+        else if (net < 0) ladderMap[lvl].losses++;
+        if (t.hold_time_s != null) { ladderMap[lvl].holdTotal += t.hold_time_s; ladderMap[lvl].holdCount++; }
+    });
+    const PRESET_LEVELS = [3, 5, 7, 10];
+    const ladders = Object.values(ladderMap).filter(d => PRESET_LEVELS.includes(d.levels)).sort((a, b) => a.levels - b.levels);
+
+    ladderPanel.innerHTML = ladders.length === 0 ? '' : `
+        <h4 style="color:#ff7043;font-size:12px;font-weight:700;margin:0 0 10px 0;text-transform:uppercase;letter-spacing:.05em;">Ladder Performance${_apexMMActiveLadder !== 'all' ? ` · <span style="color:#00d4ff;cursor:pointer;" onclick="selectApexMMLadder('all')">Clear ✕</span>` : ''}</h4>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;">
+            ${ladders.map(d => {
+                const dCol = d.net >= 0 ? '#00ff88' : '#ff4444';
+                const total = d.wins + d.losses;
+                const avg = d.count > 0 ? (d.net / d.count).toFixed(1) : '0';
+                const isActive = _apexMMActiveLadder === d.levels;
+                const borderCol = isActive ? '#00d4ff' : 'rgba(255,112,67,0.09)';
+                const bgCol = isActive ? 'rgba(0,212,255,0.08)' : '#0f1419';
+                const avgHold = d.holdCount > 0 ? Math.round(d.holdTotal / d.holdCount) : null;
+                const holdStr = avgHold !== null ? (avgHold < 60 ? `${avgHold}s` : `${Math.floor(avgHold / 60)}m`) : '';
+                return `<div data-ladder="${d.levels}" onclick="selectApexMMLadder(${d.levels})" style="background:${bgCol};border-radius:8px;padding:10px;text-align:center;border:1px solid ${borderCol};cursor:pointer;transition:border-color 0.15s,background 0.15s;">
+                    <div style="color:#ff7043;font-size:14px;font-weight:800;">${d.levels}L</div>
                     <div style="color:${dCol};font-size:13px;font-weight:700;">${d.net >= 0 ? '+' : ''}$${(d.net / 100).toFixed(2)}</div>
                     <div style="color:#555;font-size:10px;">${d.wins}W/${d.losses}L${total > 0 ? ' · ' + Math.round(d.wins / total * 100) + '%' : ''}</div>
                     ${holdStr ? `<div style="color:#3a4560;font-size:9px;margin-top:2px;">avg hold ${holdStr}</div>` : ''}
@@ -13415,6 +13467,7 @@ function _applyApexMMFilters(trades) {
     let f = trades;
     if (_apexMMActiveSport !== 'all') f = f.filter(t => (t.sport || 'Other') === _apexMMActiveSport);
     if (_apexMMActiveWidth !== 'all') f = f.filter(t => (t.rung_width || (t.combined_price ? 100 - t.combined_price : 0)) === _apexMMActiveWidth);
+    if (_apexMMActiveLadder !== 'all') f = f.filter(t => (t.levels || 7) === _apexMMActiveLadder);
     return f;
 }
 
@@ -13623,8 +13676,8 @@ function selectApexMMWidth(width) {
     document.querySelectorAll('#apex-mm-width-panel [data-width]').forEach(card => {
         const w = Number(card.getAttribute('data-width'));
         const isActive = w === _apexMMActiveWidth;
-        card.style.borderColor = isActive ? '#ff8800' : 'rgba(0,212,255,0.09)';
-        card.style.background = isActive ? 'rgba(255,136,0,0.08)' : '#0f1419';
+        card.style.borderColor = isActive ? '#ff7043' : 'rgba(0,212,255,0.09)';
+        card.style.background = isActive ? 'rgba(255,112,67,0.08)' : '#0f1419';
     });
 
     const scrollY = window.scrollY;
@@ -13636,6 +13689,26 @@ function selectApexMMWidth(width) {
     const widthScoped = _apexMMActiveWidth !== 'all' ? allTrades.filter(t => (t.rung_width || (t.combined_price ? 100 - t.combined_price : 0)) === _apexMMActiveWidth) : allTrades;
     renderApexMMSportBreakdown(widthScoped);
     renderApexMMSportDropdown(_apexMMActiveSport, allTrades);
+    filterApexMMLog();
+    window.scrollTo({ top: scrollY, behavior: 'instant' });
+}
+
+function selectApexMMLadder(levels) {
+    if (levels === _apexMMActiveLadder && levels !== 'all') levels = 'all';
+    _apexMMActiveLadder = levels;
+
+    // In-place highlight update
+    document.querySelectorAll('#apex-mm-ladder-panel [data-ladder]').forEach(card => {
+        const l = Number(card.getAttribute('data-ladder'));
+        const isActive = l === _apexMMActiveLadder;
+        card.style.borderColor = isActive ? '#00d4ff' : 'rgba(255,112,67,0.09)';
+        card.style.background = isActive ? 'rgba(0,212,255,0.08)' : '#0f1419';
+    });
+
+    const scrollY = window.scrollY;
+    const allTrades = window._apexMMAllTrades || [];
+    const filtered = _applyApexMMFilters(allTrades);
+    renderApexMMStats(filtered, window._apexMMPnl || {});
     filterApexMMLog();
     window.scrollTo({ top: scrollY, behavior: 'instant' });
 }
@@ -13660,14 +13733,14 @@ async function loadBetsHistory() {
     if (!listEl) return;
     try {
         const dateParam = selectedHistoryDays.length ? `&dates=${selectedHistoryDays.join(',')}` : '';
-        const resp = await fetch(`${API_BASE}/bot/history?limit=999999&category=watch${dateParam}`);
+        const resp = await fetch(`${API_BASE}/bot/history?limit=2000&category=watch${dateParam}`);
         const data = await resp.json();
         const trades = (data.trades || []).filter(t => t.type === 'watch');
 
         // ── Calendar (all bets, ignore date filter) ──
         if (calPanel) {
             try {
-                const calResp = await fetch(`${API_BASE}/bot/history?limit=999999&category=watch`);
+                const calResp = await fetch(`${API_BASE}/bot/history?limit=2000&category=watch`);
                 const calData = await calResp.json();
                 const allBets = (calData.trades || []).filter(t => t.type === 'watch');
                 const dayMap = {};
@@ -13849,14 +13922,14 @@ async function loadMiddleHistory() {
     if (!listEl) return;
     try {
         const dateParam = selectedHistoryDays.length ? `&dates=${selectedHistoryDays.join(',')}` : '';
-        const resp = await fetch(`${API_BASE}/bot/history?limit=999999&category=middle${dateParam}`);
+        const resp = await fetch(`${API_BASE}/bot/history?limit=2000&category=middle${dateParam}`);
         const data = await resp.json();
         const trades = (data.trades || []).filter(t => t.type === 'middle');
 
         // ── Calendar (all middles, ignore date filter) ──
         if (calPanel) {
             try {
-                const calResp = await fetch(`${API_BASE}/bot/history?limit=999999&category=middle`);
+                const calResp = await fetch(`${API_BASE}/bot/history?limit=2000&category=middle`);
                 const calData = await calResp.json();
                 const allMiddle = (calData.trades || []).filter(t => t.type === 'middle');
                 const dayMap = {};
@@ -14706,7 +14779,7 @@ async function loadDogHistory() {
     if (!listEl) return;
     try {
         const dateParam = selectedHistoryDays.length ? `&dates=${selectedHistoryDays.join(',')}` : '';
-        const resp = await fetch(`${API_BASE}/bot/history?limit=999999&category=anchor_dog,anchor_ladder,anchor_sellback${dateParam}`);
+        const resp = await fetch(`${API_BASE}/bot/history?limit=2000&category=anchor_dog,anchor_ladder,anchor_sellback${dateParam}`);
         const data = await resp.json();
         const trades = data.trades || [];
 

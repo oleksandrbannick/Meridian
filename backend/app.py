@@ -2792,7 +2792,23 @@ def load_state():
             with open(DATA_FILE, 'r') as f:
                 data = json.load(f)
             active_bots = data.get('active_bots', {})
+            # Migrate: completed ladder_arb bots without settlement → awaiting_settlement
+            for _mb_id, _mb in active_bots.items():
+                if (_mb.get('bot_category') == 'ladder_arb'
+                    and _mb.get('status') == 'completed'
+                    and not _mb.get('_market_settled_at')):
+                    _mb['status'] = 'awaiting_settlement'
+                    _mb['awaiting_since'] = _mb.pop('completed_at', time.time())
+                    print(f'🔄 MIGRATE: {_mb_id} completed → awaiting_settlement')
             trade_history = data.get('trade_history', [])
+            # Backfill _day_key for fast date filtering (one-time on startup)
+            _backfill_count = 0
+            for _t in trade_history:
+                if '_day_key' not in _t:
+                    _t['_day_key'] = _trade_day_key(_t)
+                    _backfill_count += 1
+            if _backfill_count:
+                print(f'📅 Backfilled _day_key on {_backfill_count} trades')
             _opening_lines = data.get('opening_lines', {})
             applied_migrations = data.get('applied_migrations', [])
             # Load per-day resets (or migrate from legacy single float)
@@ -6006,6 +6022,8 @@ def _record_trade(record: dict, bot: dict = None):
     _enrich_trade_record(record, bot)
     import uuid
     record.setdefault('_trade_id', str(uuid.uuid4()))
+    # Pre-compute day key for fast date filtering (avoids timezone conversion per query)
+    record['_day_key'] = _trade_day_key(record)
     # Attach order IDs from bot for trade history debugging
     if bot:
         record.setdefault('yes_order_id', bot.get('yes_order_id'))
@@ -9610,6 +9628,7 @@ def _apex_mm_record_round_trip(bot_id, bot, fill_side, fill_price, close_qty):
         f'{opposite}_price': opp_avg, f'{fill_side}_price': fill_price,
         'combined_price': _combined,
         'rung_width': 100 - _combined,
+        'levels': bot.get('levels', 7),
         'snapped': _combined > (100 - bot.get('start_gap', 4)),
         'quantity': close_qty,
         'profit_cents': max(0, net_pnl), 'loss_cents': abs(min(0, net_pnl)),
@@ -18134,9 +18153,9 @@ def bot_history():
     category_filter = request.args.get('category', '').strip()
     if dates_filter:
         date_set = set(d.strip() for d in dates_filter.split(',') if d.strip())
-        filtered = [t for t in trade_history if _trade_day_key(t) in date_set]
+        filtered = [t for t in trade_history if (t.get('_day_key') or _trade_day_key(t)) in date_set]
     elif date_filter:
-        filtered = [t for t in trade_history if _trade_day_key(t) == date_filter]
+        filtered = [t for t in trade_history if (t.get('_day_key') or _trade_day_key(t)) == date_filter]
     else:
         filtered = trade_history
     if category_filter:

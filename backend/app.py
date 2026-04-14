@@ -12460,24 +12460,16 @@ def _handle_phantom(bot_id, bot, actions):
             bot['no_price'] = no_p
 
             pnl_cents = (100 - yes_p - no_p) * qty
-            # Use actual Kalshi fees if available, otherwise estimate
-            if _actual_fav_fee is not None:
-                # Get actual dog fee from Kalshi too
-                _actual_dog_fee = 0
+            # Always pull actual fees from Kalshi orders
+            fee = 0
+            for _fee_oid in list(set(filter(None, [bot.get('dog_order_id'), fav_order_id] + list(bot.get('_all_hedge_order_ids', []))))):
                 try:
-                    _dog_oid = bot.get('dog_order_id')
-                    if _dog_oid:
-                        api_read_limiter.wait()
-                        _do = kalshi_client.get_order(_dog_oid)
-                        _do = _do.get('order', _do) if isinstance(_do, dict) else {}
-                        _actual_dog_fee = int(round((float(_do.get('maker_fees_dollars', '0')) + float(_do.get('taker_fees_dollars', '0'))) * 100))
+                    api_read_limiter.wait()
+                    _fo = kalshi_client.get_order(_fee_oid)
+                    _fo = _fo.get('order', _fo) if isinstance(_fo, dict) else {}
+                    fee += int(round((float(_fo.get('maker_fees_dollars', '0')) + float(_fo.get('taker_fees_dollars', '0'))) * 100))
                 except Exception:
-                    _actual_dog_fee = _kalshi_side_fee_cents(dog_price, qty)
-                fee = _actual_dog_fee + _actual_fav_fee
-            else:
-                _dog_fee = _kalshi_side_fee_cents(dog_price, qty)
-                _fav_fee = _kalshi_taker_side_fee_cents(actual_fav_price, qty) if bot.get('_fav_was_taker') else _kalshi_side_fee_cents(actual_fav_price, qty)
-                fee = _dog_fee + _fav_fee
+                    pass  # fee stays 0 for this order if lookup fails
             net_pnl = pnl_cents - fee
 
             # Compute hedge speed BEFORE recording trade so it's included

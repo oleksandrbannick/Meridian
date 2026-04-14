@@ -1519,19 +1519,22 @@ def _qty_tier(fav):
         return 2  # STANDARD
     return 3      # DEEP
 
+_QTY_CAP_REC = 100   # Stealth ceiling: dynamic sizing capped here on deep markets
+_QTY_CAP_MAX = 250   # Absolute ceiling: never recommend more than this
+
 def _qty_rec(fav):
     tob = fav.get('top1Qty', 0)
     if tob <= 0: return 1
     tier = _qty_tier(fav)
     rate = {1: 0.15, 2: 0.25, 3: 0.40}[tier]
-    return max(1, int(tob * rate))
+    return min(max(1, int(tob * rate)), _QTY_CAP_REC)
 
 def _qty_max(fav):
     tob = fav.get('top1Qty', 0)
     if tob <= 0: return 1
     tier = _qty_tier(fav)
     rate = {1: 0.25, 2: 0.40, 3: 0.50}[tier]
-    return max(1, int(tob * rate))
+    return min(max(1, int(tob * rate)), _QTY_CAP_MAX)
 
 
 @app.route('/api/depth-rec/<ticker>', methods=['GET'])

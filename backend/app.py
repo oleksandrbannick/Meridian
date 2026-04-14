@@ -7604,10 +7604,22 @@ def _apex_mm_check_inventory(bot_id, bot):
 
     # YES side: pause if over limit, resume if back under
     if bot.get('net_yes', 0) >= inv_limit and not bot.get('_yes_side_paused'):
-        for price, level in list(bot.get('yes_orders', {}).items()):
+        for price_str, level in list(bot.get('yes_orders', {}).items()):
             oid = level.get('oid')
             if oid:
-                _cancel_with_retry(oid)
+                cr = _safe_cancel(oid, f'apex_mm_inv_pause_{bot_id}')
+                if isinstance(cr, tuple) and cr[0] == 'filled':
+                    _kf = cr[1]
+                    _ws = max(level.get('fill_qty', 0), bot.get('_counted_order_fills', {}).get(oid, 0))
+                    _nf = max(0, _kf - _ws)
+                    if _nf > 0:
+                        _pr = int(price_str)
+                        bot['net_yes'] = bot.get('net_yes', 0) + _nf
+                        bot['total_yes_cost'] = bot.get('total_yes_cost', 0) + (_pr * _nf)
+                        _n = bot['net_yes']
+                        bot['avg_yes_cost'] = round(bot['total_yes_cost'] / _n) if _n > 0 else 0
+                        bot.setdefault('_counted_order_fills', {})[oid] = _kf
+                        print(f'🚨 INV PAUSE LATE FILL: {bot_id} YES +{_nf}x @{_pr}c during cancel')
                 level['oid'] = None
         bot['_yes_side_paused'] = True
         bot_log('APEX_MM_INV_PAUSE', bot_id, {'side': 'yes', 'net': bot['net_yes'], 'limit': inv_limit})
@@ -7620,10 +7632,22 @@ def _apex_mm_check_inventory(bot_id, bot):
 
     # NO side
     if bot.get('net_no', 0) >= inv_limit and not bot.get('_no_side_paused'):
-        for price, level in list(bot.get('no_orders', {}).items()):
+        for price_str, level in list(bot.get('no_orders', {}).items()):
             oid = level.get('oid')
             if oid:
-                _cancel_with_retry(oid)
+                cr = _safe_cancel(oid, f'apex_mm_inv_pause_{bot_id}')
+                if isinstance(cr, tuple) and cr[0] == 'filled':
+                    _kf = cr[1]
+                    _ws = max(level.get('fill_qty', 0), bot.get('_counted_order_fills', {}).get(oid, 0))
+                    _nf = max(0, _kf - _ws)
+                    if _nf > 0:
+                        _pr = int(price_str)
+                        bot['net_no'] = bot.get('net_no', 0) + _nf
+                        bot['total_no_cost'] = bot.get('total_no_cost', 0) + (_pr * _nf)
+                        _n = bot['net_no']
+                        bot['avg_no_cost'] = round(bot['total_no_cost'] / _n) if _n > 0 else 0
+                        bot.setdefault('_counted_order_fills', {})[oid] = _kf
+                        print(f'🚨 INV PAUSE LATE FILL: {bot_id} NO +{_nf}x @{_pr}c during cancel')
                 level['oid'] = None
         bot['_no_side_paused'] = True
         bot_log('APEX_MM_INV_PAUSE', bot_id, {'side': 'no', 'net': bot['net_no'], 'limit': inv_limit})
@@ -7705,6 +7729,23 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
                     except Exception:
                         pass
             return
+
+        # Side-flip guard: if old exit OID exists on the OPPOSITE side (held side),
+        # cancel it NOW to prevent orphan fills from a stale order.
+        # e.g. was long YES (exit on NO), now long NO (exit on YES) — old NO exit must die.
+        _old_side = held_side  # old exit was on what is now the held side
+        _old_exit_oid = bot.get(f'_{_old_side}_exit_oid')
+        if _old_exit_oid:
+            bot[f'_{_old_side}_exit_oid'] = None
+            try:
+                _safe_cancel(_old_exit_oid, f'amend_exit_sideflip_{bot_id}')
+                print(f'🛡️ APEX MM SIDE FLIP: {bot_id} cancelled stale {_old_side} exit {_old_exit_oid[:12]} (now exiting {exit_side})')
+                bot_log('APEX_MM_SIDE_FLIP_CANCEL', bot_id, {
+                    'old_side': _old_side, 'new_exit_side': exit_side,
+                    'old_oid': _old_exit_oid[:12],
+                }, level='WARN')
+            except Exception:
+                pass
 
         # Re-read cost basis — concurrent WS fills may have shifted avg since top of function
         avg_held = bot.get(f'avg_{held_side}_cost', 0)
@@ -8016,6 +8057,10 @@ def _apex_mm_refill_entry(bot_id, bot, freed_qty):
     else:
         held_side = 'no'
         avg_held = bot.get('avg_no_cost', 0)
+
+    # ── GATE 0: Side not paused by inventory limit ──
+    if bot.get(f'_{held_side}_side_paused'):
+        return
 
     exit_price = bot.get('_exit_price', 0)
     ticker = bot.get('ticker', '')
@@ -8654,6 +8699,17 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
             print(f'🔄 APEX MM REFILL: {bot_id} posted {_side_posted}/{len(missing_meta)} {side.upper()} rungs')
 
         # ── Reset exit state (not tracking state) ──
+        # Cancel + clear any stale exit OIDs — caller only clears the matched side,
+        # a side-flip could leave the other side's exit OID alive.
+        for _refill_exit_side in ('yes', 'no'):
+            _refill_exit_oid = bot.get(f'_{_refill_exit_side}_exit_oid')
+            if _refill_exit_oid:
+                bot[f'_{_refill_exit_side}_exit_oid'] = None
+                try:
+                    _safe_cancel(_refill_exit_oid, f'cycle_refill_cleanup_{bot_id}')
+                    print(f'🛡️ CYCLE REFILL: {bot_id} cancelled stale {_refill_exit_side} exit {_refill_exit_oid[:12]}')
+                except Exception:
+                    pass
         bot['_yes_side_paused'] = False
         bot['_no_side_paused'] = False
         bot['_skew_active'] = False
@@ -14179,7 +14235,8 @@ def _handle_apex(bot_id, bot, actions):
         _width = bot.get('start_gap', 4) * 2
         _stop = 100 + _width  # symmetric: risk = reward
         # Drift stop: dual-threshold matrix (soft breach = timer, hard breach = instant)
-        if _best_combined > _stop and _best_combined < 999:
+        # Use >= to match WS handler — prevents monitor from resetting WS breach timer at exact boundary
+        if _best_combined >= _stop and _best_combined < 999:
             _hard_stop = _stop + APEX_MM_SL_HARD_MARGIN
             _pc = time.perf_counter()  # monotonic clock for sub-second precision
 

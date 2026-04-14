@@ -14280,24 +14280,21 @@ def _handle_apex(bot_id, bot, actions):
         bot['_counted_order_fills'] = {}
         bot['_cycle_start_pnl'] = bot.get('realized_pnl_cents', 0)
 
-        # Post fresh ladder using configured levels
-        base_qty = bot.get('base_qty', bot.get('qty_per_level', 10))
-        yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, scale=bot.get('auto_scale', True), inv_limit=bot.get('inventory_limit', 0))
-        if not yes_levels and not no_levels:
-            print(f'⚠ APEX MM RESTART: {bot_id} no valid levels at mid={midpoint}')
-            return
-        success = _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
-        if success:
-            bot['midpoint'] = midpoint
-            bot['status'] = 'market_making_active'
+        # Use fresh_ladder which has all safety gates (Kalshi position check, OBI, drift)
+        bot['status'] = 'market_making_active'
+        success = _apex_mm_fresh_ladder(bot_id, bot)
+        if not success:
+            # fresh_ladder blocked (drift, Kalshi position, or no prices) — stay waiting
+            if bot.get('status') != 'mm_depth_pulled':
+                bot['status'] = 'waiting_repeat'
+            print(f'📊 APEX MM RESTART BLOCKED: {bot_id} — fresh_ladder returned false, will retry')
+        else:
             bot['posted_at'] = now
-            save_state()
             bot_log('APEX_MM_RESTART', bot_id, {
-                'midpoint': midpoint, 'levels': bot['levels'],
-                'start_gap': bot['start_gap'], 'base_qty': base_qty,
-                'yes_levels': len(yes_levels), 'no_levels': len(no_levels),
+                'midpoint': bot.get('midpoint', 0), 'levels': bot['levels'],
+                'start_gap': bot['start_gap'],
             })
-            print(f'🔄 APEX MM RESTART: {bot_id} mid={midpoint} levels={bot["levels"]} gap={bot["start_gap"]} — fresh ladder posted')
+            print(f'🔄 APEX MM RESTART: {bot_id} — fresh ladder posted via safe path')
         return
 
     # ── STATUS: market_making_active — main logic ──

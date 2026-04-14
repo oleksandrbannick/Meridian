@@ -12417,7 +12417,38 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['_trade_recorded'] = False  # clear so completion path runs fully
 
             # BOTH LEGS FILLED — arb complete!
-            actual_fav_price = (get_actual_fill_price(fav_order_id, fav_side) if fav_order_id else None) or bot['fav_price']
+            # Weighted average across ALL hedge orders (fav may have been amended/reposted)
+            _all_fav_oids = list(set(filter(None, bot.get('_all_hedge_order_ids', []) + [fav_order_id])))
+            _fav_total_cents = 0
+            _fav_total_qty = 0
+            _fav_total_fee = 0
+            for _foid in _all_fav_oids:
+                try:
+                    api_read_limiter.wait()
+                    _fo = kalshi_client.get_order(_foid)
+                    _fo = _fo.get('order', _fo) if isinstance(_fo, dict) else {}
+                    _fc = int(float(_fo.get('fill_count_fp', '0')))
+                    if _fc <= 0:
+                        continue
+                    _fp_d = _fo.get('no_price_dollars' if fav_side == 'no' else 'yes_price_dollars')
+                    if _fp_d:
+                        _fp = int(round(float(_fp_d) * 100))
+                    else:
+                        _fp = get_actual_fill_price(_foid, fav_side) or 0
+                    _fav_total_cents += _fp * _fc
+                    _fav_total_qty += _fc
+                    _ff = float(_fo.get('maker_fees_dollars', '0')) + float(_fo.get('taker_fees_dollars', '0'))
+                    _fav_total_fee += int(round(_ff * 100))
+                except Exception as _e:
+                    print(f'⚠ fav order {_foid[:12]} lookup failed: {_e}')
+            if _fav_total_qty > 0:
+                actual_fav_price = round(_fav_total_cents / _fav_total_qty)
+                _actual_fav_fee = _fav_total_fee
+            else:
+                actual_fav_price = (get_actual_fill_price(fav_order_id, fav_side) if fav_order_id else None) or bot['fav_price']
+                _actual_fav_fee = None
+            if len(_all_fav_oids) > 1:
+                print(f'📊 SPLIT HEDGE: {bot_id} {len(_all_fav_oids)} fav orders, {_fav_total_qty} fills, wavg={actual_fav_price}¢')
             bot['fav_price'] = actual_fav_price
             dog_price = bot['dog_price']
 
@@ -12429,10 +12460,24 @@ def _handle_phantom(bot_id, bot, actions):
             bot['no_price'] = no_p
 
             pnl_cents = (100 - yes_p - no_p) * qty
-            # Dog is always maker. Fav uses taker fee if we crossed the spread.
-            _dog_fee = _kalshi_side_fee_cents(dog_price, qty)
-            _fav_fee = _kalshi_taker_side_fee_cents(actual_fav_price, qty) if bot.get('_fav_was_taker') else _kalshi_side_fee_cents(actual_fav_price, qty)
-            fee = _dog_fee + _fav_fee
+            # Use actual Kalshi fees if available, otherwise estimate
+            if _actual_fav_fee is not None:
+                # Get actual dog fee from Kalshi too
+                _actual_dog_fee = 0
+                try:
+                    _dog_oid = bot.get('dog_order_id')
+                    if _dog_oid:
+                        api_read_limiter.wait()
+                        _do = kalshi_client.get_order(_dog_oid)
+                        _do = _do.get('order', _do) if isinstance(_do, dict) else {}
+                        _actual_dog_fee = int(round((float(_do.get('maker_fees_dollars', '0')) + float(_do.get('taker_fees_dollars', '0'))) * 100))
+                except Exception:
+                    _actual_dog_fee = _kalshi_side_fee_cents(dog_price, qty)
+                fee = _actual_dog_fee + _actual_fav_fee
+            else:
+                _dog_fee = _kalshi_side_fee_cents(dog_price, qty)
+                _fav_fee = _kalshi_taker_side_fee_cents(actual_fav_price, qty) if bot.get('_fav_was_taker') else _kalshi_side_fee_cents(actual_fav_price, qty)
+                fee = _dog_fee + _fav_fee
             net_pnl = pnl_cents - fee
 
             # Compute hedge speed BEFORE recording trade so it's included

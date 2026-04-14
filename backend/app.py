@@ -7350,6 +7350,10 @@ def _apex_mm_pull_all(bot_id, bot, reason):
             oid = level.get('oid')
             if not oid:
                 continue
+            # Skip cancel on known-filled orders — saves wasted API calls
+            if level.get('fill_qty', 0) >= level.get('qty', 1) and level.get('fill_qty', 0) > 0:
+                level['oid'] = None
+                continue
             cr = _safe_cancel(oid, f'apex_mm_pull_{bot_id}')
             if isinstance(cr, tuple) and cr[0] == 'filled':
                 _kalshi_fills = cr[1]
@@ -7607,6 +7611,9 @@ def _apex_mm_check_inventory(bot_id, bot):
         for price_str, level in list(bot.get('yes_orders', {}).items()):
             oid = level.get('oid')
             if oid:
+                if level.get('fill_qty', 0) >= level.get('qty', 1) and level.get('fill_qty', 0) > 0:
+                    level['oid'] = None
+                    continue
                 cr = _safe_cancel(oid, f'apex_mm_inv_pause_{bot_id}')
                 if isinstance(cr, tuple) and cr[0] == 'filled':
                     _kf = cr[1]
@@ -7635,6 +7642,9 @@ def _apex_mm_check_inventory(bot_id, bot):
         for price_str, level in list(bot.get('no_orders', {}).items()):
             oid = level.get('oid')
             if oid:
+                if level.get('fill_qty', 0) >= level.get('qty', 1) and level.get('fill_qty', 0) > 0:
+                    level['oid'] = None
+                    continue
                 cr = _safe_cancel(oid, f'apex_mm_inv_pause_{bot_id}')
                 if isinstance(cr, tuple) and cr[0] == 'filled':
                     _kf = cr[1]
@@ -8168,6 +8178,12 @@ def _apex_mm_cycle_reset(bot_id, bot):
             oid = level.get('oid')
             if not oid:
                 continue
+            # Skip cancel on known-filled orders — saves wasted API calls
+            if level.get('fill_qty', 0) >= level.get('qty', 1) and level.get('fill_qty', 0) > 0:
+                bot.setdefault('_counted_order_fills', {})[oid] = max(
+                    level['fill_qty'], bot.get('_counted_order_fills', {}).get(oid, 0))
+                level['oid'] = None
+                continue
             _cr = _safe_cancel(oid, f'apex_mm_cycle_reset_{bot_id}')
             with ws_fill_lock:
                 if isinstance(_cr, tuple) and _cr[0] == 'filled':
@@ -8552,6 +8568,9 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
             for price_str, level in list(bot.get(side_key, {}).items()):
                 oid = level.get('oid')
                 if oid:
+                    if level.get('fill_qty', 0) >= level.get('qty', 1) and level.get('fill_qty', 0) > 0:
+                        level['oid'] = None
+                        continue
                     _safe_cancel(oid, f'apex_mm_refill_complete_{bot_id}')
                     level['oid'] = None
         bot['status'] = 'completed'
@@ -8595,6 +8614,9 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
                 oid = level.get('oid')
                 if not oid:
                     continue
+                if level.get('fill_qty', 0) >= level.get('qty', 1) and level.get('fill_qty', 0) > 0:
+                    level['oid'] = None
+                    continue
                 _cr = _safe_cancel(oid, f'apex_mm_refill_drift_{bot_id}')
                 with ws_fill_lock:
                     if isinstance(_cr, tuple) and _cr[0] == 'filled':
@@ -8631,6 +8653,9 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
             for price_str, level in list(bot.get(side_key, {}).items()):
                 oid = level.get('oid')
                 if oid:
+                    if level.get('fill_qty', 0) >= level.get('qty', 1) and level.get('fill_qty', 0) > 0:
+                        level['oid'] = None
+                        continue
                     _safe_cancel(oid, f'apex_mm_refill_obi_{bot_id}')
                     level['oid'] = None
         bot['status'] = 'mm_depth_pulled'
@@ -8793,6 +8818,9 @@ def _apex_mm_begin_exit_inner(bot_id, bot, reason):
         for price_str, level in list(bot.get(side_key, {}).items()):
             oid = level.get('oid')
             if not oid:
+                continue
+            if level.get('fill_qty', 0) >= level.get('qty', 1) and level.get('fill_qty', 0) > 0:
+                level['oid'] = None
                 continue
             _cr = _safe_cancel(oid, f'apex_mm_begin_exit_{bot_id}')
             if isinstance(_cr, tuple) and _cr[0] == 'filled':
@@ -14302,6 +14330,9 @@ def _handle_apex(bot_id, bot, actions):
             for price_str, level in list(bot.get(entry_side_key, {}).items()):
                 oid = level.get('oid')
                 if oid:
+                    if level.get('fill_qty', 0) >= level.get('qty', 1) and level.get('fill_qty', 0) > 0:
+                        level['oid'] = None
+                        continue
                     cr = _safe_cancel(oid, f'apex_mm_pull_entry_{bot_id}')
                     if isinstance(cr, tuple) and cr[0] == 'filled':
                         _kf = cr[1]
@@ -14403,6 +14434,9 @@ def _handle_apex(bot_id, bot, actions):
         for price_str, level in list(bot.get(hedge_side_key, {}).items()):
             oid = level.get('oid')
             if oid and oid != exit_oid:
+                if level.get('fill_qty', 0) >= level.get('qty', 1) and level.get('fill_qty', 0) > 0:
+                    level['oid'] = None
+                    continue
                 cr = _safe_cancel(oid, f'apex_mm_hedge_pull_{bot_id}')
                 if isinstance(cr, tuple) and cr[0] == 'filled':
                     # Late fill on hedge-side ladder rung — count it

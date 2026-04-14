@@ -6478,25 +6478,34 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             else if (exitPrice > origTarget) walkBadge = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">SNAPPED</span>`;
             else walkBadge = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">TARGET</span>`;
         }
-        // Zone bar — dual-scale: green half (target→100c) on left, red half (100c→SL) on right
-        // 100c always centered at 50%, circle starts at 0% when at target
+        // Zone bar — dual markers: cyan = order combined, coral = live bid combined
+        // 100c always centered at 50%. When markers overlap they merge into green glow.
         let zoneBarHtml = '';
         if (exitPrice > 0) {
             const greenRange = Math.max(1, 100 - origTargetCombined);
             const redRange = Math.max(1, stopLoss - 100);
-            let combPct;
-            if (combined <= 100) {
-                combPct = Math.max(0, Math.min(50, Math.round((combined - origTargetCombined) / greenRange * 50)));
-            } else {
-                combPct = Math.min(100, Math.round(50 + (combined - 100) / redRange * 50));
-            }
-            const markerCol = combined <= origTargetCombined + 1 ? '#00ff88' : combined < 100 ? '#ffaa00' : '#ff4444';
+            const _toPct = (val) => val <= 100
+                ? Math.max(0, Math.min(50, Math.round((val - origTargetCombined) / greenRange * 50)))
+                : Math.min(100, Math.round(50 + (val - 100) / redRange * 50));
+            const orderPct = _toPct(combined);
+            const livePct = liveCombined < 999 ? _toPct(liveCombined) : orderPct;
+            const gap = Math.abs(orderPct - livePct);
+            const merged = gap <= 2;
+            // Merged = green glow, separate = cyan (order) + coral (live bid)
+            const orderCol = merged ? '#00ff88' : '#00d4ff';
+            const liveCol = merged ? '#00ff88' : '#ff7043';
+            const glowStyle = merged ? 'box-shadow:0 0 8px #00ff8880,0 0 16px #00ff8840;' : '';
             zoneBarHtml = `<div style="margin-top:6px;">
                 <div style="position:relative;height:6px;background:#0a1018;border-radius:3px;overflow:hidden;">
                     <div style="position:absolute;left:0;width:50%;height:100%;background:linear-gradient(90deg,#00ff8818,#00ff8808);"></div>
                     <div style="position:absolute;left:50%;width:50%;height:100%;background:linear-gradient(90deg,#ff444410,#ff444420);"></div>
                     <div style="position:absolute;left:50%;width:2px;height:100%;background:#ffaa00;z-index:2;"></div>
-                    <div style="position:absolute;left:${combPct}%;width:8px;height:100%;background:${markerCol};border-radius:4px;z-index:3;transform:translateX(-4px);box-shadow:0 0 6px ${markerCol}80;"></div>
+                    ${merged ? `
+                        <div style="position:absolute;left:${orderPct}%;width:10px;height:100%;background:#00ff88;border-radius:5px;z-index:4;transform:translateX(-5px);${glowStyle}"></div>
+                    ` : `
+                        <div style="position:absolute;left:${orderPct}%;width:8px;height:100%;background:${orderCol};border-radius:4px;z-index:3;transform:translateX(-4px);box-shadow:0 0 6px ${orderCol}60;" title="Order: ${combined}c"></div>
+                        <div style="position:absolute;left:${livePct}%;width:8px;height:100%;background:${liveCol};border-radius:4px;z-index:4;transform:translateX(-4px);box-shadow:0 0 6px ${liveCol}60;" title="Bid: ${liveCombined < 999 ? liveCombined : '?'}c"></div>
+                    `}
                 </div>
                 <div style="position:relative;height:12px;margin-top:2px;font-size:7px;font-weight:700;">
                     <span style="position:absolute;left:0;color:#00ff88;">${origTargetCombined}c</span>

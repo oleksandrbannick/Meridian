@@ -6545,8 +6545,9 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         positionBarHtml = `<div style="margin-bottom:8px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
                 <div style="display:flex;align-items:center;gap:8px;">
-                    <span style="color:${combinedCol};font-weight:800;font-size:16px;">${combined}c</span>
+                    <span style="color:${combinedCol};font-weight:800;font-size:16px;">${exitPrice}c</span>
                     ${walkBadge}
+                    <span style="color:#445;font-size:9px;">= ${combined}c</span>
                 </div>
                 ${skewSec > 0 ? `<span style="color:#445;font-size:9px;">${timeStr}</span>` : ''}
             </div>

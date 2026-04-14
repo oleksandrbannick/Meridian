@@ -4424,7 +4424,7 @@ function updateAnchorPreview() {
                 `dog ${dd.toLocaleString()} @ ${dogBid}¢ · fav ${fd.toLocaleString()} (${fpl}/lvl) @ ${favBid}¢${concNote}` +
                 `</div>` : '') +
                 `<div style="margin-top:3px;display:inline-flex;align-items:center;border:1px solid #1e2740;border-radius:4px;overflow:hidden;font-size:9px;font-weight:700;"><span style="padding:2px 5px;color:#00ff88;background:#00ff8810;">rec ${_obCache.suggestedQty || Math.floor(maxQty * 0.6)}</span><span style="padding:2px 5px;color:#ff4444;background:#ff444410;border-left:1px solid #1e2740;">max ${maxQty}</span></div>` +
-                `<div style="color:#555;font-size:8px;margin-top:2px;">Auto-caps to max if fav L1 stays thin for 6s+</div>` +
+                `` +
                 `</div>`;
         }
         shaveInfo.innerHTML = `<span style="color:#ff66aa;">Anchor: ${anchorDepth}¢ below ${_anchorIsBrokenSpread ? 'ask' : 'bid'}</span> · <span style="color:#ff66aa;">Hedge: posts at bid instantly</span>${depthRec}`;

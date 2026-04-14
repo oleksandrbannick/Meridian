@@ -11504,37 +11504,7 @@ def _handle_phantom(bot_id, bot, actions):
             save_state()
             return
 
-        # ── Qty auto-cap: shrink to MAX if qty exceeds max safe for 3+ consecutive checks ──
-        # Debounced: fav depth fluctuates fast, don't cap on momentary dips.
-        # Only caps at MAX (generous 25-50% ceiling). Only reduce, never raise.
-        if dog_filled == 0:
-            _lob_qty = _local_orderbooks.get(ticker) or _local_orderbooks.get(bot.get('hedge_ticker', ''))
-            if _lob_qty and _lob_qty.last_update_ts > 0 and (now - _lob_qty.last_update_ts) < 30:
-                _fav_ba_qty = _lob_qty.get_book_analysis(fav_side)
-                _max_cap = _qty_max(_fav_ba_qty)
-                if _max_cap > 0 and qty > _max_cap:
-                    # Increment consecutive violation counter
-                    bot['_qty_over_count'] = bot.get('_qty_over_count', 0) + 1
-                    if bot['_qty_over_count'] >= 3:  # ~6s sustained at 2s cycle
-                        _old_qty = qty
-                        bot['quantity'] = _max_cap
-                        bot['_qty_over_count'] = 0
-                        if dog_order_id:
-                            try:
-                                api_write_limiter.wait()
-                                kalshi_client.amend_order(dog_order_id, count=_max_cap)
-                            except Exception as e:
-                                print(f'⚠ QTY CAP AMEND FAILED: {bot_id} {e}')
-                        print(f'📉 QTY CAP: {bot_id} {_old_qty}→{_max_cap}x (fav L1={_fav_ba_qty.get("top1Qty",0)}, sustained 3 checks)')
-                        bot_log('PHANTOM_QTY_CAP', bot_id, {
-                            'old_qty': _old_qty, 'new_qty': _max_cap,
-                            'fav_l1': _fav_ba_qty.get('top1Qty', 0),
-                        })
-                        qty = _max_cap
-                        save_state()
-                else:
-                    # Under max — reset counter
-                    bot['_qty_over_count'] = 0
+        # Qty auto-cap REMOVED — was silently shrinking orders and causing fill/hedge qty mismatches
 
         # Repost: adaptive gap-based (instant when bid drifts) + 3-min timer fallback
         DOG_REPOST_MINUTES = REPOST_AFTER_MINUTES  # 3 min fallback

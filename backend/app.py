@@ -11386,13 +11386,18 @@ def _handle_phantom(bot_id, bot, actions):
             _mkt_status = _mkt_data.get('status', '').lower()
             _settled = _mkt_status in ('settled', 'finalized')
             if not _settled and _mkt_status == 'closed':
-                _dog_s = bot.get('dog_side', 'no')
-                _db = bot.get(f'live_{_dog_s}_bid', 0)
-                _fb = bot.get(f'live_{"yes" if _dog_s == "no" else "no"}_bid', 0)
-                _sc = _get_game_score_for_ticker(ticker)
-                _sc_done = _sc and _sc.get('status') in ('post', 'final', 'finished')
-                if (_db <= 0 and _fb <= 0 and _sc_done) or (_db <= 0 and _fb >= 99):
-                    _settled = True
+                _is_tennis = ticker.startswith(('KXATP', 'KXWTA'))
+                if _is_tennis:
+                    _settled = False  # Tennis 'closed' = between sets, not settled
+                else:
+                    _dog_s = bot.get('dog_side', 'no')
+                    _db = bot.get(f'live_{_dog_s}_bid', 0)
+                    _fb = bot.get(f'live_{"yes" if _dog_s == "no" else "no"}_bid', 0)
+                    _sc = _get_game_score_for_ticker(ticker)
+                    _sc_done = _sc and _sc.get('status') in ('post', 'final', 'finished')
+                    _ws_ready = ws_manager and ws_manager.connected if ws_manager else False
+                    if ((_db <= 0 and _fb <= 0 and _sc_done) and _ws_ready) or (_db <= 0 and _fb >= 99):
+                        _settled = True
             if _settled:
                 bot['_market_settled_at'] = now
                 bot['_smart_stopped'] = True
@@ -11414,12 +11419,20 @@ def _handle_phantom(bot_id, bot, actions):
             # Check Kalshi status OR game score "finished" (tennis has no death zone)
             _is_settled = _mkt_st in ('settled', 'finalized')
             if not _is_settled and _mkt_st == 'closed':
-                _sc = _get_game_score_for_ticker(ticker)
-                _sc_done = _sc and _sc.get('status') in ('post', 'final', 'finished')
-                _yb = bot.get('live_yes_bid', 0)
-                _nb = bot.get('live_no_bid', 0)
-                if _sc_done or (_yb <= 0 and _nb <= 0):
-                    _is_settled = True
+                # Tennis: 'closed' just means between sets or interrupted — NOT settled
+                _is_tennis = ticker.startswith(('KXATP', 'KXWTA'))
+                if _is_tennis:
+                    _is_settled = False  # Never treat closed tennis as settled — wait for finalized/settled
+                else:
+                    _sc = _get_game_score_for_ticker(ticker)
+                    _sc_done = _sc and _sc.get('status') in ('post', 'final', 'finished')
+                    _yb = bot.get('live_yes_bid', 0)
+                    _nb = bot.get('live_no_bid', 0)
+                    # Don't trust zero bids if WS hasn't connected yet (post-restart)
+                    _ws_ready = ws_manager and ws_manager.connected if ws_manager else False
+                    _zero_bids = _yb <= 0 and _nb <= 0 and _ws_ready
+                    if _sc_done or _zero_bids:
+                        _is_settled = True
             if _is_settled:
                 _cancel_oid = bot.get('dog_order_id')
                 if _cancel_oid:

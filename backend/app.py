@@ -10092,6 +10092,7 @@ def create_anchor_bot():
             '_precalc_hedge_price': _precalc_phantom_hedge(actual_dog_price, target_width, dog_side, quantity),
             '_bid_at_post':        live_dog_bid if live_dog_bid > 0 else 0,
             '_last_repost_at':     0,
+            '_last_settle_check_global': time.time(),  # prevent immediate settlement check on first cycle
             '_all_dog_order_ids':  [dog_order_id] if dog_order_id else [],
             '_fav_depth':          _fav_depth_init,
             '_price_floor_pulled': _start_pulled,

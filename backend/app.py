@@ -6433,23 +6433,51 @@ def _calculate_ppi(ticker, fav_side, dog_side):
 _PHANTOM_DEATH_ZONE = {
     # period: which period triggers death zone
     # secs: seconds remaining in that period (None = entire period)
-    # For tennis: no clock, uses dog_bid threshold instead
+    # Tennis: score-based via _tennis_death_zone_check (serving for match / tiebreak)
     'KXNBA':    {'period': 4, 'secs': 180, 'name': 'NBA Q4 <3:00'},
     'KXNCAAMB': {'period': 2, 'secs': 180, 'name': 'NCAAB 2H <3:00'},
     'KXNCAAWB': {'period': 4, 'secs': 180, 'name': 'NCAAWB Q4 <3:00'},
     'KXNFL':    {'period': 4, 'secs': 120, 'name': 'NFL Q4 <2:00'},
     'KXNHL':    {'period': 3, 'secs': 180, 'name': 'NHL P3 <3:00'},
     'KXMLB':    {'period': 9, 'secs': None, 'name': 'MLB 9th inning'},
-    # Tennis: NO death zone — matches can swing back from 2c, price floor pull
-    # handles sub-2c, and settlement handles cleanup. No clock = no death zone.
+    # Tennis: score-based death zone — fires when either player is serving for match
+    'KXATP':    {'tennis': True, 'score_dz': True, 'name': 'ATP Tennis'},
+    'KXWTA':    {'tennis': True, 'score_dz': True, 'name': 'WTA Tennis'},
 }
+
+
+def _tennis_death_zone_check(match_data):
+    """Check if a tennis match is in death zone (serving for match / tiebreak).
+    Returns (True, reason) or (False, '')."""
+    scores = match_data.get('scores', [])
+    if not scores:
+        return False, ''
+    # Count completed sets
+    p1_sets = sum(1 for s in scores if _set_won(s, 'first'))
+    p2_sets = sum(1 for s in scores if _set_won(s, 'second'))
+    # BO3 vs BO5 (BO5 only at Grand Slams — infer from set count)
+    sets_to_win = 3 if (p1_sets >= 3 or p2_sets >= 3 or len(scores) > 3) else 2
+    # Current set = last entry in scores array (in-progress)
+    cur = scores[-1]
+    g1 = int(float(cur.get('score_first', 0)))
+    g2 = int(float(cur.get('score_second', 0)))
+    # P1 serving for match: needs 1 more set AND at 5-x (x<=4)
+    if p1_sets == sets_to_win - 1 and g1 >= 5 and g1 > g2 and g2 <= 4:
+        return True, f'serving for match (sets {p1_sets}-{p2_sets}, games {g1}-{g2})'
+    # P2 serving for match
+    if p2_sets == sets_to_win - 1 and g2 >= 5 and g2 > g1 and g1 <= 4:
+        return True, f'serving for match (sets {p2_sets}-{p1_sets}, games {g2}-{g1})'
+    # Tiebreak in deciding set (either player 1 set from winning)
+    if (p1_sets == sets_to_win - 1 or p2_sets == sets_to_win - 1) and g1 == 6 and g2 == 6:
+        return True, f'tiebreak in deciding set (sets {p1_sets}-{p2_sets})'
+    return False, ''
 
 
 def _is_phantom_death_zone(ticker, bot=None):
     """Check if the game is in the death zone for Phantom.
     Returns (True, reason_str) or (False, '').
     Clock sports: uses ESPN period + time remaining.
-    Tennis: uses dog bid price (no reliable clock)."""
+    Tennis: uses API Tennis scores (serving for match / tiebreak)."""
     series = ticker.split('-')[0].upper() if ticker else ''
     rule = None
     rule_key = ''
@@ -6460,14 +6488,27 @@ def _is_phantom_death_zone(ticker, bot=None):
     if not rule:
         return False, ''
 
-    # Tennis: price-based death zone
+    # Tennis: score-based death zone (serving for match / tiebreak)
     if rule.get('tennis'):
-        if bot:
-            dog_side = bot.get('dog_side', 'yes')
-            dog_bid = bot.get(f'live_{dog_side}_bid', 0)
-            floor = rule.get('dog_bid_floor', 5)
-            if dog_bid > 0 and dog_bid <= floor:
-                return True, f'{rule["name"]}: dog bid {dog_bid}¢ ≤ {floor}¢'
+        if not _api_tennis_cache.get('data'):
+            return False, ''
+        parts = ticker.split('-')
+        player_code = parts[-1].upper() if len(parts) >= 3 else ''
+        if not player_code:
+            return False, ''
+        for _tm in _api_tennis_cache['data']:
+            _p1 = _tm.get('event_first_player', '')
+            _p2 = _tm.get('event_second_player', '')
+            if player_code not in (_tennis_player_code(_p1), _tennis_player_code(_p2)):
+                continue
+            # Only check live matches (including break time / interrupted)
+            _status_str = (_tm.get('event_status') or '').lower()
+            if _tm.get('event_live') != '1' and _status_str not in ('interrupted', 'break time'):
+                continue
+            _dz, _dz_reason = _tennis_death_zone_check(_tm)
+            if _dz:
+                return True, f'{rule["name"]}: {_dz_reason}'
+            return False, ''
         return False, ''
 
     # Clock sports: check ESPN game state

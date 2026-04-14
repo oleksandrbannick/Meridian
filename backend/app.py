@@ -2477,7 +2477,7 @@ applied_migrations: list = []  # tracks which migrations have run
 # Maker fee = ceil(0.0175 * C * P * (1-P) * 100) cents per side
 # Taker fee = ceil(0.07   * C * P * (1-P) * 100) cents per side
 # Arb bots use resting limit orders → maker fee on both legs.
-KALSHI_MAKER_RATE = 0.0175
+KALSHI_MAKER_RATE = 0.0
 KALSHI_TAKER_RATE = 0.07
 
 def _kalshi_side_fee_cents(price_cents: int, qty: int) -> int:

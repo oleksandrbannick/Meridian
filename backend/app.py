@@ -7597,6 +7597,14 @@ def _apex_mm_pull_all(bot_id, bot, reason):
                         'kalshi_yes': _kalshi_yes, 'kalshi_no': _kalshi_no,
                         'kalshi_net': _kalshi_net,
                     }, level='WARN')
+                    # If clamped to flat, reset stale ladder fill counts
+                    if bot.get('net_yes', 0) == 0 and bot.get('net_no', 0) == 0:
+                        for _side_key in ('yes_orders', 'no_orders'):
+                            for _pk, _lvl in list(bot.get(_side_key, {}).items()):
+                                _lvl['fill_qty'] = 0
+                                _lvl['oid'] = None
+                        bot['_counted_order_fills'] = {}
+                        print(f'🛡️ PULL CLAMP FLAT: {bot_id} — reset ladder fill counts')
         except Exception as _pe:
             print(f'⚠ PULL position verify failed: {bot_id} {_pe}')
 
@@ -14845,12 +14853,22 @@ def _handle_apex(bot_id, bot, actions):
                             threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _held), daemon=True).start()
                         elif _new_yes == 0 and _new_no == 0:
                             # Kalshi says flat but we thought we were holding — cancel exit
+                            # and reset ladder fill counts so bot can repost
                             for _cs in ('yes', 'no'):
                                 _eid = bot.get(f'_{_cs}_exit_oid')
                                 if _eid:
                                     _safe_cancel(_eid, f'reconcile_flat_{bot_id}')
                                     bot[f'_{_cs}_exit_oid'] = None
-                            print(f'🛡️ RECONCILE FLAT: {bot_id} — Kalshi says flat, cancelled stale exits')
+                            # Reset stale ladder fill data — without this, bot sees
+                            # fill_qty >= qty on every rung and refuses to repost
+                            for _side_key in ('yes_orders', 'no_orders'):
+                                for _pk, _lvl in list(bot.get(_side_key, {}).items()):
+                                    _lvl['fill_qty'] = 0
+                                    _lvl['oid'] = None
+                            bot['_counted_order_fills'] = {}
+                            bot['_velocity_gated'] = False
+                            bot['_velocity_fills'] = []
+                            print(f'🛡️ RECONCILE FLAT: {bot_id} — Kalshi says flat, reset ladder + cancelled stale exits')
         except Exception as _re:
             print(f'⚠ RECONCILE FAIL: {bot_id} {_re}')
         # Re-read net values after potential clamp

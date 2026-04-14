@@ -8680,8 +8680,8 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
                         continue
                     _safe_cancel(oid, f'apex_mm_refill_complete_{bot_id}')
                     level['oid'] = None
-        bot['status'] = 'completed'
-        bot['completed_at'] = time.time()
+        bot['status'] = 'awaiting_settlement'
+        bot['awaiting_since'] = time.time()
         bot['_smart_stop_reason'] = _smart_reason
         save_state()
         bot_log('APEX_MM_COMPLETE', bot_id, {
@@ -8690,7 +8690,7 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
             'round_trips': bot.get('round_trips_completed', 0),
             'cycle_pnl': _cycle_pnl,
         })
-        print(f'✅ APEX MM COMPLETE: {bot_id} smart_stop={_smart_reason} pnl={bot.get("realized_pnl_cents", 0)}c')
+        print(f'⏳ APEX MM AWAITING SETTLEMENT: {bot_id} smart_stop={_smart_reason} pnl={bot.get("realized_pnl_cents", 0)}c')
         return
 
     # ── Check for pending edits ──
@@ -9052,14 +9052,14 @@ def _apex_mm_begin_exit_inner(bot_id, bot, reason):
                 bot['_exit_sell_oids'] = {}
                 _apex_mm_fresh_ladder(bot_id, bot)
                 return
-            bot['status'] = 'completed'
-            bot['completed_at'] = time.time()
+            bot['status'] = 'awaiting_settlement'
+            bot['awaiting_since'] = time.time()
             bot['_smart_stop_reason'] = reason
             bot_log('APEX_MM_COMPLETE', bot_id, {
                 'reason': reason, 'realized_pnl': bot.get('realized_pnl_cents', 0),
                 'round_trips': bot.get('round_trips_completed', 0),
             })
-            print(f'✅ APEX MM COMPLETE: {bot_id} — {reason}, pnl={bot.get("realized_pnl_cents", 0)}c')
+            print(f'⏳ APEX MM AWAITING SETTLEMENT: {bot_id} — {reason}, pnl={bot.get("realized_pnl_cents", 0)}c')
             return
     if net_yes > 0 or net_no > 0:
         # Only one side has leftover — sell it
@@ -9387,15 +9387,15 @@ def _apex_mm_exit_tick(bot_id, bot):
             bot['_exit_sell_oids'] = {}
             _apex_mm_fresh_ladder(bot_id, bot)
         else:
-            bot['status'] = 'completed'
-            bot['completed_at'] = now
+            bot['status'] = 'awaiting_settlement'
+            bot['awaiting_since'] = now
             bot_log('APEX_MM_COMPLETE', bot_id, {
                 'reason': bot.get('_exit_reason', 'exit'),
                 'realized_pnl': bot.get('realized_pnl_cents', 0),
                 'round_trips': bot.get('round_trips_completed', 0),
                 'consecutive_losses': bot.get('consecutive_losses', 0),
             })
-            print(f'✅ APEX MM DONE: {bot_id} all exits filled, pnl={bot.get("realized_pnl_cents", 0)}c')
+            print(f'⏳ APEX MM AWAITING SETTLEMENT: {bot_id} all exits filled, pnl={bot.get("realized_pnl_cents", 0)}c')
     elif yes_done and no_done:
         # Exit sells done/gone but still holding inventory — stuck state
         # Caused by: late fills during exit, cancel-race fills not processed, etc.
@@ -14902,12 +14902,12 @@ def _run_monitor():
         # Catches Scout, Meridian, Apex, and any bot that completed before settlement flag was added
         _settle_check_now = time.time()
         for _sc_id, _sc_bot in list(active_bots.items()):
-            if _sc_bot.get('status') not in ('completed', 'stopped'):
+            if _sc_bot.get('status') not in ('completed', 'stopped', 'awaiting_settlement'):
                 continue
             if _sc_bot.get('_market_settled_at'):
                 continue
-            if _sc_bot.get('_smart_stop_reason') == 'manual':
-                continue  # manually stopped — don't auto-mark as settled
+            if _sc_bot.get('_smart_stop_reason') == 'manual' and _sc_bot.get('status') != 'awaiting_settlement':
+                continue  # manually stopped — don't auto-mark as settled (except awaiting_settlement which always waits)
             if _settle_check_now - _sc_bot.get('_last_settle_check_global', 0) < 60:
                 continue
             _sc_bot['_last_settle_check_global'] = _settle_check_now
@@ -14924,6 +14924,10 @@ def _run_monitor():
                 ):
                     _sc_bot['_market_settled_at'] = _settle_check_now
                     _sc_bot['_smart_stop_reason'] = 'final'
+                    # Apex MM awaiting_settlement → completed on market settle
+                    if _sc_bot.get('status') == 'awaiting_settlement' and _sc_bot.get('bot_category') == 'ladder_arb':
+                        _sc_bot['status'] = 'completed'
+                        _sc_bot['completed_at'] = _settle_check_now
                     print(f'🏁 SETTLED: {_sc_id} ({_sc_bot.get("type","?")}) market {_sc_mkt_status} → 5 min purge')
                     save_state()
             except Exception:
@@ -14940,10 +14944,6 @@ def _run_monitor():
                           and b.get('_smart_stop_reason') != 'manual'
                           and b.get('_market_settled_at', 0) > 0
                           and b['_market_settled_at'] < _purge_cutoff)
-                      # Apex MM: no positions held after completion, purge 5 min after completed_at
-                      or (b.get('status') == 'completed'
-                          and b.get('bot_category') == 'ladder_arb'
-                          and (b.get('completed_at') or 0) < _purge_cutoff)
                       ]
         if _purge_ids:
             for _pid in _purge_ids:
@@ -18776,10 +18776,10 @@ def stop_bot(bot_id):
                 bot_log('STOP_MM_EXIT', bot_id, {'net_yes': net_yes, 'net_no': net_no})
                 print(f'⏹ STOP MM → EXITING: {bot_id} holding YES={net_yes} NO={net_no}')
             else:
-                bot['status'] = 'completed'
-                bot['completed_at'] = time.time()
+                bot['status'] = 'awaiting_settlement'
+                bot['awaiting_since'] = time.time()
                 bot_log('STOP_MM_IMMEDIATE', bot_id, {'prev_status': status})
-                print(f'⏹ STOP MM → COMPLETED: {bot_id} flat')
+                print(f'⏹ STOP MM → AWAITING SETTLEMENT: {bot_id} flat')
             save_state()
             return jsonify({'success': True, 'mode': 'immediate', 'message': 'Apex MM stopped'})
 
@@ -19098,11 +19098,11 @@ def stop_smart(bot_id):
             bot_log('SMART_STOP_MM_EXIT', bot_id, {'net_yes': net_yes, 'net_no': net_no})
             print(f'⏹ SMART STOP MM → EXITING: {bot_id} holding YES={net_yes} NO={net_no}')
         else:
-            # Flat → complete immediately
-            bot['status'] = 'completed'
-            bot['completed_at'] = time.time()
+            # Flat → await settlement
+            bot['status'] = 'awaiting_settlement'
+            bot['awaiting_since'] = time.time()
             bot_log('SMART_STOP_MM_IMMEDIATE', bot_id, {'prev_status': status})
-            print(f'⏹ SMART STOP MM → COMPLETED: {bot_id} flat')
+            print(f'⏹ SMART STOP MM → AWAITING SETTLEMENT: {bot_id} flat')
         save_state()
         return jsonify({'success': True, 'mode': 'immediate', 'message': 'Apex MM stopped'})
 
@@ -19435,7 +19435,9 @@ def cancel_bot(bot_id):
                         except Exception as _we:
                             warnings.append(f'FAILED to post maker sell: {_we}')
                     else:
-                        sold_positions.append(f'{watch_side.upper()} — already sold (no Kalshi position)')
+                        # Position already sold (SL/TP already fired) — mark as cleared
+                        # so trade recording block below skips it (trade already recorded)
+                        already_cleared_sides.add(watch_side)
                         print(f'✅ SCOUT CANCEL: {bot_id} no position on Kalshi — already sold')
                 elif bot.get('order_id'):
                     try:

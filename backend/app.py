@@ -3773,7 +3773,11 @@ def _ws_phantom_retreat(ticker, yes_bid, no_bid):
                             _fills = _parse_fill_count(_od)
                         except Exception as _e:
                             print(f'⚠ WS RETREAT FILL CHECK FAILED: {bot_id_ref}: {_e}')
-                    if _fills > 0 and not bot_ref.get('_hedge_fired'):
+                    # Guard: if bot already re-anchored (new dog_order_id), these fills are
+                    # from a COMPLETED cycle and were already hedged. Skip to prevent double-hedge.
+                    _current_dog_oid = bot_ref.get('dog_order_id')
+                    _stale = _current_dog_oid is not None and _current_dog_oid != oid
+                    if _fills > 0 and not bot_ref.get('_hedge_fired') and not _stale:
                         print(f'🚨 WS RETREAT FILL DETECTED: {bot_id_ref} order {oid[:12]} had {_fills} fills!')
                         bot_log('WS_RETREAT_FILL_ON_404', bot_id_ref, {
                             'order_id': oid, 'fills': _fills, 'dog_price': bot_ref.get('dog_price'),
@@ -3791,9 +3795,22 @@ def _ws_phantom_retreat(ticker, yes_bid, no_bid):
                         _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id_ref,)))
                         print(f'⚡ WS RETREAT → INSTANT HEDGE: {bot_id_ref} {_fills}x fills — hedge fired')
                         save_state()
+                    elif _fills > 0 and _stale:
+                        print(f'🛡️ WS RETREAT STALE BLOCKED: {bot_id_ref} {_fills} fills on old order {oid[:12]} — bot already re-anchored, skipping')
+                        bot_log('WS_RETREAT_STALE_BLOCKED', bot_id_ref, {
+                            'order_id': oid[:12], 'fills': _fills, 'current_dog_oid': (_current_dog_oid or '')[:12],
+                        }, level='WARN')
                 threading.Thread(target=_retreat_cancel, args=(dog_order_id, bot_id), daemon=True).start()
                 bot['dog_order_id'] = None
                 bot['_last_retreat_at'] = time.time()
+                # Clear fill state to prevent stale fills from triggering ghost hedge
+                bot['dog_fill_qty'] = 0
+                bot['fav_fill_qty'] = 0
+                bot['yes_fill_qty'] = 0
+                bot['no_fill_qty'] = 0
+                bot['dog_filled_at'] = None
+                bot['_hedge_fired'] = False
+                bot['_trade_recorded'] = False
                 bot['status'] = 'waiting_repeat'
                 bot['waiting_repeat_since'] = time.time() + 1
                 print(f'⚡ WS RETREAT: {bot_id} bid={dog_bid}¢ gap={gap}¢ from dog@{dog_price}¢ — pulled instantly')
@@ -8670,16 +8687,39 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
     _cycle_pnl = bot.get('realized_pnl_cents', 0) - bot.get('_cycle_start_pnl', 0)
     _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, _cycle_pnl)
     if not _smart_repeat:
-        # Cancel remaining anchor orders and complete
+        # Cancel remaining anchor orders — check for fill-race
+        _complete_late_fills = 0
         for side_key in ('yes_orders', 'no_orders'):
+            _side = 'yes' if side_key == 'yes_orders' else 'no'
             for price_str, level in list(bot.get(side_key, {}).items()):
                 oid = level.get('oid')
                 if oid:
                     if level.get('fill_qty', 0) >= level.get('qty', 1) and level.get('fill_qty', 0) > 0:
                         level['oid'] = None
                         continue
-                    _safe_cancel(oid, f'apex_mm_refill_complete_{bot_id}')
+                    _comp_cr = _safe_cancel(oid, f'apex_mm_refill_complete_{bot_id}')
+                    if isinstance(_comp_cr, tuple) and _comp_cr[0] == 'filled':
+                        _kf = _comp_cr[1]
+                        _ws = max(level.get('fill_qty', 0), bot.get('_counted_order_fills', {}).get(oid, 0))
+                        _nf = max(0, _kf - _ws)
+                        if _nf > 0:
+                            _pr = int(price_str)
+                            _complete_late_fills += _nf
+                            bot[f'net_{_side}'] = bot.get(f'net_{_side}', 0) + _nf
+                            bot[f'total_{_side}_cost'] = bot.get(f'total_{_side}_cost', 0) + (_pr * _nf)
+                            _n = bot[f'net_{_side}']
+                            bot[f'avg_{_side}_cost'] = round(bot[f'total_{_side}_cost'] / _n) if _n > 0 else 0
+                            bot.setdefault('_counted_order_fills', {})[oid] = _kf
+                            print(f'🚨 COMPLETE LATE FILL: {bot_id} {_side.upper()} +{_nf}x @{_pr}c')
                     level['oid'] = None
+        if _complete_late_fills > 0:
+            # Late fills during completion — can't complete, need to exit inventory first
+            print(f'🚨 COMPLETE ABORTED: {bot_id} {_complete_late_fills} late fills — posting exit instead')
+            bot_log('APEX_MM_COMPLETE_LATE_FILLS', bot_id, {'late_fills': _complete_late_fills}, level='WARN')
+            _fill_side = 'yes' if bot.get('net_yes', 0) > bot.get('net_no', 0) else 'no'
+            threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _fill_side), daemon=True).start()
+            save_state()
+            return
         bot['status'] = 'awaiting_settlement'
         bot['awaiting_since'] = time.time()
         bot['_smart_stop_reason'] = _smart_reason
@@ -8755,16 +8795,41 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
     # ── OBI gate ──
     should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH, obi_threshold=APEX_MM_PULL_OBI)
     if should_pull:
-        # Cancel all remaining orders (safe — we're flat) and enter pulled state
+        # Cancel all remaining orders — check for fill-race on each cancel
+        _obi_late_fills = 0
         for side_key in ('yes_orders', 'no_orders'):
+            _side = 'yes' if side_key == 'yes_orders' else 'no'
             for price_str, level in list(bot.get(side_key, {}).items()):
                 oid = level.get('oid')
                 if oid:
                     if level.get('fill_qty', 0) >= level.get('qty', 1) and level.get('fill_qty', 0) > 0:
                         level['oid'] = None
                         continue
-                    _safe_cancel(oid, f'apex_mm_refill_obi_{bot_id}')
+                    _obi_cr = _safe_cancel(oid, f'apex_mm_refill_obi_{bot_id}')
+                    if isinstance(_obi_cr, tuple) and _obi_cr[0] == 'filled':
+                        _kf = _obi_cr[1]
+                        _ws = max(level.get('fill_qty', 0), bot.get('_counted_order_fills', {}).get(oid, 0))
+                        _nf = max(0, _kf - _ws)
+                        if _nf > 0:
+                            _pr = int(price_str)
+                            _obi_late_fills += _nf
+                            bot[f'net_{_side}'] = bot.get(f'net_{_side}', 0) + _nf
+                            bot[f'total_{_side}_cost'] = bot.get(f'total_{_side}_cost', 0) + (_pr * _nf)
+                            _n = bot[f'net_{_side}']
+                            bot[f'avg_{_side}_cost'] = round(bot[f'total_{_side}_cost'] / _n) if _n > 0 else 0
+                            bot.setdefault('_counted_order_fills', {})[oid] = _kf
+                            print(f'🚨 REFILL OBI LATE FILL: {bot_id} {_side.upper()} +{_nf}x @{_pr}c')
+                            bot_log('APEX_MM_REFILL_OBI_LATE_FILL', bot_id, {
+                                'side': _side, 'fills': _kf, 'new_fills': _nf, 'price': _pr,
+                            }, level='WARN')
                     level['oid'] = None
+        if _obi_late_fills > 0:
+            # Late fills found — NOT flat. Post exit order instead of entering pulled state.
+            print(f'🚨 REFILL OBI ABORTED PULL: {bot_id} {_obi_late_fills} late fills — posting exit')
+            _fill_side = 'yes' if bot.get('net_yes', 0) > bot.get('net_no', 0) else 'no'
+            threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _fill_side), daemon=True).start()
+            save_state()
+            return
         bot['status'] = 'mm_depth_pulled'
         bot['_pull_count'] = bot.get('_pull_count', 0) + 1
         bot['_last_pull_at'] = time.time()
@@ -8838,8 +8903,24 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
             if _refill_exit_oid:
                 bot[f'_{_refill_exit_side}_exit_oid'] = None
                 try:
-                    _safe_cancel(_refill_exit_oid, f'cycle_refill_cleanup_{bot_id}')
-                    print(f'🛡️ CYCLE REFILL: {bot_id} cancelled stale {_refill_exit_side} exit {_refill_exit_oid[:12]}')
+                    _cleanup_cr = _safe_cancel(_refill_exit_oid, f'cycle_refill_cleanup_{bot_id}')
+                    if isinstance(_cleanup_cr, tuple) and _cleanup_cr[0] == 'filled':
+                        # Exit order filled during cancel — this REDUCES inventory (it was a sell)
+                        _cleanup_fills = _cleanup_cr[1]
+                        _held_side = 'yes' if _refill_exit_side == 'no' else 'no'  # exit is opposite of held
+                        _old_net = bot.get(f'net_{_held_side}', 0)
+                        _new_net = max(0, _old_net - _cleanup_fills)
+                        bot[f'net_{_held_side}'] = _new_net
+                        if _new_net == 0:
+                            bot[f'avg_{_held_side}_cost'] = 0
+                            bot[f'total_{_held_side}_cost'] = 0
+                        print(f'🚨 CYCLE REFILL EXIT FILL: {bot_id} {_refill_exit_side} exit had {_cleanup_fills} fills (net_{_held_side}: {_old_net}→{_new_net})')
+                        bot_log('APEX_MM_REFILL_EXIT_FILL', bot_id, {
+                            'exit_side': _refill_exit_side, 'fills': _cleanup_fills,
+                            'held_side': _held_side, 'old_net': _old_net, 'new_net': _new_net,
+                        }, level='WARN')
+                    else:
+                        print(f'🛡️ CYCLE REFILL: {bot_id} cancelled stale {_refill_exit_side} exit {_refill_exit_oid[:12]}')
                 except Exception:
                     pass
         bot['_yes_side_paused'] = False
@@ -11536,6 +11617,14 @@ def _handle_phantom(bot_id, bot, actions):
                 })
                 bot['_price_floor_pulled'] = False
                 bot['_drift_pull_logged'] = False
+                # Clear fill state — prevent stale fills from triggering ghost hedge
+                bot['dog_fill_qty'] = 0
+                bot['fav_fill_qty'] = 0
+                bot['yes_fill_qty'] = 0
+                bot['no_fill_qty'] = 0
+                bot['dog_filled_at'] = None
+                bot['_hedge_fired'] = False
+                bot['_trade_recorded'] = False
                 bot['status'] = 'waiting_repeat'
                 bot['waiting_repeat_since'] = now
                 bot['_bid_at_post'] = _pf_ws_bid
@@ -11571,6 +11660,14 @@ def _handle_phantom(bot_id, bot, actions):
                     pass
             if not _race_filled:
                 bot_log('PHANTOM_NO_DOG_ORDER_RECOVERY', bot_id, {'status': status, 'dog_price': bot.get('dog_price')}, level='WARN')
+                # Clear fill state — prevent stale fills from triggering ghost hedge
+                bot['dog_fill_qty'] = 0
+                bot['fav_fill_qty'] = 0
+                bot['yes_fill_qty'] = 0
+                bot['no_fill_qty'] = 0
+                bot['dog_filled_at'] = None
+                bot['_hedge_fired'] = False
+                bot['_trade_recorded'] = False
                 bot['status'] = 'waiting_repeat'
                 bot['waiting_repeat_since'] = now
                 print(f'🔄 PHANTOM RECOVERY: {bot_id} no dog order ID, no old fills — re-entering waiting_repeat')
@@ -14960,7 +15057,7 @@ def _run_monitor():
         with _pending_ws_actions_lock:
             actions = list(_pending_ws_actions)
             _pending_ws_actions.clear()
-        active_statuses = ('fav_posted', 'both_posted', 'pending_fills', 'yes_filled', 'no_filled', 'amending_no', 'amending_yes', 'watching', 'sl_selling', 'waiting_repeat', 'waiting', 'one_filled', 'both_filled', 'one_leg_timeout', 'dog_anchor_posted', 'dog_filled', 'fav_hedge_posted', 'market_making_active', 'mm_depth_pulled', 'mm_exiting', 'awaiting_settlement', 'depth_pulled')
+        active_statuses = ('fav_posted', 'both_posted', 'pending_fills', 'yes_filled', 'no_filled', 'amending_no', 'amending_yes', 'watching', 'sl_selling', 'waiting_repeat', 'waiting', 'one_filled', 'both_filled', 'one_leg_timeout', 'dog_anchor_posted', 'dog_filled', 'fav_hedge_posted', 'market_making_active', 'mm_depth_pulled', 'mm_exiting', 'awaiting_settlement', 'depth_pulled', 'paused_by_scout')
 
         # ── Auto-phase: switch pregame → live when game is in progress ──
         for bot_id, bot in list(active_bots.items()):
@@ -15912,6 +16009,8 @@ def _run_monitor():
                                 actions.append({'bot_id': bot_id, 'action': 'stop_loss_watch', 'loss_cents': loss})
                                 bot_log('WATCH_SL_FILLED', bot_id, {'entry': entry, 'exit': actual_sell, 'loss_cents': loss, 'filled': _sl_filled})
                                 print(f'🛑 SCOUT SL COMPLETE: {bot_id} — sell filled {_sl_filled}x @{actual_sell}¢, loss {loss}¢')
+                                # Resume bots that were paused by this scout
+                                _resume_bots_paused_by_scout(bot_id, ticker)
                                 save_state()
                             elif _sl_filled > 0 and _sl_filled < qty:
                                 # Partial fill — record partial, keep selling remainder
@@ -16130,6 +16229,8 @@ def _run_monitor():
                             actions.append({'bot_id': bot_id, 'action': 'take_profit_watch',
                                            'profit_cents': profit})
                             bot_log('WATCH_TP_FIRED', bot_id, {'entry': entry, 'exit': actual_sell, 'profit_cents': profit, 'tp_trigger': entry + tp, 'live_bid': cur_bid})
+                            # Resume bots that were paused by this scout
+                            _resume_bots_paused_by_scout(bot_id, ticker)
                         else:
                             bot_log('WATCH_TP_FAILED', bot_id, {'sell_info': str(sell_info)}, level='ERROR')
                             print(f'⚠ Watch TP sell FAILED for {bot_id} — will retry next cycle')
@@ -19950,6 +20051,10 @@ def cancel_bot(bot_id):
                     session_pnl['completed_bots'] += 1
                 bot_log('MANUAL_DELETE', bot_id, {'sold': sold_positions, 'cancelled': cancelled, 'sell_prices': sell_prices})
 
+        # Resume bots paused by this scout (if it's a watch bot)
+        if bot_type == 'watch':
+            _resume_bots_paused_by_scout(bot_id, ticker)
+
         # Check if bot still has positions after cancel/sell
         _has_remaining = False
         if bot.get('bot_category') == 'ladder_arb':
@@ -21761,28 +21866,60 @@ def get_active_positions():
 
 @app.route('/api/orphaned-positions', methods=['GET'])
 def get_orphaned_positions():
-    """Check for orphaned positions LIVE (not cached startup data)."""
+    """Check for orphaned positions LIVE — detects PARTIAL orphans per ticker.
+    Compares Kalshi position qty vs sum of bot-tracked inventory."""
     try:
-        managed_tickers = set()
-        for b in active_bots.values():
+        # Build per-ticker managed qty from active bots
+        _managed_qty = {}  # (ticker, side) → total qty managed by bots
+        for _bid, b in active_bots.items():
             _st = b.get('status', '')
-            _ht = b.get('hedge_ticker')
-            _is_cross = _ht and _ht != b.get('ticker')
-            # Cross-market bots hold positions on BOTH tickers until settlement.
-            # Always include both regardless of bot status.
-            if _is_cross:
-                managed_tickers.add(_ht)
-                if b.get('ticker'): managed_tickers.add(b['ticker'])
-            # Awaiting settlement bots are still managing positions
-            if _st == 'awaiting_settlement':
-                if b.get('ticker'): managed_tickers.add(b['ticker'])
-                if _ht: managed_tickers.add(_ht)
-                continue
             if _st in ('completed', 'stopped', 'cancelled'):
                 continue
-            if b.get('ticker'): managed_tickers.add(b['ticker'])
-            if b.get('ticker_a'): managed_tickers.add(b['ticker_a'])
-            if b.get('ticker_b'): managed_tickers.add(b['ticker_b'])
+            cat = b.get('bot_category', '')
+            btype = b.get('type', '')
+            t = b.get('ticker', '')
+            if not t:
+                continue
+            if cat == 'anchor_dog':
+                dog_side = b.get('dog_side', '')
+                fav_side = b.get('fav_side', '')
+                dog_qty = max(int(b.get('dog_fill_qty', 0)), int(b.get('quantity', 0)))
+                fav_qty = int(b.get('fav_fill_qty', 0))
+                _ht = b.get('hedge_ticker', t) or t
+                if dog_side and dog_qty > 0:
+                    k = (t, dog_side)
+                    _managed_qty[k] = _managed_qty.get(k, 0) + dog_qty
+                if fav_side and fav_qty > 0:
+                    fk = (_ht, fav_side)
+                    _managed_qty[fk] = _managed_qty.get(fk, 0) + fav_qty
+            elif cat == 'ladder_arb' or btype == 'apex_mm':
+                net_yes = int(b.get('net_yes', 0))
+                net_no = int(b.get('net_no', 0))
+                inv_limit = int(b.get('inventory_limit', b.get('qty_per_level', 2)) * b.get('levels', 3))
+                # MM manages up to its inventory limit even when flat (has orders out)
+                if net_yes > 0:
+                    k = (t, 'yes')
+                    _managed_qty[k] = _managed_qty.get(k, 0) + net_yes
+                elif net_no > 0:
+                    k = (t, 'no')
+                    _managed_qty[k] = _managed_qty.get(k, 0) + net_no
+                elif _st not in ('mm_exiting',):
+                    # Flat but active — mark ticker as managed (orders are out)
+                    _managed_qty[(t, 'yes')] = _managed_qty.get((t, 'yes'), 0)
+                    _managed_qty[(t, 'no')] = _managed_qty.get((t, 'no'), 0)
+            elif btype == 'watch':
+                ws = b.get('side', 'yes')
+                wq = int(b.get('fill_qty', b.get('quantity', 0)))
+                if wq > 0:
+                    k = (t, ws)
+                    _managed_qty[k] = _managed_qty.get(k, 0) + wq
+            elif btype == 'middle':
+                for _leg, _tk_key in (('a', 'ticker_a'), ('b', 'ticker_b')):
+                    _lt = b.get(_tk_key, '')
+                    if _lt and b.get(f'leg_{_leg}_filled'):
+                        k = (_lt, 'no')
+                        _managed_qty[k] = _managed_qty.get(k, 0) + int(b.get('qty', 1))
+
         api_read_limiter.wait()
         pos_resp = kalshi_client.get_positions()
         positions = pos_resp.get('market_positions', pos_resp.get('positions', []))
@@ -21792,17 +21929,61 @@ def get_orphaned_positions():
             pos_fp = float(pos.get('position_fp') or 0)
             if not ticker or pos_fp == 0:
                 continue
-            if ticker not in managed_tickers:
-                side = 'yes' if pos_fp > 0 else 'no'
-                qty = int(abs(pos_fp))
+            side = 'yes' if pos_fp > 0 else 'no'
+            total_qty = int(abs(pos_fp))
+            managed = _managed_qty.get((ticker, side), 0)
+            orphan_qty = max(0, total_qty - managed)
+            if orphan_qty > 0:
                 exposure = float(pos.get('market_exposure_dollars') or 0)
-                orphans.append({'ticker': ticker, 'side': side, 'orphaned_qty': qty, 'total_qty': qty, 'exposure': exposure})
+                orphans.append({
+                    'ticker': ticker, 'side': side,
+                    'orphaned_qty': orphan_qty, 'total_qty': total_qty,
+                    'managed_qty': managed, 'exposure': exposure,
+                })
         return jsonify({'orphaned': orphans, 'count': len(orphans)})
     except Exception as e:
         return jsonify({'orphaned': [], 'count': 0, 'error': str(e)})
 
 
 @app.route('/api/bot/watch', methods=['POST'])
+def _resume_bots_paused_by_scout(scout_bot_id, ticker):
+    """Resume bots that were paused when this scout was assigned.
+    Called when scout exits (SL, TP, or manual cancel)."""
+    _resumed = []
+    for _bid, _b in active_bots.items():
+        if _b.get('status') != 'paused_by_scout':
+            continue
+        _b_ticker = _b.get('ticker', '')
+        _b_hedge = _b.get('hedge_ticker', _b_ticker)
+        if _b_ticker != ticker and _b_hedge != ticker:
+            continue
+        # Resume: set to waiting_repeat so bot reposts fresh
+        _old_status = _b.get('_pre_scout_status', 'waiting_repeat')
+        _b['status'] = 'waiting_repeat'
+        _b['waiting_repeat_since'] = time.time()
+        # Clear fill state for clean restart
+        _b['dog_fill_qty'] = 0
+        _b['fav_fill_qty'] = 0
+        _b['yes_fill_qty'] = 0
+        _b['no_fill_qty'] = 0
+        _b['dog_filled_at'] = None
+        _b['_hedge_fired'] = False
+        _b['_trade_recorded'] = False
+        _b['fav_order_id'] = None
+        _b['dog_order_id'] = None
+        _b.pop('_pre_scout_status', None)
+        _b.pop('_paused_by_scout', None)
+        _b.pop('_paused_at', None)
+        _cat = _b.get('bot_category', _b.get('type', ''))
+        _resumed.append(_bid)
+        print(f'▶️ SCOUT RESUME: {_bid} ({_cat}) — scout exited, bot restarting fresh')
+        bot_log('BOT_RESUMED_AFTER_SCOUT', _bid, {'ticker': ticker, 'old_status': _old_status})
+    if _resumed:
+        save_state()
+        print(f'▶️ SCOUT RESUME: {len(_resumed)} bots resumed on {ticker}')
+    return _resumed
+
+
 def watch_position():
     """Attach a watch-bot to an existing Kalshi position for stop-loss / take-profit."""
     try:
@@ -21878,39 +22059,59 @@ def watch_position():
             print(f'⚠ Scout cleanup error for {ticker}: {cleanup_err}')
             cleanup_errors.append(str(cleanup_err))
 
-        # ── Auto-stop phantom bots on this ticker — Scout takes over ──
-        _stopped_phantoms = []
+        # ── Pause ALL bots on this ticker — Scout takes over ──
+        # Bots are PAUSED (not stopped) so they can resume when Scout exits.
+        _paused_bots = []
         for _bid, _b in active_bots.items():
-            if _b.get('bot_category') != 'anchor_dog':
-                continue
-            if _b.get('status') in ('completed', 'stopped', 'cancelled'):
+            if _b.get('status') in ('completed', 'stopped', 'cancelled', 'paused_by_scout'):
                 continue
             _b_ticker = _b.get('ticker', '')
             _b_hedge = _b.get('hedge_ticker', _b_ticker)
-            if _b_ticker == ticker or _b_hedge == ticker:
-                # Cancel any live dog order
-                _dog_oid = _b.get('dog_order_id')
-                if _dog_oid:
+            _b_cat = _b.get('bot_category', '')
+            _b_type = _b.get('type', '')
+            if _b_type == 'watch':
+                continue  # don't pause other scouts
+            if _b_ticker != ticker and _b_hedge != ticker:
+                continue
+            # Cancel all live orders for this bot
+            _cancel_keys = ['dog_order_id', 'fav_order_id', 'yes_order_id', 'no_order_id',
+                            'order_id', 'hedge_order_id', 'tp_order_id']
+            for _ck in _cancel_keys:
+                _oid = _b.get(_ck)
+                if _oid:
                     try:
-                        _safe_cancel(_dog_oid, f'scout_stops_phantom_{_bid}')
+                        _safe_cancel(_oid, f'scout_pauses_{_bid}')
                     except Exception:
                         pass
-                # Cancel any live fav order
-                _fav_oid = _b.get('fav_order_id')
-                if _fav_oid:
-                    try:
-                        _safe_cancel(_fav_oid, f'scout_stops_phantom_{_bid}')
-                    except Exception:
-                        pass
-                _b['status'] = 'stopped'
-                _b['stopped_at'] = time.time()
-                _b['_stop_reason'] = 'scout_orphan_cleanup'
-                _b['_smart_stopped'] = True
-                _b['_smart_stop_reason'] = 'scout_orphan_cleanup'
-                _stopped_phantoms.append(_bid)
-                print(f'🛑 SCOUT STOPS PHANTOM: {_bid} — Scout assigned to {ticker}, phantom auto-stopped')
-                bot_log('PHANTOM_STOPPED_BY_SCOUT', _bid, {'ticker': ticker, 'scout_ticker': ticker})
-        if _stopped_phantoms:
+            # Cancel Apex MM ladder orders
+            if _b_cat == 'ladder_arb':
+                for _sk in ('yes_orders', 'no_orders'):
+                    for _lvl in _b.get(_sk, {}).values():
+                        _lvl_oid = _lvl.get('oid')
+                        if _lvl_oid:
+                            try:
+                                _safe_cancel(_lvl_oid, f'scout_pauses_mm_{_bid}')
+                            except Exception:
+                                pass
+                            _lvl['oid'] = None
+                # Cancel exit OIDs
+                for _es in ('yes', 'no'):
+                    _exit_oid = _b.get(f'_{_es}_exit_oid')
+                    if _exit_oid:
+                        try:
+                            _safe_cancel(_exit_oid, f'scout_pauses_exit_{_bid}')
+                        except Exception:
+                            pass
+                        _b[f'_{_es}_exit_oid'] = None
+            _b['_pre_scout_status'] = _b.get('status')
+            _b['_paused_by_scout'] = f"watch_{ticker}_{int(time.time())}"
+            _b['status'] = 'paused_by_scout'
+            _b['_paused_at'] = time.time()
+            _paused_bots.append(_bid)
+            _type_label = 'phantom' if _b_cat == 'anchor_dog' else ('apex_mm' if _b_cat == 'ladder_arb' else _b_type)
+            print(f'⏸️ SCOUT PAUSES {_type_label.upper()}: {_bid} — Scout assigned to {ticker}')
+            bot_log('BOT_PAUSED_BY_SCOUT', _bid, {'ticker': ticker, 'bot_type': _type_label})
+        if _paused_bots:
             save_state()
 
         bot_id = f"watch_{ticker}_{int(time.time())}"

@@ -3774,8 +3774,8 @@ def _ws_phantom_retreat(ticker, yes_bid, no_bid):
             gap = dog_bid - dog_price
             # Retreat when bid is within 2¢ of our order (about to fill at bad price)
             if 0 <= gap <= 2:
-                def _retreat_cancel(oid, bid, bot_ref=bot, bot_id_ref=bot_id):
-                    result = _safe_cancel(oid, f'ws_retreat_{bid}')
+                def _retreat_cancel(oid, _ctx_bot_id, bot_ref=bot, bot_id_ref=bot_id):
+                    result = _safe_cancel(oid, f'ws_retreat_{_ctx_bot_id}')
                     # _safe_cancel returns ('filled', count) when 404 with fills
                     # Only recover if WS fill handler hasn't already fired the hedge
                     _fills = 0
@@ -3983,8 +3983,32 @@ def _ws_phantom_price_floor(ticker, yes_bid, no_bid):
         if not dog_oid:
             continue
 
-        _safe_cancel(dog_oid, f'ws_price_floor_{bot_id}')
+        _pf_result = _safe_cancel(dog_oid, f'ws_price_floor_{bot_id}')
         bot['dog_order_id'] = None
+        # Check for fills during cancel — dog may have filled right as bid crashed
+        if isinstance(_pf_result, tuple) and _pf_result[0] == 'filled':
+            _pf_fills = _pf_result[1]
+            with ws_fill_lock:
+                if bot.get('_hedge_fired'):
+                    save_state()
+                    return  # WS handler already got it
+                bot['_hedge_fired'] = True
+            bot['dog_fill_qty'] = max(bot.get('dog_fill_qty', 0), _pf_fills)
+            _ds = bot.get('dog_side', 'no')
+            bot[f'{_ds}_fill_qty'] = bot['dog_fill_qty']
+            bot['status'] = 'dog_filled'
+            bot['dog_filled_at'] = time.time()
+            _qty = bot.get('quantity', 1)
+            if _pf_fills < _qty:
+                bot['_original_qty'] = _qty
+                bot['_partial_hedge_qty'] = _pf_fills
+            _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
+            print(f'🚨 WS PRICE FLOOR FILL: {bot_id} {_pf_fills} fills on cancel — hedge fired!')
+            bot_log('PHANTOM_PRICE_FLOOR_FILL', bot_id, {
+                'fills': _pf_fills, 'dog_bid': dog_bid,
+            }, level='WARN')
+            save_state()
+            return
         bot['_price_floor_pulled'] = True
         bot['_price_floor_at'] = time.time()
         print(f'⚡ WS PRICE FLOOR: {bot_id} bid={dog_bid}¢ < 2¢ — pulled instantly')
@@ -4020,12 +4044,36 @@ def _ws_phantom_drift_guard(ticker, yes_bid, no_bid):
             _opp = 'yes' if dog_side == 'no' else 'no'
             _opp_bid = (yes_bid if _opp == 'yes' else no_bid)
             if _opp_bid > 0 and _opp_bid < dog_bid:
-                _safe_cancel(dog_oid, f'ws_drift_flip_{bot_id}')
+                _df_result = _safe_cancel(dog_oid, f'ws_drift_flip_{bot_id}')
+                # Check for fills during cancel
+                if isinstance(_df_result, tuple) and _df_result[0] == 'filled':
+                    _df_fills = _df_result[1]
+                    with ws_fill_lock:
+                        if bot.get('_hedge_fired'):
+                            save_state()
+                            return
+                        bot['_hedge_fired'] = True
+                    bot['dog_fill_qty'] = max(bot.get('dog_fill_qty', 0), _df_fills)
+                    bot[f'{dog_side}_fill_qty'] = bot['dog_fill_qty']
+                    bot['status'] = 'dog_filled'
+                    bot['dog_filled_at'] = time.time()
+                    _qty = bot.get('quantity', 1)
+                    if _df_fills < _qty:
+                        bot['_original_qty'] = _qty
+                        bot['_partial_hedge_qty'] = _df_fills
+                    _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
+                    print(f'🚨 WS DRIFT FLIP FILL: {bot_id} {_df_fills} fills on cancel — hedge fired!')
+                    bot_log('PHANTOM_DRIFT_FLIP_FILL', bot_id, {'fills': _df_fills, 'dog_bid': dog_bid}, level='WARN')
+                    save_state()
+                    return
                 bot['dog_side'] = _opp
                 bot['fav_side'] = dog_side
                 bot['dog_order_id'] = None
                 bot['dog_fill_qty'] = 0
                 bot['fav_fill_qty'] = 0
+                bot['yes_fill_qty'] = 0
+                bot['no_fill_qty'] = 0
+                bot['dog_filled_at'] = None
                 bot['_hedge_fired'] = False
                 bot['_trade_recorded'] = False
                 bot['_all_dog_order_ids'] = []
@@ -4040,8 +4088,29 @@ def _ws_phantom_drift_guard(ticker, yes_bid, no_bid):
                 save_state()
                 return
         # Cross-market or can't flip — pull and wait for recovery
-        _safe_cancel(dog_oid, f'ws_drift_pull_{bot_id}')
+        _dp_result = _safe_cancel(dog_oid, f'ws_drift_pull_{bot_id}')
         bot['dog_order_id'] = None
+        # Check for fills during cancel
+        if isinstance(_dp_result, tuple) and _dp_result[0] == 'filled':
+            _dp_fills = _dp_result[1]
+            with ws_fill_lock:
+                if bot.get('_hedge_fired'):
+                    save_state()
+                    return
+                bot['_hedge_fired'] = True
+            bot['dog_fill_qty'] = max(bot.get('dog_fill_qty', 0), _dp_fills)
+            bot[f'{dog_side}_fill_qty'] = bot['dog_fill_qty']
+            bot['status'] = 'dog_filled'
+            bot['dog_filled_at'] = time.time()
+            _qty = bot.get('quantity', 1)
+            if _dp_fills < _qty:
+                bot['_original_qty'] = _qty
+                bot['_partial_hedge_qty'] = _dp_fills
+            _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
+            print(f'🚨 WS DRIFT PULL FILL: {bot_id} {_dp_fills} fills on cancel — hedge fired!')
+            bot_log('PHANTOM_DRIFT_PULL_FILL', bot_id, {'fills': _dp_fills, 'dog_bid': dog_bid}, level='WARN')
+            save_state()
+            return
         bot['_price_floor_pulled'] = True
         bot['_price_floor_since'] = time.time()
         print(f'⚡ WS DRIFT PULL: {bot_id} bid={dog_bid}¢ > 50¢ — pulled, waiting')
@@ -5090,86 +5159,7 @@ def _execute_phantom_hedge(bot_id):
         _tp_hedge_ticker = hedge_ticker
         _tp_qty = qty
         _tp_combined = dog_price + actual_fav_price  # combined at time of posting
-        def _delayed_taker_cross():
-            try:
-                # DISABLED: crossing spread costs 2-5c (bid→ask gap), which is the entire
-                # profit margin. Hedge stays as maker at bid. Walk system handles the rest.
-                return
-                _maker_wait = 1.0
-                time.sleep(_maker_wait)
-                _b = active_bots.get(_tp_bot_id)
-                if not _b or _b.get('status') != 'fav_hedge_posted':
-                    return  # bot completed/cancelled/status changed
-                if _b.get('fav_fill_qty', 0) >= _tp_qty:
-                    return  # already filled as maker
-                if _b.get('fav_order_id') != _tp_fav_order_id:
-                    return  # order changed (already amended/crossed by monitor)
-                # Get current ask from WS cache
-                _ask = _b.get(f'live_{_tp_fav_side}_ask', 0)
-                if _tp_hedge_ticker != _b.get('ticker'):
-                    _ask = _b.get(f'live_hedge_{_tp_fav_side}_ask', 0) or _ask
-                if _ask <= 0:
-                    return  # no ask data
-                _cross_comb = _tp_dog_price + _ask
-                if _cross_comb > 100:
-                    return  # past breakeven — sellback territory
-                # Cross the spread: cancel maker, place taker at ask
-                _phantom_drop_lock.acquire()
-                try:
-                    # Re-check after acquiring lock
-                    if _b.get('fav_fill_qty', 0) >= _tp_qty or _b.get('fav_order_id') != _tp_fav_order_id:
-                        return
-                    api_rate_limiter.wait()
-                    try:
-                        kalshi_client.cancel_order(_tp_fav_order_id)
-                    except Exception as _ce:
-                        # May have filled during cancel
-                        try:
-                            api_read_limiter.wait()
-                            _chk = kalshi_client.get_order(_tp_fav_order_id)
-                            _chk_ord = _chk.get('order', _chk) if isinstance(_chk, dict) else {}
-                            if _parse_fill_count(_chk_ord) >= _tp_qty:
-                                _b['fav_fill_qty'] = _tp_qty
-                                print(f'💰 PHANTOM TAKER SKIP: {_tp_bot_id} filled as maker during cancel')
-                                return
-                        except Exception:
-                            pass
-                        return  # cancel failed, don't proceed
-                    _already_filled = _b.get('fav_fill_qty', 0)
-                    _remaining = _tp_qty - _already_filled
-                    if _remaining <= 0:
-                        return
-                    price_kwargs = {'yes_price': _ask} if _tp_fav_side == 'yes' else {'no_price': _ask}
-                    api_rate_limiter.wait()
-                    resp = kalshi_client.create_order(
-                        ticker=_tp_hedge_ticker, side=_tp_fav_side, action='buy',
-                        count=_remaining, order_type='limit', **price_kwargs
-                    )
-                    new_oid = resp.get('order', {}).get('order_id', '')
-                    _b.setdefault('_all_hedge_order_ids', []).append(_tp_fav_order_id)
-                    _b['fav_order_id'] = new_oid
-                    _b['fav_price'] = _ask
-                    _b['_fav_was_taker'] = True
-                    _b['fav_walk_count'] = _b.get('fav_walk_count', 0) + 1
-                    if _tp_fav_side == 'yes':
-                        _b['yes_price'] = _ask
-                    else:
-                        _b['no_price'] = _ask
-                    save_state()
-                    _profit = 100 - _cross_comb
-                    print(f'💰 PHANTOM FAST TAKER: {_tp_bot_id} crossed ask {_ask}¢ (combined={_cross_comb}¢ profit={_profit}¢/ea) after {_maker_wait}s maker window')
-                    bot_log('PHANTOM_FAST_TAKER_CROSS', _tp_bot_id, {
-                        'cross_price': _ask, 'combined': _cross_comb,
-                        'dog_price': _tp_dog_price, 'profit_per': _profit,
-                        'maker_price': actual_fav_price,
-                        'maker_wait_s': _maker_wait,
-                    })
-                finally:
-                    if _phantom_drop_lock.locked():
-                        _phantom_drop_lock.release()
-            except Exception as e:
-                print(f'⚠ PHANTOM FAST TAKER {_tp_bot_id}: {e}')
-        threading.Thread(target=_delayed_taker_cross, daemon=True).start()
+        # (taker cross removed — crossing spread costs 2-5c, entire profit margin)
     except Exception as e:
         print(f'❌ WS PHANTOM HEDGE {bot_id}: {e}')
         import traceback

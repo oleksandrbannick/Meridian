@@ -11420,14 +11420,18 @@ def _handle_phantom(bot_id, bot, actions):
     status = bot['status']
 
     # ── State validation: recover from half-updated state after prior exceptions ──
+    # Only reset _hedge_fired if enough time passed — the hedge worker may still be
+    # in flight (posting takes ~100-500ms). Resetting too early causes DOUBLE HEDGE.
     if bot.get('_hedge_fired') and not bot.get('fav_order_id') and status == 'dog_filled':
-        # Hedge was flagged but never posted (exception mid-hedge) — reset so we retry
-        print(f'🔧 PHANTOM RECOVERY: {bot_id} _hedge_fired but no fav_order_id — resetting flag')
-        bot_log('PHANTOM_RECOVERY', bot_id, {
-            '_hedge_fired': True, 'fav_order_id': None, 'status': status,
-            'dog_price': bot.get('dog_price'), 'dog_side': dog_side,
-        })
-        bot['_hedge_fired'] = False
+        _filled_age = now - (bot.get('dog_filled_at') or now)
+        if _filled_age > 10:  # 10s is plenty for hedge worker to finish
+            print(f'🔧 PHANTOM RECOVERY: {bot_id} _hedge_fired but no fav_order_id after {_filled_age:.0f}s — resetting flag')
+            bot_log('PHANTOM_RECOVERY', bot_id, {
+                '_hedge_fired': True, 'fav_order_id': None, 'status': status,
+                'dog_price': bot.get('dog_price'), 'dog_side': dog_side,
+                'filled_age_s': round(_filled_age),
+            })
+            bot['_hedge_fired'] = False
 
     # Update live bid/ask from WS cache
     try:

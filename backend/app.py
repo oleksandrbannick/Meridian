@@ -1558,9 +1558,9 @@ def get_depth_rec(ticker):
     ppi, rd, ppi_det = _calculate_ppi(ticker, fav_side, dog_side)
     if ppi is None:
         ppi, rd, ppi_det = 0, 0, {}
-    tier = 'WALL' if ppi >= 90 else 'PRIME' if ppi >= 75 else 'SNIPER' if ppi >= 55 else 'TRAP' if ppi >= 35 else 'KILL'
+    tier = 'PRIME' if ppi >= 75 else 'SNIPER' if ppi >= 60 else 'TRAP' if ppi >= 45 else 'DEEP' if ppi >= 35 else 'KILL'
     # Base depth before gap overrides
-    _base_rd = 3 if ppi >= 90 else 4 if ppi >= 75 else (6 - (ppi - 55) // 10) if ppi >= 55 else (9 - (ppi - 35) // 7) if ppi >= 35 else 0
+    _base_rd = 5 if ppi >= 75 else 6 if ppi >= 60 else 7 if ppi >= 45 else 8 if ppi >= 40 else 9 if ppi >= 35 else 0
     _gap_bumped = rd > _base_rd and rd > 0
     reasons = [f'PPI {ppi} {tier}: D={ppi_det.get("d",0)} G=-{ppi_det.get("g",0)} S={ppi_det.get("s",0)} T={ppi_det.get("t",0)}']
     if _gap_bumped:
@@ -6373,13 +6373,12 @@ def _calculate_ppi(ticker, fav_side, dog_side):
     _raw = d_pts - g_pts + s_pts + t_pts
     ppi = max(0, min(100, round(_raw * 100 / 75)))
 
-    # PPI → depth rec (interpolated within tiers)
-    if ppi >= 90: rec = 3                              # WALL: pristine book
-    elif ppi >= 75: rec = 4                            # PRIME: high conviction
-    elif ppi >= 55:                                    # SNIPER: interpolate 5-6¢
-        rec = 6 - (ppi - 55) // 10                     #   55-64→6¢, 65-74→5¢
-    elif ppi >= 35:                                    # TRAP: interpolate 7-9¢
-        rec = 9 - (ppi - 35) // 7                      #   35-41→9¢, 42-48→8¢, 49-54→7¢
+    # PPI → depth rec (Money Zone mapping — 5c floor, no 3c/4c adverse selection)
+    if ppi >= 75: rec = 5                              # WALL/PRIME: money zone (high confidence)
+    elif ppi >= 60: rec = 6                            # SNIPER: money zone (standard variance)
+    elif ppi >= 45: rec = 7                            # TRAP: historical profit, caution zone
+    elif ppi >= 40: rec = 8                            # DEEP TRAP (high): recovery buffer
+    elif ppi >= 35: rec = 9                            # DEEP TRAP (low): safe haven before pull
     else: rec = 0                                      # KILL: pull
     # Fav gaps override (only when not KILL — gaps don't save a toxic book)
     if rec > 0:
@@ -11872,8 +11871,8 @@ def _handle_phantom(bot_id, bot, actions):
                                 bot['anchor_depth'] = _ppi_rec
                                 anchor_depth = _ppi_rec
                             elif _ppi_rec == 0:
-                                # PPI < 30 = pull the dog
-                                print(f'⚠ AUTO DEPTH PULL: {bot_id} PPI={_ppi_now} < 30 — pulling dog')
+                                # PPI < 35 = pull the dog
+                                print(f'⚠ AUTO DEPTH PULL: {bot_id} PPI={_ppi_now} < 35 — pulling dog')
                                 if dog_order_id:
                                     _safe_cancel(dog_order_id, f'ppi_pull_{bot_id}')
                                     bot['dog_order_id'] = None
@@ -13145,16 +13144,27 @@ def _handle_phantom(bot_id, bot, actions):
                             bot['anchor_depth'] = _ppi_rec
                             anchor_depth = _ppi_rec
                         elif _ppi_rec == 0:
-                            print(f'⚠ AUTO DEPTH PULL (repeat): {bot_id} PPI={_ppi_now} < 30 — waiting')
+                            print(f'⚠ AUTO DEPTH PULL (repeat): {bot_id} PPI={_ppi_now} < 35 — waiting')
                             bot['_ppi_pulled'] = True
                             bot_log('PPI_AUTO_PULL', bot_id, {'ppi': _ppi_now, 'details': _ppi_det})
                             save_state()
                             return
-                    # Recovery: if PPI recovers above 35, re-arm
-                    if bot.get('_ppi_pulled') and _ppi_now >= 45:
-                        print(f'✅ PPI RECOVERY: {bot_id} PPI={_ppi_now} ≥ 45 — re-arming')
-                        bot['_ppi_pulled'] = False
-                        bot_log('PPI_RECOVERY', bot_id, {'ppi': _ppi_now})
+                    # Recovery: PPI must hit 40 AND hold for 30s before re-arming
+                    if bot.get('_ppi_pulled'):
+                        if _ppi_now >= 40:
+                            _recov_ts = bot.get('_ppi_recovery_ts')
+                            if _recov_ts is None:
+                                bot['_ppi_recovery_ts'] = time.time()
+                                print(f'⏳ PPI RECOVERY HOLD: {bot_id} PPI={_ppi_now} ≥ 40 — starting 30s stability check')
+                            elif time.time() - _recov_ts >= 30:
+                                print(f'✅ PPI RECOVERY: {bot_id} PPI={_ppi_now} ≥ 40 for 30s — re-arming')
+                                bot['_ppi_pulled'] = False
+                                bot.pop('_ppi_recovery_ts', None)
+                                bot_log('PPI_RECOVERY', bot_id, {'ppi': _ppi_now, 'hold_s': round(time.time() - _recov_ts)})
+                        else:
+                            # PPI dipped back below 40 — reset stability timer
+                            if bot.get('_ppi_recovery_ts'):
+                                bot.pop('_ppi_recovery_ts', None)
             new_dog_price = max(1, current_dog_bid - anchor_depth)
 
             # Drift guard: stop if dog is dead, price too low, or price too high

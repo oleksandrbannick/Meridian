@@ -6453,11 +6453,11 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const exitBidLive = exitSide === 'YES' ? liveYesBid : liveNoBid;
         const exitAskLive = exitSide === 'YES' ? liveYesAsk : liveNoAsk;
         const heldBidLive = longSide === 'YES' ? liveYesBid : liveNoBid;
-        // Live combined — exit order is posted at bid (maker), so use bid not ask
-        const liveExitAtBid = (exitBidLive > 0) ? avgCost + exitBidLive : 999;
-        const liveCombined = liveExitAtBid;
+        // Combined = where your order actually sits (avgCost + posted exit price)
+        // liveCombined = what you'd get if filled at current bid (context only)
+        const liveCombined = (exitBidLive > 0) ? avgCost + exitBidLive : 999;
         const targetCombined = avgCost + exitPrice;
-        const combined = (liveCombined < 999 && exitPrice > 0) ? liveCombined : targetCombined;
+        const combined = exitPrice > 0 ? targetCombined : (liveCombined < 999 ? liveCombined : 0);
         const profit = 100 - combined;
         const combinedCol = combined > 100 ? '#ff4444' : combined >= 99 ? '#ffaa00' : '#00ff88';
         const slThreshold = _apexStopLossThreshold(width, avgCost);
@@ -6545,9 +6545,9 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         positionBarHtml = `<div style="margin-bottom:8px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
                 <div style="display:flex;align-items:center;gap:8px;">
-                    <span style="color:${combinedCol};font-weight:800;font-size:16px;">${exitPrice}c</span>
+                    <span style="color:${combinedCol};font-weight:800;font-size:16px;">${combined}c</span>
                     ${walkBadge}
-                    <span style="color:#445;font-size:9px;">= ${combined}c</span>
+                    ${liveCombined < 999 && liveCombined !== combined ? `<span style="color:#445;font-size:9px;">bid ${liveCombined}c</span>` : ''}
                 </div>
                 ${skewSec > 0 ? `<span style="color:#445;font-size:9px;">${timeStr}</span>` : ''}
             </div>
@@ -6704,7 +6704,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             ${bot._pending_sells.map(s => `<span style="color:#e8eaed;font-size:9px;">${s.side.toUpperCase()} ${s.qty}x @ ${s.price}¢ · ${s.age_s}s</span>`).join('')}
         </div>` : ''}
 
-        ${!isCompleted ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:4px;">
+        ${!isCompleted && !hasInv ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:4px;">
             <div style="background:#060a12;border:1px solid #00d4ff15;border-radius:6px;padding:6px 8px;">
                 <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:4px;margin-bottom:4px;border-bottom:1px solid #00d4ff20;">
                     <span style="color:#00d4ff;font-size:8px;font-weight:800;letter-spacing:.06em;">${yesLabel}${yesPaused ? ' <span style="color:#ffaa00;">PAUSED</span>' : ''}</span>

@@ -6469,25 +6469,29 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             else if (exitPrice > origTarget) walkBadge = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">SNAPPED</span>`;
             else walkBadge = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">TARGET</span>`;
         }
-        // Zone bar — target on left edge, stop loss on right edge, 100c breakeven proportional
+        // Zone bar — dual-scale: green half (target→100c) on left, red half (100c→SL) on right
+        // 100c always centered at 50%, circle starts at 0% when at target
         let zoneBarHtml = '';
         if (exitPrice > 0) {
-            const barMin = origTargetCombined;
-            const barMax = stopLoss;
-            const barRange = barMax - barMin || 1;
-            const combPct = Math.max(0, Math.min(100, Math.round((combined - barMin) / barRange * 100)));
-            const bePct = Math.max(0, Math.min(100, Math.round((100 - barMin) / barRange * 100)));
+            const greenRange = Math.max(1, 100 - origTargetCombined);
+            const redRange = Math.max(1, stopLoss - 100);
+            let combPct;
+            if (combined <= 100) {
+                combPct = Math.max(0, Math.min(50, Math.round((combined - origTargetCombined) / greenRange * 50)));
+            } else {
+                combPct = Math.min(100, Math.round(50 + (combined - 100) / redRange * 50));
+            }
             const markerCol = combined <= origTargetCombined + 1 ? '#00ff88' : combined < 100 ? '#ffaa00' : '#ff4444';
             zoneBarHtml = `<div style="margin-top:6px;">
                 <div style="position:relative;height:6px;background:#0a1018;border-radius:3px;overflow:hidden;">
-                    <div style="position:absolute;left:0;width:${bePct}%;height:100%;background:linear-gradient(90deg,#00ff8818,#00ff8808);"></div>
-                    <div style="position:absolute;left:${bePct}%;width:${100-bePct}%;height:100%;background:linear-gradient(90deg,#ff444410,#ff444420);"></div>
-                    <div style="position:absolute;left:${bePct}%;width:2px;height:100%;background:#ffaa00;z-index:2;"></div>
+                    <div style="position:absolute;left:0;width:50%;height:100%;background:linear-gradient(90deg,#00ff8818,#00ff8808);"></div>
+                    <div style="position:absolute;left:50%;width:50%;height:100%;background:linear-gradient(90deg,#ff444410,#ff444420);"></div>
+                    <div style="position:absolute;left:50%;width:2px;height:100%;background:#ffaa00;z-index:2;"></div>
                     <div style="position:absolute;left:${combPct}%;width:8px;height:100%;background:${markerCol};border-radius:4px;z-index:3;transform:translateX(-4px);box-shadow:0 0 6px ${markerCol}80;"></div>
                 </div>
                 <div style="position:relative;height:12px;margin-top:2px;font-size:7px;font-weight:700;">
                     <span style="position:absolute;left:0;color:#00ff88;">${origTargetCombined}c</span>
-                    <span style="position:absolute;left:${bePct}%;transform:translateX(-50%);color:#ffaa00;">100c</span>
+                    <span style="position:absolute;left:50%;transform:translateX(-50%);color:#ffaa00;">100c</span>
                     <span style="position:absolute;right:0;color:#ff4444;">${stopLoss}c</span>
                 </div>
             </div>`;

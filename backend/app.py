@@ -8455,10 +8455,15 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
     net_yes = bot.get('net_yes', 0)
     net_no = bot.get('net_no', 0)
 
-    # Guard: must be flat
+    # Guard: must be flat — if holding inventory, post exit order instead of refilling.
+    # DON'T call cycle_reset (cancel-everything) — that creates involuntary fills from
+    # orders that already filled on Kalshi during the cancel window.
+    # Leave anchor orders alone, post exit order, monitor will handle hedge-side pull.
     if net_yes != 0 or net_no != 0:
-        print(f'⚠ APEX MM CYCLE REFILL: {bot_id} not flat (Y={net_yes} N={net_no}) — falling back to cycle_reset')
-        _apex_mm_cycle_reset(bot_id, bot)
+        _held = 'yes' if net_yes > net_no else 'no'
+        print(f'⚠ APEX MM CYCLE REFILL: {bot_id} not flat (Y={net_yes} N={net_no}) — posting exit instead of cycle_reset')
+        bot_log('APEX_MM_REFILL_NOT_FLAT', bot_id, {'net_yes': net_yes, 'net_no': net_no})
+        threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _held), daemon=True).start()
         return
 
     # SAFETY: verify Kalshi agrees we're flat before refilling
@@ -8479,9 +8484,9 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
                     _rf_est = bot.get(f'live_{_rf_side}_ask', 0) or bot.get(f'live_{_rf_side}_bid', 50) or 50
                     bot[f'avg_{_rf_side}_cost'] = _rf_est
                     bot[f'total_{_rf_side}_cost'] = _rf_est * _rf_qty
-                print(f'🚨 CYCLE REFILL KALSHI BLOCK: {bot_id} bot flat but kalshi has {_rf_qty}x {_rf_side.upper()} — aborting refill')
+                print(f'🚨 CYCLE REFILL KALSHI BLOCK: {bot_id} bot flat but kalshi has {_rf_qty}x {_rf_side.upper()} — posting exit instead of cycle_reset')
                 bot_log('APEX_MM_REFILL_KALSHI_BLOCK', bot_id, {'side': _rf_side, 'qty': _rf_qty})
-                _apex_mm_cycle_reset(bot_id, bot)
+                threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _rf_side), daemon=True).start()
                 return
     except Exception as _rfe:
         print(f'⚠ Cycle refill Kalshi check failed: {_rfe}')

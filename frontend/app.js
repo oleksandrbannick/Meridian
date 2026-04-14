@@ -725,8 +725,11 @@ function _gameIdDateMatchesESPN(gameId, espnGame) {
     // But if the game is finished (post) and the date doesn't match exactly, reject it —
     // yesterday's final score must NOT bleed into today's card for the same team
     if (daysDiff !== 0 && espnGame.state === 'post') return false;
-    // Allow ±1 day for live/pregame games (handles late-night UTC → local date crossing)
-    return daysDiff >= -1 && daysDiff <= 1;
+    // Tennis tournaments: ticker date = event creation (start of tournament), but matches
+    // play out over multiple days. Allow up to 7 days tolerance for tennis.
+    const isTennis = /KXATP|KXWTA/i.test(gameId);
+    const maxDrift = isTennis ? 7 : 1;
+    return daysDiff >= -1 && daysDiff <= maxDrift;
 }
 
 function _findGameInLookup(lookup, gameId, sport, strict) {

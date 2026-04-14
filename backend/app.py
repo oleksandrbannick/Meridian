@@ -6050,18 +6050,27 @@ def _is_game_live(ticker: str) -> bool:
     Other sports: ESPN scoreboard cache (authoritative for NBA/NHL/MLB etc).
     Fallback: Kalshi expected_expiration_time window.
     """
-    # ── TENNIS: Use Kalshi milestones (authoritative) ──
+    # ── TENNIS: Use Kalshi milestones, then API Tennis scoreboard ──
     is_tennis = ticker.startswith('KXATP') or ticker.startswith('KXWTA')
     if is_tennis:
-        # Extract event_ticker from market ticker (strip the player suffix)
-        # e.g. KXATPMATCH-26MAR17SVASMI-SVA → KXATPMATCH-26MAR17SVASMI
+        # Try milestones first (fast, cached)
         parts = ticker.split('-')
         if len(parts) >= 2:
             event_ticker = '-'.join(parts[:2])
             ms_status = _get_milestone_status(event_ticker)
-            if ms_status is not None:
-                return ms_status == 'live'
-        # Milestones didn't have this event — fall through to expiration check
+            if ms_status == 'live':
+                return True
+        # Milestones unreliable (Kalshi removed status field) — check API Tennis
+        if _api_tennis_cache.get('data') and len(parts) >= 3:
+            player_code = parts[-1].upper()
+            for _tm in _api_tennis_cache['data']:
+                if _tm.get('event_live') == '1' or ((_tm.get('event_status') or '').lower() in ('interrupted', 'break time')):
+                    _p1 = _tm.get('event_first_player', '')
+                    _p2 = _tm.get('event_second_player', '')
+                    if (_p1 and _tennis_player_code(_p1) == player_code) or \
+                       (_p2 and _tennis_player_code(_p2) == player_code):
+                        return True
+        # No live signal found — fall through to expiration check
 
     # ── OTHER SPORTS: Check ESPN first (authoritative "game in progress") ──
     is_sports = any(ticker.startswith(p) for p in ('KXNBA', 'KXNCAA', 'KXNHL', 'KXMLB', 'KXMLS', 'KXEPL', 'KXUCL'))
@@ -6664,6 +6673,7 @@ def _get_game_score_for_ticker(ticker: str) -> dict:
     Returns {home_team, away_team, home_score, away_score, period, clock, status_detail, status} or {}."""
     # Guard: skip if ticker date is in the future (avoids showing today's PHI game
     # on a bot whose ticker is for tomorrow's PHI vs CLE game)
+    is_tennis = ticker.startswith('KXATP') or ticker.startswith('KXWTA')
     try:
         parts_chk = ticker.split('-')
         if len(parts_chk) >= 2:
@@ -6672,11 +6682,50 @@ def _get_game_score_for_ticker(ticker: str) -> dict:
                 mo = _MONTH_ABBR.get(m_chk.group(2))
                 if mo:
                     ticker_date = date(2000 + int(m_chk.group(1)), mo, int(m_chk.group(3)))
-                    from datetime import timedelta
-                    if ticker_date > date.today() + timedelta(days=1):
+                    # Tennis: tournaments span days, allow 7-day window
+                    max_future = timedelta(days=7) if is_tennis else timedelta(days=1)
+                    if ticker_date > date.today() + max_future:
                         return {}  # Future game — don't match today's team scores
     except Exception:
         pass
+
+    # Tennis: use API Tennis scoreboard (ESPN doesn't cover tennis)
+    if is_tennis and _api_tennis_cache.get('data'):
+        parts = ticker.split('-')
+        player_code = parts[-1].upper() if len(parts) >= 3 else ''
+        if player_code:
+            for _tm in _api_tennis_cache['data']:
+                _p1 = _tm.get('event_first_player', '')
+                _p2 = _tm.get('event_second_player', '')
+                _c1 = _tennis_player_code(_p1)
+                _c2 = _tennis_player_code(_p2)
+                if player_code not in (_c1, _c2):
+                    continue
+                # Found the match — determine state
+                _is_live = _tm.get('event_live') == '1'
+                _status_str = (_tm.get('event_status') or '').lower()
+                _winner = _tm.get('event_winner', '')
+                if _is_live or _status_str in ('interrupted', 'break time'):
+                    _state = 'in'
+                elif _winner or 'finished' in _status_str:
+                    _state = 'post'
+                else:
+                    _state = 'pre'
+                if _state in ('in', 'post'):
+                    scores = _tm.get('scores', [])
+                    p1_sets = sum(1 for s in scores if int(float(s.get('score_first', 0))) > int(float(s.get('score_second', 0))) and (int(float(s.get('score_first', 0))) >= 6))
+                    p2_sets = sum(1 for s in scores if int(float(s.get('score_second', 0))) > int(float(s.get('score_first', 0))) and (int(float(s.get('score_second', 0))) >= 6))
+                    cur_set = len(scores) or 1
+                    game_score = _tm.get('event_game_result', '') or ''
+                    return {
+                        'home_team': _c2, 'away_team': _c1,
+                        'home_score': p2_sets, 'away_score': p1_sets,
+                        'period': cur_set, 'clock': game_score if game_score != '-' else '',
+                        'status_detail': _status_str or f'Set {cur_set}',
+                        'status': _state,
+                    }
+                return {}  # pre-match
+
     _refresh_espn_cache()
     info = _espn_cache['data']
     if not info:
@@ -17898,6 +17947,14 @@ def list_bots():
                             })
         if _bot_sells:
             bot['_pending_sells'] = _bot_sells
+
+    # Tennis phase fix: game_phase is frozen at creation time, but milestones
+    # are unreliable. Re-evaluate using _is_game_live (now checks API Tennis).
+    for bid, bot in active_bots.items():
+        if bot.get('game_phase') == 'pregame' and bot.get('status') not in ('completed', 'cancelled', 'error'):
+            ticker = bot.get('ticker', '')
+            if ticker.startswith(('KXATP', 'KXWTA')) and _is_game_live(ticker):
+                bot['game_phase'] = 'live'
 
     return jsonify({'bots': active_bots, 'game_scores': game_scores})
 

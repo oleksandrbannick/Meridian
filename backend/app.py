@@ -14824,26 +14824,65 @@ def _handle_apex(bot_id, bot, actions):
                         break
                 _kalshi_yes = max(0, _kalshi_net)
                 _kalshi_no = max(0, -_kalshi_net)
-                _clamped = False
+                _changed = False
                 if net_yes != _kalshi_yes or net_no != _kalshi_no:
-                    if net_yes > _kalshi_yes:
-                        print(f'🛡️ RECONCILE CLAMP: {bot_id} bot_yes={net_yes} kalshi_yes={_kalshi_yes}')
-                        bot['net_yes'] = _kalshi_yes
-                        if _kalshi_yes == 0:
+                    # Sum positions claimed by OTHER bots on this ticker
+                    _other_yes = 0
+                    _other_no = 0
+                    for _ob_id, _ob in active_bots.items():
+                        if _ob_id == bot_id or _ob.get('ticker') != ticker:
+                            continue
+                        if _ob.get('status') in ('completed',):
+                            continue
+                        _oby = _ob.get('yes_fill_qty', 0) or _ob.get('net_yes', 0)
+                        _obn = _ob.get('no_fill_qty', 0) or _ob.get('net_no', 0)
+                        _other_yes += max(0, _oby)
+                        _other_no += max(0, _obn)
+                    # This bot's fair share = Kalshi total minus what others claim
+                    _fair_yes = max(0, _kalshi_yes - _other_yes)
+                    _fair_no = max(0, _kalshi_no - _other_no)
+
+                    # Clamp DOWN: bot thinks more than its fair share
+                    if net_yes > _fair_yes:
+                        print(f'🛡️ RECONCILE DOWN: {bot_id} bot_yes={net_yes} → {_fair_yes} (kalshi={_kalshi_yes} others={_other_yes})')
+                        bot['net_yes'] = _fair_yes
+                        if _fair_yes == 0:
                             bot['avg_yes_cost'] = 0
                             bot['total_yes_cost'] = 0
-                        _clamped = True
-                    if net_no > _kalshi_no:
-                        print(f'🛡️ RECONCILE CLAMP: {bot_id} bot_no={net_no} kalshi_no={_kalshi_no}')
-                        bot['net_no'] = _kalshi_no
-                        if _kalshi_no == 0:
+                        _changed = True
+                    if net_no > _fair_no:
+                        print(f'🛡️ RECONCILE DOWN: {bot_id} bot_no={net_no} → {_fair_no} (kalshi={_kalshi_no} others={_other_no})')
+                        bot['net_no'] = _fair_no
+                        if _fair_no == 0:
                             bot['avg_no_cost'] = 0
                             bot['total_no_cost'] = 0
-                        _clamped = True
-                    if _clamped:
-                        bot_log('APEX_MM_RECONCILE_CLAMP', bot_id, {
+                        _changed = True
+
+                    # Clamp UP: Kalshi has more than bot + others claim (missing fills)
+                    if net_yes < _fair_yes:
+                        _missing = _fair_yes - net_yes
+                        # Estimate cost from midpoint (best we can do without fill data)
+                        _est_cost = bot.get('midpoint', 50)
+                        bot['net_yes'] = _fair_yes
+                        bot['total_yes_cost'] = bot.get('total_yes_cost', 0) + (_est_cost * _missing)
+                        bot['avg_yes_cost'] = round(bot['total_yes_cost'] / _fair_yes) if _fair_yes > 0 else 0
+                        print(f'🛡️ RECONCILE UP: {bot_id} bot_yes={net_yes} → {_fair_yes} (+{_missing} missing, est@{_est_cost}c)')
+                        _changed = True
+                    if net_no < _fair_no:
+                        _missing = _fair_no - net_no
+                        _est_cost = 100 - bot.get('midpoint', 50)
+                        bot['net_no'] = _fair_no
+                        bot['total_no_cost'] = bot.get('total_no_cost', 0) + (_est_cost * _missing)
+                        bot['avg_no_cost'] = round(bot['total_no_cost'] / _fair_no) if _fair_no > 0 else 0
+                        print(f'🛡️ RECONCILE UP: {bot_id} bot_no={net_no} → {_fair_no} (+{_missing} missing, est@{_est_cost}c)')
+                        _changed = True
+
+                    if _changed:
+                        bot_log('APEX_MM_RECONCILE', bot_id, {
                             'old_yes': net_yes, 'old_no': net_no,
                             'kalshi_yes': _kalshi_yes, 'kalshi_no': _kalshi_no,
+                            'other_yes': _other_yes, 'other_no': _other_no,
+                            'new_yes': bot.get('net_yes', 0), 'new_no': bot.get('net_no', 0),
                         }, level='WARN')
                         # Reprice exit if inventory changed
                         _new_yes = bot.get('net_yes', 0)
@@ -14859,8 +14898,6 @@ def _handle_apex(bot_id, bot, actions):
                                 if _eid:
                                     _safe_cancel(_eid, f'reconcile_flat_{bot_id}')
                                     bot[f'_{_cs}_exit_oid'] = None
-                            # Reset stale ladder fill data — without this, bot sees
-                            # fill_qty >= qty on every rung and refuses to repost
                             for _side_key in ('yes_orders', 'no_orders'):
                                 for _pk, _lvl in list(bot.get(_side_key, {}).items()):
                                     _lvl['fill_qty'] = 0
@@ -20355,9 +20392,9 @@ def apex_mm_edit(bot_id):
     if not changes:
         return jsonify({'ok': True, 'applied_now': False, 'changes': {}})
     # Recalculate inventory limit BEFORE repost so the new limit is used
-    _levels = bot.get('levels', 7)
-    _qty = bot.get('qty_per_level', 10)
-    bot['inventory_limit'] = sum(max(1, round(_qty * (1.0 + (i * 1.0 / max(1, _levels - 1))))) for i in range(_levels))
+    _levels = bot.get('levels', 4)
+    _qty = bot.get('qty_per_level', 1)
+    bot['inventory_limit'] = _levels * _qty * 2  # flat sizing: levels × qty × 2 sides
     status = bot.get('status', '')
     net_yes = bot.get('net_yes', 0)
     net_no = bot.get('net_no', 0)
@@ -20372,10 +20409,36 @@ def apex_mm_edit(bot_id):
         print(f'🔧 APEX MM EDIT DEFERRED: {bot_id} — {changes} (holding inventory, will apply when flat)')
         return jsonify({'ok': True, 'applied_now': False, 'deferred': True, 'changes': changes,
                         'reason': f'Holding {net_yes} YES / {net_no} NO — changes will apply after current cycle completes'})
-    # Flat — apply immediately: pull all, clear pauses, repost both sides
+    # Flat — apply immediately: pull all, check for fills during cancel, then repost
     if status in ('market_making_active', 'mm_depth_pulled'):
+        # Save old values in case we need to revert
+        _old_values = {k: v['old'] for k, v in changes.items()}
         if status == 'market_making_active':
             _apex_mm_pull_all(bot_id, bot, 'edit_repost')
+        # RE-CHECK: did fills arrive during the cancel?
+        # pull_all adds 404-fills to inventory — if bot is no longer flat, revert edit
+        _post_pull_yes = bot.get('net_yes', 0)
+        _post_pull_no = bot.get('net_no', 0)
+        if _post_pull_yes > 0 or _post_pull_no > 0:
+            # Fills happened during cancel — revert all changes, treat as if edit never happened
+            for _key, _old_val in _old_values.items():
+                bot[_key] = _old_val
+                if _key == 'qty_per_level':
+                    bot['base_qty'] = _old_val
+            # Recalc inventory limit with reverted values
+            _levels = bot.get('levels', 4)
+            _qty = bot.get('qty_per_level', 1)
+            bot['inventory_limit'] = _levels * _qty * 2
+            print(f'🚨 APEX MM EDIT ABORTED: {bot_id} — fills during cancel (yes={_post_pull_yes} no={_post_pull_no}), reverted to old params')
+            bot_log('APEX_MM_EDIT_ABORT_FILLS', bot_id, {
+                'changes': changes, 'post_pull_yes': _post_pull_yes, 'post_pull_no': _post_pull_no,
+            }, level='WARN')
+            # Post exit for the new inventory
+            _held = 'yes' if _post_pull_yes > _post_pull_no else 'no'
+            threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _held), daemon=True).start()
+            save_state()
+            return jsonify({'ok': False, 'applied_now': False, 'aborted': True,
+                            'reason': f'Fills arrived during edit — reverted. Holding {_post_pull_yes} YES / {_post_pull_no} NO'})
         # Clear side pauses so both sides repost with new params
         bot['_yes_side_paused'] = False
         bot['_no_side_paused'] = False
@@ -20383,7 +20446,7 @@ def apex_mm_edit(bot_id):
         ticker = bot.get('ticker', '')
         midpoint = _apex_mm_midpoint(ticker)
         if midpoint:
-            base_qty = bot.get('base_qty', bot.get('qty_per_level', 10))
+            base_qty = bot.get('base_qty', bot.get('qty_per_level', 1))
             yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, scale=bot.get('auto_scale', False), inv_limit=bot.get('inventory_limit', 0))
             _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
             bot['midpoint'] = midpoint

@@ -6469,17 +6469,14 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             else if (exitPrice > origTarget) walkBadge = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">SNAPPED</span>`;
             else walkBadge = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">TARGET</span>`;
         }
-        // Zone bar — symmetric around 100c so the breakeven line is always centered
+        // Zone bar — target on left edge, stop loss on right edge, 100c breakeven proportional
         let zoneBarHtml = '';
         if (exitPrice > 0) {
-            const distBelow = 100 - origTargetCombined;
-            const distAbove = stopLoss - 100;
-            const maxDist = Math.max(distBelow, distAbove, 1);
-            const barMin = 100 - maxDist;
-            const barMax = 100 + maxDist;
-            const barRange = barMax - barMin;
-            const combPct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((combined - barMin) / barRange * 100))) : 0;
-            const bePct = barRange > 0 ? Math.max(0, Math.min(100, Math.round((100 - barMin) / barRange * 100))) : 50;
+            const barMin = origTargetCombined;
+            const barMax = stopLoss;
+            const barRange = barMax - barMin || 1;
+            const combPct = Math.max(0, Math.min(100, Math.round((combined - barMin) / barRange * 100)));
+            const bePct = Math.max(0, Math.min(100, Math.round((100 - barMin) / barRange * 100)));
             const markerCol = combined <= origTargetCombined + 1 ? '#00ff88' : combined < 100 ? '#ffaa00' : '#ff4444';
             zoneBarHtml = `<div style="margin-top:6px;">
                 <div style="position:relative;height:6px;background:#0a1018;border-radius:3px;overflow:hidden;">

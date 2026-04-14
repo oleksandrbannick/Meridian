@@ -5907,10 +5907,11 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     }
     const _isSettled = bot._smart_stop_reason === 'final' || bot._market_settled_at > 0;
     const _isCompletedRuns = bot._stop_reason === 'completed runs';
-    // Phantom phase colors: amber=waiting, blue=hedging, green=done, red=error/stopped
-    const _phAmber = '#ffaa00', _phBlue = '#00aaff', _phGreen = '#00ff88', _phRed = '#ff4444';
+    // Phantom phase colors: amber=waiting, blue=hedging, green=done, red=error/stopped, purple=parked
+    const _phAmber = '#ffaa00', _phBlue = '#00aaff', _phGreen = '#00ff88', _phRed = '#ff4444', _phPurple = '#aa77ff';
+    const _isParked = status === 'dog_anchor_posted' && bot._parked_at_ceiling;
     const statusMap = {
-        'dog_anchor_posted': '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
+        'dog_anchor_posted': _isParked ? '🅿️ PARKED' : '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
         'dog_filled': '👻 FILLED — HEDGING', 'ladder_filled_no_fav': '👻 FILLED — HEDGING',
         'fav_hedge_posted': bot._game_over_holding ? '⏳ HOLDING — SETTLEMENT' : bot._taker_fired ? '⚡ BID+1' : '⭐ HEDGE POSTED', 'waiting_repeat': bot._just_completed ? '✅ COMPLETED' : bot._flip_pending ? '⚡ FLIPPING' : '🔄 REPEATING',
         'completed': _isSettled ? '🏁 SETTLED' : _isAwaitingSettlement ? '⏳ AWAITING SETTLEMENT' : _isDeathZone ? '🛑 END OF GAME' : _isSmartStopped ? '⏹ SMART STOP' : _isCompletedRuns ? '✅ COMPLETED RUNS' : '✅ COMPLETE',
@@ -5919,7 +5920,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
         'awaiting_settlement': '⏳ AWAITING SETTLEMENT',
     };
     const borderMap = {
-        'dog_anchor_posted': _phAmber, 'ladder_posted': _phAmber,
+        'dog_anchor_posted': _isParked ? _phPurple : _phAmber, 'ladder_posted': _phAmber,
         'dog_filled': _phRed, 'ladder_filled_no_fav': _phRed,
         'fav_hedge_posted': bot._game_over_holding ? _phAmber : _phBlue, 'waiting_repeat': bot._just_completed ? _phGreen : _phAmber,
         'completed': _isSettled ? _phGreen : _isAwaitingSettlement ? _phAmber : _isDeathZone ? _phRed : _isSmartStopped ? _phRed : _phGreen,

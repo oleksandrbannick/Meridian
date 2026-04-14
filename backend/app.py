@@ -12049,6 +12049,9 @@ def _handle_phantom(bot_id, bot, actions):
                 # Hard price ceiling: dog never exceeds 40¢ — park there and wait
                 if new_dog_price > 40:
                     new_dog_price = 40
+                    bot['_parked_at_ceiling'] = True
+                else:
+                    bot['_parked_at_ceiling'] = False
 
                 # Price floor: don't repost at < 2¢ — pull order and wait for recovery
                 if new_dog_price < 2:
@@ -13377,6 +13380,7 @@ def _handle_phantom(bot_id, bot, actions):
                 _drift_reason = f'price_too_low_{new_dog_price}c'
             elif new_dog_price > 40:
                 new_dog_price = 40  # park at ceiling, don't stop
+                bot['_parked_at_ceiling'] = True
             if _drift_stop:
                 # Pull and wait — don't stop the bot
                 bot['status'] = 'dog_anchor_posted'

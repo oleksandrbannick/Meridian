@@ -1134,15 +1134,15 @@
                         <div>
                             <label style="color:#ff7043;font-weight:700;font-size:11px;letter-spacing:.05em;display:block;margin-bottom:6px;">RUNGS</label>
                             <div style="display:flex;gap:5px;" id="mm-levels-grid">
+                                <button onclick="selectMMLevels(2)" class="mm-levels-btn" data-levels="2" style="width:36px;height:36px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;">2</button>
                                 <button onclick="selectMMLevels(3)" class="mm-levels-btn" data-levels="3" style="width:36px;height:36px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;">3</button>
+                                <button onclick="selectMMLevels(4)" class="mm-levels-btn" data-levels="4" style="width:36px;height:36px;border-radius:50%;background:#ff704318;border:1px solid #ff7043;color:#ff7043;cursor:pointer;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;">4</button>
                                 <button onclick="selectMMLevels(5)" class="mm-levels-btn" data-levels="5" style="width:36px;height:36px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;">5</button>
-                                <button onclick="selectMMLevels(7)" class="mm-levels-btn" data-levels="7" style="width:36px;height:36px;border-radius:50%;background:#ff704318;border:1px solid #ff7043;color:#ff7043;cursor:pointer;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;">7</button>
-                                <button onclick="selectMMLevels(10)" class="mm-levels-btn" data-levels="10" style="width:36px;height:36px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;">10</button>
                             </div>
                         </div>
                         <div>
                             <label style="color:#ff7043;font-weight:700;font-size:11px;letter-spacing:.05em;display:block;margin-bottom:6px;">QTY / RUNG</label>
-                            <input type="number" id="mm-qty-per-level" min="1" max="100" value="5" oninput="updateMMPreview(); updateMMMaxDefault();"
+                            <input type="number" id="mm-qty-per-level" min="1" max="100" value="1" oninput="updateMMPreview(); updateMMMaxDefault();"
                                    style="width:100%;padding:8px;background:#0a0e1a;border:1px solid #ff704344;border-radius:6px;color:#ff7043;font-size:16px;font-weight:700;text-align:center;outline:none;transition:all .15s;box-sizing:border-box;" onfocus="this.style.borderColor='#ff7043'" onblur="this.style.borderColor='#ff704344'">
                         </div>
                     </div>
@@ -1169,18 +1169,9 @@
                         </div>
                     </div>
 
-                    <!-- Auto-Scale -->
-                    <div style="margin-bottom:12px;display:flex;align-items:center;gap:8px;">
-                        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;">
-                            <input type="checkbox" id="mm-auto-scale" checked style="accent-color:#ff7043;width:14px;height:14px;" onchange="updateMMPreview()">
-                            <span style="color:#ff7043;font-size:11px;font-weight:700;">Auto-Scale</span>
-                        </label>
-                        <span style="color:#3a4560;font-size:9px;">deeper rungs = more qty</span>
-                    </div>
-
                     <!-- Hidden fields -->
                     <input type="hidden" id="mm-start-gap" value="2">
-                    <input type="hidden" id="mm-levels" value="7">
+                    <input type="hidden" id="mm-levels" value="4">
                     <input type="hidden" id="mm-spacing" value="1">
                     <input type="hidden" id="mm-inventory-limit" value="0">
                     <input type="hidden" id="mm-smart-mode" value="1">
@@ -3225,7 +3216,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260414220000"></script>
+    <script src="app.js?v=20260415010000"></script>
     <!-- Bottom status bar — always visible -->
     <div id="bottom-status-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#080c16;border-top:1px solid #1a2035;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;font-size:11px;">
         <span style="color:#3a4560;font-size:10px;letter-spacing:.03em;">hi irene</span>

@@ -5725,8 +5725,8 @@ function selectMMLossLimit(cents) {
 }
 
 function updateMMMaxDefault() {
-    const levels = parseInt(document.getElementById('mm-levels')?.value) || 7;
-    const qty = parseInt(document.getElementById('mm-qty-per-level')?.value) || 10;
+    const levels = parseInt(document.getElementById('mm-levels')?.value) || 4;
+    const qty = parseInt(document.getElementById('mm-qty-per-level')?.value) || 1;
     const maxEl = document.getElementById('mm-inventory-limit');
     const hintEl = document.getElementById('mm-max-hint');
     const defaultMax = levels * qty;
@@ -5742,18 +5742,16 @@ function updateMMPreview() {
     if (yesBid <= 0 || noBid <= 0) { el.innerHTML = '<span style="color:#ff4444;">No orderbook data</span>'; return; }
     const mid = Math.round((yesBid + (100 - noBid)) / 2);
     const gap = parseInt(document.getElementById('mm-start-gap')?.value) || 2;
-    const levels = parseInt(document.getElementById('mm-levels')?.value) || 7;
+    const levels = parseInt(document.getElementById('mm-levels')?.value) || 4;
     const spacing = parseInt(document.getElementById('mm-spacing')?.value) || 1;
-    const baseQty = parseInt(document.getElementById('mm-qty-per-level')?.value) || 5;
-    const autoScale = document.getElementById('mm-auto-scale')?.checked ?? true;
+    const baseQty = parseInt(document.getElementById('mm-qty-per-level')?.value) || 1;
     const noAnchor = 100 - mid;
     const yesLevels = [], noLevels = [];
     for (let i = 0; i < levels; i++) {
         const offset = gap + (i * spacing);
         const yp = mid - offset;
         const np = noAnchor - offset;
-        const scale = (autoScale && levels > 1) ? 1.0 + (i * 1.0 / (levels - 1)) : 1.0;
-        const lq = Math.max(1, Math.round(baseQty * scale));
+        const lq = Math.max(1, baseQty);
         if (yp >= 1) yesLevels.push({p: yp, q: lq});
         if (np >= 1) noLevels.push({p: np, q: lq});
     }
@@ -5783,11 +5781,10 @@ async function deployMarketMaker() {
     if (!currentArbMarket) { alert('No market selected'); return; }
     const ticker = currentArbMarket.ticker;
     const startGap = parseInt(document.getElementById('mm-start-gap')?.value) || 2;
-    const levels = parseInt(document.getElementById('mm-levels')?.value) || 7;
+    const levels = parseInt(document.getElementById('mm-levels')?.value) || 4;
     const spacing = parseInt(document.getElementById('mm-spacing')?.value) || 1;
-    const qtyPerLevel = parseInt(document.getElementById('mm-qty-per-level')?.value) || 10;
+    const qtyPerLevel = parseInt(document.getElementById('mm-qty-per-level')?.value) || 1;
     const invLimit = levels * qtyPerLevel * 2;
-    const autoScale = document.getElementById('mm-auto-scale')?.checked ?? true;
     const lossLimitCents = parseInt(document.getElementById('mm-loss-limit')?.value) || 0;
     const width = _mmSelectedWidth;
     const lossStr = lossLimitCents > 0 ? `Loss limit: $${(lossLimitCents/100).toFixed(2)}` : 'No loss limit';
@@ -5808,7 +5805,7 @@ async function deployMarketMaker() {
                 ticker, start_gap: startGap, levels, spacing,
                 qty_per_level: qtyPerLevel,
                 inventory_limit: invLimit,
-                auto_scale: autoScale,
+                auto_scale: false,
                 loss_limit_cents: lossLimitCents,
                 smart_mode: lossLimitCents > 0 ? true : false,
             }),

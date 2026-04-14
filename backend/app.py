@@ -4902,6 +4902,8 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                                     except Exception:
                                         pass
                             threading.Thread(target=_velocity_cancel, args=(_vg_to_cancel,), daemon=True).start()
+                        # Force immediate REST reconciliation after velocity gate
+                        bot['_last_reconcile'] = 0
 
                 # Check if this fill closes opposite position (round trip)
                 opposite = 'no' if matched_side == 'yes' else 'yes'
@@ -7482,7 +7484,7 @@ def _apex_mm_midpoint(ticker):
 
 def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, scale=True, inv_limit=0):
     """Generate YES and NO bid prices + quantities for the ladder.
-    Auto-scale: deeper levels get more contracts (pulls weighted avg down).
+    Flat sizing: every rung gets base_qty (no scaling).
     If inv_limit > 0, total qty per side is capped at that limit.
     Returns (yes_levels: list[(price, qty)], no_levels: list[(price, qty)]) sorted descending by price."""
     yes_levels = []
@@ -7492,12 +7494,7 @@ def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, scale=Tru
         offset = start_gap + (i * spacing)
         yp = midpoint - offset
         np = no_anchor - offset
-        # Auto-scale: level 0 = base_qty, deeper levels get more
-        if scale and levels > 1:
-            scale_factor = 1.0 + (i * 1.0 / (levels - 1))  # 1.0x at closest, 2.0x at deepest
-        else:
-            scale_factor = 1.0
-        level_qty = max(1, round(base_qty * scale_factor))
+        level_qty = max(1, base_qty)
         if yp >= 1:
             yes_levels.append((int(yp), level_qty))
         if np >= 1:
@@ -7769,7 +7766,7 @@ def _apex_mm_repost_ladder(bot_id, bot):
         bot_log('APEX_MM_REPOST', bot_id, {'midpoint': midpoint, 'skew_pending': True})
         print(f'📊 APEX MM REPOST: {bot_id} mid={midpoint} (skew pending, holding inventory)')
     else:
-        yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, scale=bot.get('auto_scale', True), inv_limit=bot.get('inventory_limit', 0))
+        yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, scale=bot.get('auto_scale', False), inv_limit=bot.get('inventory_limit', 0))
         if not yes_levels and not no_levels:
             return
         success = _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
@@ -8076,8 +8073,8 @@ def _apex_mm_walk_up(bot_id, bot):
     live_combined = avg_held + live_exit_bid
 
     # ── SOAK: hold at target for queue priority ──
-    SOAK_SECONDS = 15
-    MAX_SOAK_SECONDS = 25  # hard cap — no infinite waiting
+    SOAK_SECONDS = 25
+    MAX_SOAK_SECONDS = 35  # hard cap — no infinite waiting
     soak_start = bot.get('_exit_soak_start') or bot.get('_exit_posted_at', now)
     if not bot.get('_exit_soak_start'):
         bot['_exit_soak_start'] = soak_start
@@ -8532,7 +8529,7 @@ def _apex_mm_cycle_reset(bot_id, bot):
         for _lv in bot.get(_sk, {}).values():
             _lv['fill_qty'] = 0
             _lv['oid'] = None
-    yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, scale=bot.get('auto_scale', True), inv_limit=bot.get('inventory_limit', 0))
+    yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, scale=bot.get('auto_scale', False), inv_limit=bot.get('inventory_limit', 0))
     _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
     bot['midpoint'] = midpoint
     bot['_skew_active'] = False
@@ -8644,7 +8641,7 @@ def _apex_mm_fresh_ladder(bot_id, bot):
         for _lv in bot.get(_sk, {}).values():
             _lv['fill_qty'] = 0
             _lv['oid'] = None
-    yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, scale=bot.get('auto_scale', True), inv_limit=bot.get('inventory_limit', 0))
+    yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, scale=bot.get('auto_scale', False), inv_limit=bot.get('inventory_limit', 0))
     _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
     bot['midpoint'] = midpoint
     bot['_skew_active'] = False
@@ -8905,7 +8902,7 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
         base_qty = bot.get('base_qty', bot.get('qty_per_level', 10))
         yes_levels, no_levels = _apex_mm_levels(
             stored_midpoint, bot['start_gap'], bot['levels'], bot['spacing'],
-            base_qty=base_qty, scale=bot.get('auto_scale', True),
+            base_qty=base_qty, scale=bot.get('auto_scale', False),
             inv_limit=bot.get('inventory_limit', 0)
         )
 
@@ -9740,7 +9737,7 @@ def create_ladder_arb_bot():
         qty_per_level = int(data.get('qty_per_level', 10))
         loss_limit_cents = int(data.get('loss_limit_cents', 500))
         smart_mode = bool(data.get('smart_mode', False))
-        auto_scale = bool(data.get('auto_scale', True))
+        auto_scale = bool(data.get('auto_scale', False))
 
         if not ticker:
             return jsonify({'error': 'Missing ticker'}), 400
@@ -9909,6 +9906,7 @@ def create_ladder_arb_bot():
             '_velocity_gated': False,
             '_velocity_fills': [],
             '_cycle_start_pnl': 0,
+            '_last_reconcile': 0,
         }
 
         success = _apex_mm_post_ladder(bot_id, active_bots[bot_id], yes_levels, no_levels)
@@ -14799,6 +14797,65 @@ def _handle_apex(bot_id, bot, actions):
                 'net_yes': net_yes, 'net_no': net_no,
             }, level='WARN')
             threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _held_side_r), daemon=True).start()
+
+    # 3.9. REST reconciliation heartbeat: every 30s while holding inventory,
+    # verify bot's net_yes/net_no against Kalshi's actual positions.
+    # Kills orphan compounding — bot can never drift more than 30s from reality.
+    net_yes = bot.get('net_yes', 0)
+    net_no = bot.get('net_no', 0)
+    if (net_yes > 0 or net_no > 0) and now - bot.get('_last_reconcile', 0) >= 30:
+        bot['_last_reconcile'] = now
+        try:
+            if api_read_limiter.try_wait():
+                _pos_resp = kalshi_client.get_positions(ticker=ticker)
+                _pos_list = _pos_resp.get('market_positions', _pos_resp.get('positions', []))
+                _kalshi_net = 0
+                for _p in _pos_list:
+                    if _p.get('ticker') == ticker:
+                        _kalshi_net = _parse_position_qty(_p)
+                        break
+                _kalshi_yes = max(0, _kalshi_net)
+                _kalshi_no = max(0, -_kalshi_net)
+                _clamped = False
+                if net_yes != _kalshi_yes or net_no != _kalshi_no:
+                    if net_yes > _kalshi_yes:
+                        print(f'🛡️ RECONCILE CLAMP: {bot_id} bot_yes={net_yes} kalshi_yes={_kalshi_yes}')
+                        bot['net_yes'] = _kalshi_yes
+                        if _kalshi_yes == 0:
+                            bot['avg_yes_cost'] = 0
+                            bot['total_yes_cost'] = 0
+                        _clamped = True
+                    if net_no > _kalshi_no:
+                        print(f'🛡️ RECONCILE CLAMP: {bot_id} bot_no={net_no} kalshi_no={_kalshi_no}')
+                        bot['net_no'] = _kalshi_no
+                        if _kalshi_no == 0:
+                            bot['avg_no_cost'] = 0
+                            bot['total_no_cost'] = 0
+                        _clamped = True
+                    if _clamped:
+                        bot_log('APEX_MM_RECONCILE_CLAMP', bot_id, {
+                            'old_yes': net_yes, 'old_no': net_no,
+                            'kalshi_yes': _kalshi_yes, 'kalshi_no': _kalshi_no,
+                        }, level='WARN')
+                        # Reprice exit if inventory changed
+                        _new_yes = bot.get('net_yes', 0)
+                        _new_no = bot.get('net_no', 0)
+                        if _new_yes > 0 or _new_no > 0:
+                            _held = 'yes' if _new_yes > _new_no else 'no'
+                            threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _held), daemon=True).start()
+                        elif _new_yes == 0 and _new_no == 0:
+                            # Kalshi says flat but we thought we were holding — cancel exit
+                            for _cs in ('yes', 'no'):
+                                _eid = bot.get(f'_{_cs}_exit_oid')
+                                if _eid:
+                                    _safe_cancel(_eid, f'reconcile_flat_{bot_id}')
+                                    bot[f'_{_cs}_exit_oid'] = None
+                            print(f'🛡️ RECONCILE FLAT: {bot_id} — Kalshi says flat, cancelled stale exits')
+        except Exception as _re:
+            print(f'⚠ RECONCILE FAIL: {bot_id} {_re}')
+        # Re-read net values after potential clamp
+        net_yes = bot.get('net_yes', 0)
+        net_no = bot.get('net_no', 0)
 
     # 4. Unrealized P&L stop
     if _apex_mm_check_loss_limit(bot_id, bot):
@@ -20290,7 +20347,7 @@ def apex_mm_edit(bot_id):
         midpoint = _apex_mm_midpoint(ticker)
         if midpoint:
             base_qty = bot.get('base_qty', bot.get('qty_per_level', 10))
-            yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, scale=bot.get('auto_scale', True), inv_limit=bot.get('inventory_limit', 0))
+            yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, scale=bot.get('auto_scale', False), inv_limit=bot.get('inventory_limit', 0))
             _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
             bot['midpoint'] = midpoint
             bot['status'] = 'market_making_active'

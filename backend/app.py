@@ -6286,16 +6286,16 @@ def _is_game_ending(ticker: str) -> bool:
                     rule = (prefix, r)
         if not rule:
             return False  # Unknown sport — don't trust ESPN status
+        r = rule[1]
+        # Tennis: NEVER trust score-based game ending — scores are unreliable
+        # Only Kalshi market status (settled/finalized) should end tennis bots
+        if r.get('tennis'):
+            return False
         status = score_info.get('status', '')
         if status == 'post':
             return True
         if status == 'in':
-            r = rule[1]
             period = score_info.get('period', 0)
-            # Tennis: ESPN score fields are unreliable (may be games not sets).
-            # Don't auto-cancel based on score — only trust ESPN 'post' status.
-            if r.get('tennis'):
-                return False
             # Clock-based sports: check final 60 seconds
             clock = score_info.get('clock', '')
             secs = _parse_clock_seconds(clock)

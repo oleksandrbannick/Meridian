@@ -1740,17 +1740,31 @@ def reconcile_positions():
                 continue
             if t not in expected:
                 expected[t] = {'yes': 0, 'no': 0, 'bots': []}
-            qty = bot.get('quantity', 0)
-            yes_filled = bot.get('yes_fill_qty', 0)
-            no_filled = bot.get('no_fill_qty', 0)
+
+            # Apex MM: uses net_yes/net_no (inventory tracking, not fill counts)
+            if bot.get('type') == 'apex_mm':
+                yes_filled = bot.get('net_yes', 0)
+                no_filled = bot.get('net_no', 0)
+            else:
+                yes_filled = bot.get('yes_fill_qty', 0)
+                no_filled = bot.get('no_fill_qty', 0)
+
             expected[t]['yes'] += yes_filled
             expected[t]['no'] += no_filled
             expected[t]['bots'].append({
                 'bot_id': bot_id,
+                'type': bot.get('type', ''),
                 'status': bot.get('status'),
                 'yes_filled': yes_filled,
                 'no_filled': no_filled,
             })
+
+            # Apex MM exit: if mm_exiting with buy-opposite exit, the opposite ticker
+            # isn't tracked separately — it's the same ticker, just the other side.
+            # Cross-market phantom: hedge_ticker may differ
+            _ht = bot.get('hedge_ticker')
+            if _ht and _ht != t and _ht not in expected:
+                expected[_ht] = {'yes': 0, 'no': 0, 'bots': []}
 
         # Find discrepancies
         all_tickers = set(list(actual.keys()) + list(expected.keys()))

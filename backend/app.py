@@ -755,7 +755,45 @@ def get_markets():
         print(f"✅ Sports markets: {len(all_markets)} total from {len(series_counts)} active series")
         for s, c in sorted(series_counts.items(), key=lambda x: -x[1]):
             print(f"  {s}: {c} markets")
-        
+
+        # Tennis backfill: Kalshi listing API drops past-expiration markets from bulk queries,
+        # but tournaments span multiple days. Use events API to find missing events, then
+        # fetch their markets individually.
+        _tennis_series_in_fetch = [s for s in series_to_fetch
+                                   if s.startswith(('KXATP', 'KXWTA'))]
+        if _tennis_series_in_fetch:
+            _existing_events = {m.get('event_ticker', '') for m in all_markets
+                                if m.get('event_ticker', '').startswith(('KXATP', 'KXWTA'))}
+            _missing_events = []
+            for series in _tennis_series_in_fetch:
+                try:
+                    api_read_limiter.wait()
+                    ev_resp = kalshi_client.get_events_by_series(series, status='open', limit=200)
+                    for ev in ev_resp.get('events', []):
+                        et = ev.get('event_ticker', '')
+                        if et and et not in _existing_events:
+                            _missing_events.append(et)
+                except Exception as e:
+                    print(f'⚠️ Tennis backfill events fetch failed for {series}: {e}')
+            if _missing_events:
+                _backfill_count = 0
+                for et in _missing_events:
+                    try:
+                        api_read_limiter.wait()
+                        resp = kalshi_client.get_event(et, with_nested_markets=True)
+                        ev_data = resp.get('event', resp) if isinstance(resp, dict) else {}
+                        ev_markets = ev_data.get('markets', [])
+                        for m in ev_markets:
+                            if m.get('status') in ('active', 'open') and not m.get('result'):
+                                m['market_type'] = 'winner'
+                                m['series_ticker'] = m.get('ticker', '').split('-')[0]
+                                all_markets.append(m)
+                                _backfill_count += 1
+                    except Exception as e:
+                        print(f'⚠️ Tennis backfill market fetch failed for {et}: {e}')
+                if _backfill_count:
+                    print(f'🎾 Tennis backfill: recovered {_backfill_count} markets from {len(_missing_events)} past-expiration events')
+
         # Deduplicate by ticker
         seen = set()
         unique_markets = []
@@ -778,6 +816,10 @@ def get_markets():
         _today_ord = int(_today_yr) * 10000 + _month_map.get(_today_mon, 0) * 100 + _today_day
         before_filter = len(unique_markets)
         filtered_markets = []
+        # Tennis tournaments span multiple days — allow up to 7 days back
+        _tennis_prefixes = ('KXATP', 'KXWTA')
+        _7d_ago = _us_now - timedelta(days=7)
+        _7d_ord = int(_7d_ago.strftime('%y')) * 10000 + _month_map.get(_7d_ago.strftime('%b').upper(), 0) * 100 + int(_7d_ago.strftime('%d'))
         for m in unique_markets:
             # Filter by ticker date — remove yesterday's unsettled markets
             _ticker = m.get('event_ticker', m.get('ticker', ''))
@@ -786,8 +828,10 @@ def get_markets():
             if _dm:
                 _yr, _mon, _day = _dm.group(1), _dm.group(2), _dm.group(3)
                 _ticker_ord = int(_yr) * 10000 + _month_map.get(_mon, 0) * 100 + int(_day)
-                if _ticker_ord < _today_ord:
-                    continue  # yesterday or older — skip
+                _is_tennis = _ticker.startswith(_tennis_prefixes)
+                _cutoff = _7d_ord if _is_tennis else _today_ord
+                if _ticker_ord < _cutoff:
+                    continue  # too old — skip
             exp_str = m.get('expected_expiration_time', '')
             if exp_str:
                 try:
@@ -22449,16 +22493,34 @@ def get_live_kalshi_markets_endpoint():
         espn = _espn_cache.get('data', {})
         live_abbrs = {abbr for abbr, info in espn.items() if info.get('live')}
 
+        # Refresh milestones for tennis live detection
+        _refresh_milestones_cache()
+
         live_markets = []
         for m in cached:
             ticker = m.get('ticker', '')
             sport = _detect_sport(ticker)
             if sport_filter and sport != sport_filter:
                 continue
-            # Check if any team in this market is live via ESPN
-            title = (m.get('title', '') + ' ' + ticker).upper()
-            is_live = any(abbr in title for abbr in live_abbrs)
-            # Also check expiration — if expected_expiration is within the next few hours, likely live
+
+            is_live = False
+
+            # Tennis: use Kalshi milestones (ESPN doesn't cover tennis)
+            is_tennis = ticker.startswith('KXATP') or ticker.startswith('KXWTA')
+            if is_tennis:
+                parts = ticker.split('-')
+                if len(parts) >= 2:
+                    event_ticker = '-'.join(parts[:2])
+                    ms_status = _get_milestone_status(event_ticker)
+                    if ms_status is not None:
+                        is_live = (ms_status == 'live')
+
+            # Other sports: check ESPN team abbreviations
+            if not is_live and not is_tennis:
+                title = (m.get('title', '') + ' ' + ticker).upper()
+                is_live = any(abbr in title for abbr in live_abbrs)
+
+            # Fallback: expiration time heuristic
             if not is_live:
                 exp = m.get('expected_expiration_time', '')
                 if exp:

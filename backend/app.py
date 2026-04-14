@@ -14883,6 +14883,25 @@ def _handle_apex(bot_id, bot, actions):
     # NOT consecutive losses. The consecutive_losses field is tracked for stats only.
     # _smart_mode_should_repeat handles the restart/stop decision after each exit cycle.
 
+    # 5.5. Stale ladder recovery: if flat and no live orders on either side,
+    # the ladder was pulled/drained and never reposted. Repost now.
+    net_yes = bot.get('net_yes', 0)
+    net_no = bot.get('net_no', 0)
+    if net_yes == 0 and net_no == 0:
+        _has_live_oids = False
+        for _sk in ('yes_orders', 'no_orders'):
+            for _pk, _lv in bot.get(_sk, {}).items():
+                if isinstance(_lv, dict) and _lv.get('oid'):
+                    _has_live_oids = True
+                    break
+            if _has_live_oids:
+                break
+        if not _has_live_oids:
+            print(f'🔄 APEX MM STALE LADDER: {bot_id} — flat with no live orders, reposting')
+            bot_log('APEX_MM_STALE_REPOST', bot_id, {})
+            _apex_mm_repost_ladder(bot_id, bot)
+            return
+
     # 6. Walk-up: if exit order stuck, gradually amend toward breakeven
     _apex_mm_walk_up(bot_id, bot)
 

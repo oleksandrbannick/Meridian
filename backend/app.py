@@ -1558,9 +1558,9 @@ def get_depth_rec(ticker):
     ppi, rd, ppi_det = _calculate_ppi(ticker, fav_side, dog_side)
     if ppi is None:
         ppi, rd, ppi_det = 0, 0, {}
-    tier = 'PRIME' if ppi >= 75 else 'SNIPER' if ppi >= 60 else 'TRAP' if ppi >= 45 else 'DEEP' if ppi >= 35 else 'KILL'
+    tier = 'WALL' if ppi >= 85 else 'PRIME' if ppi >= 70 else 'SNIPER' if ppi >= 55 else 'TRAP' if ppi >= 45 else 'DEEP' if ppi >= 40 else 'FLOOR' if ppi >= 35 else 'KILL'
     # Base depth before gap overrides
-    _base_rd = 5 if ppi >= 75 else 6 if ppi >= 60 else 7 if ppi >= 45 else 8 if ppi >= 40 else 9 if ppi >= 35 else 0
+    _base_rd = 4 if ppi >= 85 else 5 if ppi >= 70 else 6 if ppi >= 55 else 7 if ppi >= 45 else 8 if ppi >= 40 else 9 if ppi >= 35 else 0
     _gap_bumped = rd > _base_rd and rd > 0
     reasons = [f'PPI {ppi} {tier}: D={ppi_det.get("d",0)} G=-{ppi_det.get("g",0)} S={ppi_det.get("s",0)} T={ppi_det.get("t",0)}']
     if _gap_bumped:
@@ -6373,12 +6373,13 @@ def _calculate_ppi(ticker, fav_side, dog_side):
     _raw = d_pts - g_pts + s_pts + t_pts
     ppi = max(0, min(100, round(_raw * 100 / 75)))
 
-    # PPI → depth rec (Money Zone mapping — 5c floor, no 3c/4c adverse selection)
-    if ppi >= 75: rec = 5                              # WALL/PRIME: money zone (high confidence)
-    elif ppi >= 60: rec = 6                            # SNIPER: money zone (standard variance)
-    elif ppi >= 45: rec = 7                            # TRAP: historical profit, caution zone
-    elif ppi >= 40: rec = 8                            # DEEP TRAP (high): recovery buffer
-    elif ppi >= 35: rec = 9                            # DEEP TRAP (low): safe haven before pull
+    # PPI → depth rec (v4 — WALL/PRIME/SNIPER/TRAP/DEEP/FLOOR/KILL)
+    if ppi >= 85: rec = 4                              # WALL: ultra-exclusive, pristine book only
+    elif ppi >= 70: rec = 5                            # PRIME: money zone workhorse
+    elif ppi >= 55: rec = 6                            # SNIPER: money zone (standard variance)
+    elif ppi >= 45: rec = 7                            # TRAP: caution zone
+    elif ppi >= 40: rec = 8                            # DEEP: recovery buffer
+    elif ppi >= 35: rec = 9                            # FLOOR: last stop before pull
     else: rec = 0                                      # KILL: pull
     # Fav gaps override (only when not KILL — gaps don't save a toxic book)
     if rec > 0:

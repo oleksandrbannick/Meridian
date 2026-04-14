@@ -14055,10 +14055,14 @@ def _handle_phantom_ladder(bot_id, bot, actions):
                         print(f'   ✅ PHANTOM LADDER FAV FILLED (404 recovery): {bot_id} {_fav_fills}/{hedge_qty}')
                         bot[f'{fav_side}_fill_qty'] = _fav_fills
                         bot['fav_fill_qty'] = _fav_fills
+                        # Order is done — clear OID to stop 404 amend loop
+                        bot['fav_order_id'] = None
                     elif _fav_fills > 0:
                         print(f'   ⚠ PHANTOM LADDER FAV PARTIAL (404 recovery): {bot_id} {_fav_fills}/{hedge_qty}')
                         bot[f'{fav_side}_fill_qty'] = _fav_fills
                         bot['fav_fill_qty'] = _fav_fills
+                        # Order is gone — clear OID so monitor can repost hedge
+                        bot['fav_order_id'] = None
                     else:
                         print(f'   🔙 PHANTOM LADDER FAV GONE (404 recovery): {bot_id} — triggering sellback')
                         bot['fav_order_id'] = None

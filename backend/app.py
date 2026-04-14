@@ -21890,6 +21890,7 @@ def get_orphaned_positions():
     try:
         # Build per-ticker managed qty from active bots
         _managed_qty = {}  # (ticker, side) → total qty managed by bots
+        _mm_tickers = set()  # tickers with active MM bots — exempt from orphan checks
         for _bid, b in active_bots.items():
             _st = b.get('status', '')
             if _st in ('completed', 'stopped', 'cancelled'):
@@ -21912,20 +21913,19 @@ def get_orphaned_positions():
                     fk = (_ht, fav_side)
                     _managed_qty[fk] = _managed_qty.get(fk, 0) + fav_qty
             elif cat == 'ladder_arb' or btype == 'apex_mm':
+                # MM bots actively churn fills — Kalshi position snapshot will transiently
+                # disagree with bot inventory. Exempt active MM tickers entirely to prevent
+                # false-positive orphans. Only flag if bot is exiting/stopped.
+                if _st in ('market_making_active', 'mm_depth_pulled'):
+                    _mm_tickers.add(t)
                 net_yes = int(b.get('net_yes', 0))
                 net_no = int(b.get('net_no', 0))
-                inv_limit = int(b.get('inventory_limit', b.get('qty_per_level', 2)) * b.get('levels', 3))
-                # MM manages up to its inventory limit even when flat (has orders out)
                 if net_yes > 0:
                     k = (t, 'yes')
                     _managed_qty[k] = _managed_qty.get(k, 0) + net_yes
                 elif net_no > 0:
                     k = (t, 'no')
                     _managed_qty[k] = _managed_qty.get(k, 0) + net_no
-                elif _st not in ('mm_exiting',):
-                    # Flat but active — mark ticker as managed (orders are out)
-                    _managed_qty[(t, 'yes')] = _managed_qty.get((t, 'yes'), 0)
-                    _managed_qty[(t, 'no')] = _managed_qty.get((t, 'no'), 0)
             elif btype == 'watch':
                 ws = b.get('side', 'yes')
                 wq = int(b.get('fill_qty', b.get('quantity', 0)))
@@ -21950,6 +21950,9 @@ def get_orphaned_positions():
                 continue
             side = 'yes' if pos_fp > 0 else 'no'
             total_qty = int(abs(pos_fp))
+            # Skip tickers with active MM bots — position churn causes transient mismatches
+            if ticker in _mm_tickers:
+                continue
             managed = _managed_qty.get((ticker, side), 0)
             orphan_qty = max(0, total_qty - managed)
             if orphan_qty > 0:

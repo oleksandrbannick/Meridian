@@ -6573,18 +6573,23 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const sortedNo = Object.entries(noOrders).sort((a,b) => parseInt(b[0]) - parseInt(a[0]));
     const baseQty = bot.base_qty || bot.qty_per_level || 10;
 
-    const _rungHtml = (price, level, sideCol) => {
+    const _rungHtml = (price, level, sideCol, isExitSide) => {
         const filled = level.fill_qty || 0;
         const qty = level.qty || baseQty;
         const active = !!level.oid;
         const isFull = filled >= qty;
         const fillPct = qty > 0 ? Math.min(100, Math.round(filled / qty * 100)) : 0;
-        const barCol = isFull ? sideCol : sideCol;
-        const textCol = isFull ? sideCol : active ? sideCol : '#334';
+        // Exit side rungs: shaded/dimmed (orders pulled, showing for context)
+        // Entry side rungs: full color (still live/posted)
+        const shaded = isExitSide && !active && !isFull;
+        const barCol = shaded ? sideCol + '40' : sideCol;
+        const textCol = shaded ? sideCol + '60' : (isFull ? sideCol : active ? sideCol : '#334');
         const statusTag = isFull ? `<span style="color:${sideCol};font-size:7px;font-weight:800;">FILLED</span>`
             : active ? `<span style="color:${sideCol};font-size:7px;font-weight:700;">LIVE</span>`
+            : isExitSide ? `<span style="color:${sideCol}50;font-size:7px;">PULLED</span>`
             : `<span style="color:#2a3040;font-size:7px;">OFF</span>`;
-        return `<div style="display:grid;grid-template-columns:32px 1fr 30px 36px;align-items:center;gap:3px;padding:2px 0;">
+        const rowOpacity = shaded ? 'opacity:0.45;' : '';
+        return `<div style="display:grid;grid-template-columns:32px 1fr 30px 36px;align-items:center;gap:3px;padding:2px 0;${rowOpacity}">
             <span style="color:${textCol};font-weight:700;font-size:11px;text-align:right;">${price}c</span>
             <div style="height:4px;background:#0a1018;border-radius:2px;overflow:hidden;">
                 <div style="width:${fillPct}%;height:100%;background:${barCol};border-radius:2px;transition:width .3s;"></div>
@@ -6594,9 +6599,11 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         </div>`;
     };
 
+    const yesIsExitSide = hasInv && skewActive && skewDirection === 'exit_yes';
+    const noIsExitSide = hasInv && skewActive && skewDirection === 'exit_no';
     let yesLadder = '', noLadder = '';
-    for (const [price, level] of sortedYes) yesLadder += _rungHtml(price, level, '#00d4ff');
-    for (const [price, level] of sortedNo) noLadder += _rungHtml(price, level, '#ff7043');
+    for (const [price, level] of sortedYes) yesLadder += _rungHtml(price, level, '#00d4ff', yesIsExitSide);
+    for (const [price, level] of sortedNo) noLadder += _rungHtml(price, level, '#ff7043', noIsExitSide);
 
     const yesPaused = bot._yes_side_paused;
     const noPaused = bot._no_side_paused;

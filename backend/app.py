@@ -15022,29 +15022,38 @@ def _handle_apex(bot_id, bot, actions):
                         _new_yes = bot.get('net_yes', 0)
                         _new_no = bot.get('net_no', 0)
                         if _new_yes > 0 or _new_no > 0:
+                            bot['_reconcile_flat_count'] = 0  # not flat — reset counter
                             _held = 'yes' if _new_yes > _new_no else 'no'
                             threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _held), daemon=True).start()
                         elif _new_yes == 0 and _new_no == 0:
-                            # Kalshi says flat but we thought we were holding — cancel exit
-                            # and reset ladder fill counts so bot can repost
-                            for _cs in ('yes', 'no'):
-                                _eid = bot.get(f'_{_cs}_exit_oid')
-                                if _eid:
-                                    _safe_cancel(_eid, f'reconcile_flat_{bot_id}')
-                                    bot[f'_{_cs}_exit_oid'] = None
-                            for _side_key in ('yes_orders', 'no_orders'):
-                                for _pk, _lvl in list(bot.get(_side_key, {}).items()):
-                                    _lvl['fill_qty'] = 0
-                                    _lvl['oid'] = None
-                            # Clear stale exit tracking so it doesn't confuse future cycles
-                            bot['_exit_held_side'] = None
-                            bot['_exit_total_qty'] = 0
-                            bot['_exit_fill_qty'] = 0
-                            bot['_exit_price'] = 0
-                            bot['_counted_order_fills'] = {}
-                            bot['_velocity_gated'] = False
-                            bot['_velocity_fills'] = []
-                            print(f'🛡️ RECONCILE FLAT: {bot_id} — Kalshi says flat, reset ladder + exits + cancelled stale exits')
+                            # Kalshi says flat but we thought we were holding.
+                            # SAFETY: require TWO consecutive flat readings before nuking exits.
+                            # One stale Kalshi read can kill legitimate exit orders.
+                            _prev_flat = bot.get('_reconcile_flat_count', 0)
+                            bot['_reconcile_flat_count'] = _prev_flat + 1
+                            if _prev_flat < 1:
+                                print(f'🛡️ RECONCILE FLAT (1st): {bot_id} — Kalshi says flat, waiting for confirmation')
+                            else:
+                                # Second consecutive flat — safe to reset
+                                bot['_reconcile_flat_count'] = 0
+                                for _cs in ('yes', 'no'):
+                                    _eid = bot.get(f'_{_cs}_exit_oid')
+                                    if _eid:
+                                        _safe_cancel(_eid, f'reconcile_flat_{bot_id}')
+                                        bot[f'_{_cs}_exit_oid'] = None
+                                for _side_key in ('yes_orders', 'no_orders'):
+                                    for _pk, _lvl in list(bot.get(_side_key, {}).items()):
+                                        _lvl['fill_qty'] = 0
+                                        _lvl['oid'] = None
+                                # Clear stale exit tracking so it doesn't confuse future cycles
+                                bot['_exit_held_side'] = None
+                                bot['_exit_total_qty'] = 0
+                                bot['_exit_fill_qty'] = 0
+                                bot['_exit_price'] = 0
+                                bot['_counted_order_fills'] = {}
+                                bot['_velocity_gated'] = False
+                                bot['_velocity_fills'] = []
+                                print(f'🛡️ RECONCILE FLAT (confirmed): {bot_id} — 2 consecutive flat reads, reset ladder + exits')
         except Exception as _re:
             print(f'⚠ RECONCILE FAIL: {bot_id} {_re}')
         # Re-read net values after potential clamp

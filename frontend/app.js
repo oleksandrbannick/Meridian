@@ -6714,7 +6714,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             ${bot._pending_sells.map(s => `<span style="color:#e8eaed;font-size:9px;">${s.side.toUpperCase()} ${s.qty}x @ ${s.price}¢ · ${s.age_s}s</span>`).join('')}
         </div>` : ''}
 
-        ${!isCompleted && !hasInv ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:4px;">
+        ${!isCompleted ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:4px;">
             <div style="background:#060a12;border:1px solid #00d4ff15;border-radius:6px;padding:6px 8px;">
                 <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:4px;margin-bottom:4px;border-bottom:1px solid #00d4ff20;">
                     <span style="color:#00d4ff;font-size:8px;font-weight:800;letter-spacing:.06em;">${yesLabel}${yesPaused ? ' <span style="color:#ffaa00;">PAUSED</span>' : ''}</span>

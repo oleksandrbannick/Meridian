@@ -6159,26 +6159,6 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 <div style="color:#fff;font-weight:700;font-size:14px;margin-bottom:4px;">${favPrice > 0 ? `${favPrice}¢` : `${wouldPostAt}¢`}</div>
                 <div style="color:#555;font-size:10px;margin-bottom:6px;">bid <strong style="color:#ff66aa;">${favBid || '?'}¢</strong> · ask <strong style="color:#ff66aa;">${favAsk || '?'}¢</strong></div>
                 <div style="color:#8892a6;font-size:10px;margin-bottom:4px;">${favStatusText}</div>
-                ${status === 'fav_hedge_posted' && bot.fav_posted_at > 0 ? (() => {
-                    const fd = bot._fav_depth || 0;
-                    const tier = fd < 200 ? 'THIN' : fd < 500 ? 'MOD' : 'THICK';
-                    const timerS = fd < 200 ? 10 : fd < 500 ? 15 : 30;
-                    const elapsed = Math.max(0, Date.now()/1000 - bot.fav_posted_at);
-                    const left = Math.max(0, timerS - elapsed);
-                    const tierCol = tier === 'THIN' ? '#ff4444' : tier === 'MOD' ? '#ffaa00' : '#00ff88';
-                    const combined = avgDogPrice + (favAsk || favBid || favPrice);
-                    const fdLabel = fd >= 1000 ? (fd/1000).toFixed(1) + 'K' : fd;
-                    const bidPlus1 = (favBid || 0) + 1;
-                    const spread = (favAsk || 0) - (favBid || 0);
-                    if (left > 0) {
-                        return `<div style="color:#ff66aa;font-size:9px;font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:6px;">
-                            <span style="background:#ff66aa18;padding:1px 5px;border-radius:3px;">${tier} · ${fdLabel}</span>
-                            <span>bid+1 in ${Math.ceil(left)}s</span>
-                        </div>`;
-                    } else {
-                        return `<div style="color:#ff66aa;font-size:9px;font-weight:700;margin-bottom:4px;">⚡ BID+1 → ${bidPlus1}¢ · ${tier}</div>`;
-                    }
-                })() : ''}
                 ${favPrice > 0 ? `
                     <div style="display:flex;align-items:center;gap:6px;">
                         <div style="flex:1;height:6px;background:#1a2540;border-radius:3px;overflow:hidden;">

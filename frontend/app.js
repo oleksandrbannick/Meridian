@@ -5914,7 +5914,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const _isParked = status === 'dog_anchor_posted' && bot._parked_at_ceiling;
     const statusMap = {
         'dog_anchor_posted': _isParked ? '🅿️ PARKED' : '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
-        'dog_filled': '👻 FILLED — HEDGING', 'ladder_filled_no_fav': '👻 FILLED — HEDGING',
+        'dog_filled': bot._orphan_hedge ? '🚨 ORPHAN — HEDGING' : '👻 FILLED — HEDGING', 'ladder_filled_no_fav': '👻 FILLED — HEDGING',
         'fav_hedge_posted': bot._game_over_holding ? '⏳ HOLDING — SETTLEMENT' : bot._taker_fired ? '⚡ BID+1' : '⭐ HEDGE POSTED', 'waiting_repeat': bot._just_completed ? '✅ COMPLETED' : bot._flip_pending ? '⚡ FLIPPING' : '🔄 REPEATING',
         'completed': _isSettled ? '🏁 SETTLED' : _isAwaitingSettlement ? '⏳ AWAITING SETTLEMENT' : _isDeathZone ? '🛑 END OF GAME' : _isSmartStopped ? '⏹ SMART STOP' : _isCompletedRuns ? '✅ COMPLETED RUNS' : '✅ COMPLETE',
         'stopped': bot._stop_reason === 'scout_orphan_cleanup' ? '🛑 STOPPED — Scout managing' : _isDeathZone ? '🛑 END OF GAME' : _isSmartStopped ? '⏹ SMART STOP' : (bot._pending_sells?.length ? '📤 SELLING' : '🛑 STOPPED'),
@@ -7842,7 +7842,7 @@ async function loadBots() {
                 awaiting_settlement:  '⏳ AWAITING SETTLEMENT',
                 dog_anchor_posted:    '👻 ANCHORED',
                 fav_hedge_posted:     '🔒 HEDGING FAV',
-                dog_filled:           '⚡ DOG FILLED',
+                dog_filled:           bot._orphan_hedge ? '🚨 ORPHAN HEDGE' : '⚡ DOG FILLED',
                 ladder_posted:        '🪜 LADDER ACTIVE',
                 ladder_filled_no_fav: '⚡ LADDER FILLED',
                 market_making_active:   '📊 QUOTING',
@@ -8140,10 +8140,12 @@ async function loadBots() {
                 const estPnl = typeof totalCost === 'number' ? (100 - totalCost) * qty : '?';
                 const pnlColor = typeof estPnl === 'number' ? (estPnl >= 0 ? '#00ff88' : '#ff4444') : '#555';
                 const sellbackAttempts = bot._sellback_attempts || 0;
-                const _hBoxCol = isFavPosted ? _phBlue : _phRed;
+                const _isOrphanHedge = bot._orphan_hedge;
+                const _hBoxCol = _isOrphanHedge ? '#ff4444' : (isFavPosted ? _phBlue : _phRed);
                 stopLossInfo = `<div style="background:${_hBoxCol}11;border:1px solid ${_hBoxCol}33;border-radius:5px;padding:6px 8px;font-size:10px;color:${_hBoxCol};margin-top:6px;">
+                    ${_isOrphanHedge ? '<div style="color:#ff4444;font-weight:800;font-size:11px;margin-bottom:3px;">🚨 ORPHAN — supplemental hedge</div>' : ''}
                     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;margin-bottom:3px;">
-                        <span>✓ <strong>${dogSide}</strong> filled @ ${dogPrice}¢ — ${isFavPosted ? `<strong>${favSide}</strong> hedge @ ${favPrice}¢ ${favFillQty > 0 ? `(${favFillQty}/${qty} filled)` : 'posted'}` : 'posting fav hedge...'}</span>
+                        <span>${_isOrphanHedge ? '⚠' : '✓'} <strong>${dogSide}</strong> filled @ ${dogPrice}¢ — ${isFavPosted ? `<strong>${favSide}</strong> hedge @ ${favPrice}¢ ${favFillQty > 0 ? `(${favFillQty}/${qty} filled)` : 'posted'}` : 'posting fav hedge...'}</span>
                         <span style="color:${hedgeColor};font-weight:700;font-family:monospace;font-size:12px;">${Math.floor(hedgeLeft/60)}:${String(Math.floor(hedgeLeft%60)).padStart(2,'0')}</span>
                     </div>
                     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;">

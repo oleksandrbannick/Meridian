@@ -12946,6 +12946,7 @@ def _handle_phantom(bot_id, bot, actions):
                                 'bot_id': bot_id, 'ticker': ticker, 'side': _rp_held_side, 'qty': _rp_qty,
                             })
                             # Re-enter hedge flow: post fav at bid, let bid-follow complete it
+                            bot['_orphan_hedge'] = True
                             bot['_partial_hedge_qty'] = _rp_qty
                             bot['dog_fill_qty'] = _rp_qty
                             bot[f'{dog_side}_fill_qty'] = _rp_qty
@@ -13559,6 +13560,7 @@ def _handle_phantom(bot_id, bot, actions):
             bot['no_fill_qty'] = 0
             bot['_hedge_fired'] = False  # clear so next fill can hedge
             bot['_trade_recorded'] = False
+            bot.pop('_orphan_hedge', None)
             bot['fav_order_id'] = None
             bot['fav_price'] = None
             bot['fav_walk_count'] = 0

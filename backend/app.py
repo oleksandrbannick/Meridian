@@ -5752,7 +5752,11 @@ def _get_milestone_status(event_ticker: str):
         return None
     if _is_milestone_live(info, event_ticker):
         return 'live'
-    return info.get('status', 'not_started')
+    raw_status = info.get('status', 'not_started')
+    # If raw status is 'live' but date check rejected it, report as not_started
+    if raw_status == 'live':
+        return 'not_started'
+    return raw_status
 
 # ─── ESPN Live Game Cache (for auto-phase detection) ──────────────────────────
 _espn_cache = {'data': {}, 'ts': 0}  # {team_abbr: {'live': bool, 'game_time': str, 'status': str}}

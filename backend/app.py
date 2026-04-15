@@ -6563,10 +6563,23 @@ def _is_phantom_death_zone(ticker, bot=None):
         player_code = parts[-1].upper() if len(parts) >= 3 else ''
         if not player_code:
             return False, ''
+        # Extract BOTH player codes from ticker to avoid 3-letter collisions
+        # Ticker: KXATPMATCH-26APR15COBBER-BER → match_code=COBBER → codes COB+BER
+        _match_part = parts[1] if len(parts) >= 3 else ''
+        _match_code = _match_part[7:].upper() if len(_match_part) > 7 else ''  # strip 7-char date
+        _code_a = _match_code[:3] if len(_match_code) >= 6 else ''
+        _code_b = _match_code[3:6] if len(_match_code) >= 6 else ''
         for _tm in _api_tennis_cache['data']:
             _p1 = _tm.get('event_first_player', '')
             _p2 = _tm.get('event_second_player', '')
-            if player_code not in (_tennis_player_code(_p1), _tennis_player_code(_p2)):
+            _p1_code = _tennis_player_code(_p1)
+            _p2_code = _tennis_player_code(_p2)
+            # Require BOTH codes match (not just one) to avoid cross-match collisions
+            if _code_a and _code_b:
+                _both_match = {_code_a, _code_b} <= {_p1_code, _p2_code}
+                if not _both_match:
+                    continue
+            elif player_code not in (_p1_code, _p2_code):
                 continue
             # Only check live matches — but NEVER during break time (between sets)
             # Between sets, the completed set's score (e.g. 6-4) looks like death zone
@@ -10212,16 +10225,16 @@ def create_anchor_bot():
         if _net_err:
             return jsonify({'error': f'{_net_err}: {_net_bid[:30]}'}), 400
 
-        # Death zone guard: refuse to create bots for games already in death zone
-        _dz_create, _dz_create_reason = _is_phantom_death_zone(ticker)
-        if _dz_create:
-            return jsonify({'error': f'Death zone active — {_dz_create_reason}'}), 400
-
         if target_width < 1:
             return jsonify({'error': 'target_width must be >= 1'}), 400
 
         # Auto-detect game phase
         game_phase = 'live' if _is_game_live(ticker) else 'pregame'
+
+        # Death zone guard: refuse to create bots for games already in death zone
+        _dz_create, _dz_create_reason = _is_phantom_death_zone(ticker)
+        if _dz_create:
+            return jsonify({'error': f'Death zone active — {_dz_create_reason}'}), 400
 
         # Per-ticker bot cap
         MAX_BOTS_PER_TICKER = 5

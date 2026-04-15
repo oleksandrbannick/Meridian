@@ -7622,8 +7622,8 @@ async function loadBots() {
                     header.innerHTML = `
                         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                             <a href="#" onclick="navigateToMarket('${_mktTickerDog}');return false;" style="color:#ffaa00;font-weight:700;text-decoration:none;" title="View in Meridian">${sportIcon} ${groupName}</a>
-                            <span style="color:${groupIsLive ? '#ff6666' : '#556'};font-size:10px;font-weight:700;">${groupPhase}</span>
                             <span style="display:inline-flex;align-items:center;gap:2px;">${_dgDotHtml}</span>
+                            <span style="color:${groupIsLive ? '#ff6666' : '#556'};font-size:10px;font-weight:700;">${groupPhase}</span>
                             ${scoreBadge}
                         </div>
                         <div style="display:flex;align-items:center;gap:8px;">
@@ -7821,8 +7821,8 @@ async function loadBots() {
             groupHeader.innerHTML = `
                 <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                     <a href="#" onclick="navigateToMarket('${_mktTickerApex}');return false;" style="color:#00d4ff;font-weight:700;text-decoration:none;" title="View in Meridian">${sportIcon} ${groupMatchup}</a>
-                    <span style="color:${groupIsLive ? '#ff6666' : '#556'};font-size:10px;font-weight:700;">${groupPhase}</span>
                     <span style="display:inline-flex;align-items:center;gap:2px;">${_dotHtml}</span>
+                    <span style="color:${groupIsLive ? '#ff6666' : '#556'};font-size:10px;font-weight:700;">${groupPhase}</span>
                     ${groupScoreBadge}
                     ${groupSignalBadge}
                 </div>

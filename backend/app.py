@@ -4226,11 +4226,46 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
             save_state()
         except Exception as e:
             if '404' in str(e):
-                # Order is dead — clear it so monitor recovery can repost
-                bot['fav_order_id'] = None
-                bot['status'] = 'dog_filled'
-                bot['_hedge_fired'] = False
-                print(f'⚠ WS SNAP 404: {bot_id} order dead, clearing for repost')
+                # Order gone — check if it FILLED before clearing (prevents double hedge orphan)
+                _snap_fav_oid = bot.get('fav_order_id')
+                _snap_fills = 0
+                try:
+                    api_read_limiter.wait()
+                    _snap_resp = kalshi_client.get_order(_snap_fav_oid)
+                    _snap_data = _snap_resp.get('order', _snap_resp) if isinstance(_snap_resp, dict) else {}
+                    _snap_fills = _parse_fill_count(_snap_data)
+                except Exception:
+                    pass
+                _snap_qty = bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1))
+                if _snap_fills >= _snap_qty:
+                    # Fav FILLED — let completion run, do NOT clear _hedge_fired
+                    bot['fav_fill_qty'] = max(bot.get('fav_fill_qty', 0), _snap_fills)
+                    _snap_fav_side = bot.get('fav_side', 'yes')
+                    bot[f'{_snap_fav_side}_fill_qty'] = _snap_fills
+                    print(f'✅ WS SNAP 404 → FAV FILLED: {bot_id} {_snap_fills}/{_snap_qty} — completion will handle')
+                    bot_log('PHANTOM_WS_SNAP_404_FILLED', bot_id, {
+                        'fills': _snap_fills, 'qty': _snap_qty, 'fav_oid': str(_snap_fav_oid)[:12],
+                    })
+                elif _snap_fills > 0:
+                    # Partial fill — save old oid for P&L, repost for remaining
+                    bot.setdefault('_all_hedge_order_ids', []).append(_snap_fav_oid)
+                    bot['fav_fill_qty'] = max(bot.get('fav_fill_qty', 0), _snap_fills)
+                    _snap_fav_side = bot.get('fav_side', 'yes')
+                    bot[f'{_snap_fav_side}_fill_qty'] = bot['fav_fill_qty']
+                    bot['fav_order_id'] = None
+                    bot['_hedge_fired'] = False
+                    bot['status'] = 'dog_filled'
+                    bot['dog_filled_at'] = time.time()
+                    print(f'⚠ WS SNAP 404 → PARTIAL: {bot_id} {_snap_fills}/{_snap_qty} — reposting remaining')
+                    bot_log('PHANTOM_WS_SNAP_404_PARTIAL', bot_id, {
+                        'fills': _snap_fills, 'qty': _snap_qty,
+                    })
+                else:
+                    # Zero fills — safe to clear and let monitor repost
+                    bot['fav_order_id'] = None
+                    bot['status'] = 'dog_filled'
+                    bot['_hedge_fired'] = False
+                    print(f'⚠ WS SNAP 404: {bot_id} order dead (0 fills), clearing for repost')
                 save_state()
             else:
                 print(f'⚠ WS PHANTOM SNAP FAIL: {bot_id}: {e}')
@@ -11628,34 +11663,7 @@ def _handle_phantom(bot_id, bot, actions):
         save_state()
         return
 
-    # ── Tennis death zone revert: match point saved → restart bot ──
-    if status in ('completed', 'stopped') and bot.get('_death_zone_stopped') and not bot.get('_market_settled_at'):
-        _is_tennis_dz = ticker.startswith(('KXATP', 'KXWTA'))
-        if _is_tennis_dz:
-            _dz_still, _ = _is_phantom_death_zone(ticker, bot)
-            if not _dz_still:
-                # Match point was saved — revert to waiting_repeat
-                bot['_death_zone_stopped'] = False
-                bot['_death_zone_reason'] = None
-                bot['_smart_stopped'] = False
-                bot['_smart_stop_reason'] = None
-                bot['status'] = 'waiting_repeat'
-                bot['waiting_repeat_since'] = time.time()
-                bot.pop('stopped_at', None)
-                bot.pop('completed_at', None)
-                bot.pop('_market_settled_at', None)
-                bot['dog_order_id'] = None
-                bot['_all_dog_order_ids'] = []
-                bot['dog_fill_qty'] = 0
-                bot['fav_fill_qty'] = 0
-                bot['yes_fill_qty'] = 0
-                bot['no_fill_qty'] = 0
-                bot['_hedge_fired'] = False
-                bot['_trade_recorded'] = False
-                bot_log('DEATH_ZONE_REVERT', bot_id, {'reason': 'tennis match point saved'})
-                print(f'🔄 DEATH ZONE REVERT: {bot_id} match point saved — restarting')
-                save_state()
-                return
+    # Tennis death zone revert handled by pre-pass in _run_monitor (before active status filter)
 
     # ── Death zone transition for stopped bots — remove restart capability ──
     if status in ('completed', 'stopped') and not bot.get('_death_zone_stopped') and not bot.get('_market_settled_at'):
@@ -12950,26 +12958,17 @@ def _handle_phantom(bot_id, bot, actions):
                         })
                         return
                     elif _need_hedge < 0:
-                        # Fav overfilled (cancel-race during snap) — sell the excess immediately
+                        # Fav overfilled — NO sell, hold excess until settlement
                         _excess = abs(_need_hedge)
-                        _excess_side = fav_side  # overfill is on the fav side
-                        print(f'🚨 PHANTOM VERIFY → SELL EXCESS: {bot_id} fav overfilled by {_excess} {_excess_side.upper()} — taker selling')
-                        bot_log('PHANTOM_VERIFY_SELL_EXCESS', bot_id, {
+                        _excess_side = fav_side
+                        print(f'⚠ PHANTOM VERIFY → FAV OVERFILL: {bot_id} {_excess}x excess {_excess_side.upper()} — holding until settlement')
+                        bot_log('PHANTOM_VERIFY_FAV_OVERFILL', bot_id, {
                             'excess': _excess, 'side': _excess_side,
                             'dog_fills': _dog_fills, 'fav_fills': _fav_fills,
                         })
-                        try:
-                            _sell_ok, _sell_info = execute_sell(ticker, _excess_side, _excess, reason=f'phantom_verify_excess_{bot_id}')
-                            if _sell_ok:
-                                print(f'✅ PHANTOM EXCESS SOLD: {bot_id} {_excess}x {_excess_side.upper()}')
-                                bot_log('PHANTOM_EXCESS_SOLD', bot_id, {
-                                    'qty': _excess, 'side': _excess_side,
-                                    'sell_info': str(_sell_info)[:200],
-                                })
-                            else:
-                                print(f'⚠ PHANTOM EXCESS SELL FAILED: {bot_id} — will retry next cycle')
-                        except Exception as _sell_err:
-                            print(f'⚠ PHANTOM EXCESS SELL ERROR: {bot_id} {_sell_err}')
+                        _push_notification('phantom_overfill', f'⚠ Phantom {bot_id}: {_excess}x excess {_excess_side.upper()} on {ticker} — holding till settlement', {
+                            'bot_id': bot_id, 'ticker': ticker, 'excess': _excess, 'side': _excess_side,
+                        })
                         # Continue to completion with the matched qty (dog_fills)
                         qty = _dog_fills
                         bot['quantity'] = _dog_fills
@@ -13380,6 +13379,7 @@ def _handle_phantom(bot_id, bot, actions):
                         if _fav_fills >= qty:
                             # Fav was fully filled! Complete the bot.
                             print(f'   ✅ PHANTOM FAV FILLED (404 recovery): {bot_id} {_fav_fills}/{qty} fills')
+                            bot['fav_fill_qty'] = max(bot.get('fav_fill_qty', 0), _fav_fills)
                             bot[f'{fav_side}_fill_qty'] = _fav_fills
                             # Let the next monitor cycle handle completion
                         elif _fav_fills > 0:
@@ -13413,6 +13413,7 @@ def _handle_phantom(bot_id, bot, actions):
                             else:
                                 # Market active — repost hedge for remaining
                                 print(f'   🔙 PHANTOM FAV PARTIAL REPOST (404 recovery): {bot_id} {_fav_fills}/{qty} — reposting for {_remaining_404}')
+                                bot.setdefault('_all_hedge_order_ids', []).append(fav_order_id)
                                 bot['fav_order_id'] = None
                                 bot['_hedge_fired'] = False
                                 bot['status'] = 'dog_filled'
@@ -20942,7 +20943,39 @@ def phantom_edit(bot_id):
                 applied_now = True
                 print(f'🔧 PHANTOM EDIT: {bot_id} amended order with new settings (qty={_amend_qty})')
             except Exception as e:
-                print(f'⚠ PHANTOM EDIT: amend failed for {bot_id}: {e} — will pick up next cycle')
+                _edit_err_str = str(e)
+                if '404' in _edit_err_str:
+                    # Dog order may have filled during the edit amend
+                    _edit_fills = 0
+                    try:
+                        api_read_limiter.wait()
+                        _edit_resp = kalshi_client.get_order(dog_oid)
+                        _edit_data = _edit_resp.get('order', _edit_resp) if isinstance(_edit_resp, dict) else {}
+                        _edit_fills = _parse_fill_count(_edit_data)
+                    except Exception:
+                        pass
+                    if _edit_fills > 0 and not bot.get('_hedge_fired'):
+                        print(f'🔍 PHANTOM EDIT FILL CATCH: {bot_id} dog filled {_edit_fills} during edit amend!')
+                        bot['dog_fill_qty'] = _edit_fills
+                        if dog_side == 'yes':
+                            bot['yes_fill_qty'] = _edit_fills
+                        else:
+                            bot['no_fill_qty'] = _edit_fills
+                        bot['_hedge_fired'] = True
+                        bot['dog_filled_at'] = time.time()
+                        bot['status'] = 'dog_filled'
+                        if _edit_fills < _amend_qty:
+                            bot['_original_qty'] = _amend_qty
+                            bot['_partial_hedge_qty'] = _edit_fills
+                        _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
+                        bot_log('PHANTOM_EDIT_FILL_CATCH', bot_id, {
+                            'dog_oid': dog_oid[:12], 'fills': _edit_fills, 'qty': _amend_qty,
+                        })
+                        save_state()
+                    else:
+                        print(f'⚠ PHANTOM EDIT 404: {bot_id} dog order gone, 0 fills — will re-anchor next cycle')
+                else:
+                    print(f'⚠ PHANTOM EDIT: amend failed for {bot_id}: {e} — will pick up next cycle')
         else:
             applied_now = True  # no order, will pick up on next post
 

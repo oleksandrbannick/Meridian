@@ -366,6 +366,28 @@ async function navigateToMarket(eventTickerPrefix) {
     });
 }
 
+// Navigate from Markets tab to Bots tab and scroll/highlight the bot card
+function navigateToBot(ticker, botType) {
+    switchTab('bots');
+    // After tab switch + render, find and highlight the bot card by ticker
+    setTimeout(() => {
+        // Bot cards contain the ticker in links/text — find by searching card content
+        const gameKey = ticker.split('-').length >= 2 ? ticker.split('-')[1] : ticker;
+        const allCards = document.querySelectorAll('#bots-list > div, #dog-bots-list > div, #middle-bots-list > div');
+        for (const card of allCards) {
+            const text = card.textContent || '';
+            const html = card.innerHTML || '';
+            if (html.includes(gameKey) || text.includes(gameKey)) {
+                card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                card.style.transition = 'box-shadow 0.3s';
+                card.style.boxShadow = `0 0 20px ${BOT_COLORS[botType] || '#00d4ff'}66, inset 0 0 8px ${BOT_COLORS[botType] || '#00d4ff'}22`;
+                setTimeout(() => { card.style.boxShadow = ''; }, 2500);
+                break;
+            }
+        }
+    }, 300);
+}
+
 // ─── LIVE SCORES ──────────────────────────────────────────────────────────────
 
 async function loadLiveScores() {
@@ -1509,7 +1531,7 @@ function displayMarkets(markets) {
     }
     
     // Pre-build ticker → active bot type map + P&L map (O(n) once, not per row)
-    const botMap = {};  // ticker → {phantom: N, apex: N, meridian: N, scout: N}
+    const botMap = {};  // ticker → {phantom: {total, botIds}, apex: ..., meridian: ..., scout: ...}
     const phantomDetails = {};  // ticker → [{side, cross}] for phantom pills
     const pnlMap = {};  // ticker → total net P&L in cents (all bots, including completed)
     if (window._lastBotsData) {
@@ -1529,8 +1551,9 @@ function displayMarkets(markets) {
             const _isDead = b.status === 'completed' || b.status === 'stopped' || b.status === 'cancelled';
             if (_isDead) continue;
             if (!botMap[t]) botMap[t] = {};
-            if (!botMap[t][label]) botMap[t][label] = { total: 0, dead: 0 };
+            if (!botMap[t][label]) botMap[t][label] = { total: 0, dead: 0, botIds: [] };
             botMap[t][label].total++;
+            botMap[t][label].botIds.push(bid);
             // Track phantom details for side+cross display
             if (label === 'phantom') {
                 if (!phantomDetails[t]) phantomDetails[t] = [];
@@ -2434,31 +2457,32 @@ function createMarketRow(market, label) {
                 const crossMkt = phDetails.filter(p => p.cross);
                 if (sameMkt.length > 0) {
                     const c = BOT_COLORS['phantom'] || '#ffaa00';
-                    const allDead = sameMkt.every(p => p.dead);
                     const pill = document.createElement('span');
-                    pill.style.cssText = `display:inline-flex;align-items:center;gap:2px;padding:2px 6px;background:${c}${allDead ? '11' : '22'};border:1px solid ${c}${allDead ? '33' : '55'};border-radius:4px;font-size:9px;font-weight:700;color:${c};${allDead ? 'opacity:0.5;' : ''}`;
-                    pill.innerHTML = `${botIconImg('phantom', 14)} <span style="font-size:8px;">${allDead ? '⏹' : '='}</span>`;
-                    pill.title = allDead ? 'Phantom stopped (restart from Bots tab)' : 'Phantom active (same market)';
+                    pill.style.cssText = `display:inline-flex;align-items:center;gap:2px;padding:2px 6px;background:${c}22;border:1px solid ${c}55;border-radius:4px;font-size:9px;font-weight:700;color:${c};cursor:pointer;`;
+                    pill.innerHTML = `${botIconImg('phantom', 14)} <span style="font-size:8px;">=</span>`;
+                    pill.title = 'Phantom active — click to view';
+                    pill.onclick = (e) => { e.stopPropagation(); navigateToBot(market.ticker, 'phantom'); };
                     iconRow.appendChild(pill);
                 }
                 for (const ph of crossMkt) {
                     const sideChar = ph.side === 'yes' ? 'Y' : ph.side === 'no' ? 'N' : '?';
                     const sideCol = ph.side === 'yes' ? '#00ff88' : '#ff4444';
                     const pill = document.createElement('span');
-                    pill.style.cssText = `display:inline-flex;align-items:center;gap:3px;padding:2px 6px;background:#00ddff15;border:1px solid #00ddff55;border-radius:4px;font-size:9px;font-weight:800;`;
+                    pill.style.cssText = `display:inline-flex;align-items:center;gap:3px;padding:2px 6px;background:#00ddff15;border:1px solid #00ddff55;border-radius:4px;font-size:9px;font-weight:800;cursor:pointer;`;
                     pill.innerHTML = `${botIconImg('phantom', 14)}<span style="color:#00ddff;">✕</span><span style="color:${sideCol};font-weight:900;">${sideChar}</span>`;
-                    pill.title = `Cross-market Phantom ${ph.side.toUpperCase()}${ph.isHedgeSide ? ' [hedge side]' : ''}`;
+                    pill.title = `Cross-market Phantom ${ph.side.toUpperCase()}${ph.isHedgeSide ? ' [hedge side]' : ''} — click to view`;
+                    pill.onclick = (e) => { e.stopPropagation(); navigateToBot(market.ticker, 'phantom'); };
                     iconRow.appendChild(pill);
                 }
             } else {
                 const c = BOT_COLORS[bt] || '#818cf8';
                 const info = botTypes[bt];
                 const n = info?.total || info || 0;
-                const allDead = info?.dead >= info?.total;
                 const pill = document.createElement('span');
-                pill.style.cssText = `display:inline-flex;align-items:center;gap:2px;padding:2px 6px;background:${c}${allDead ? '11' : '22'};border:1px solid ${c}${allDead ? '33' : '55'};border-radius:4px;font-size:9px;font-weight:700;color:${c};${allDead ? 'opacity:0.5;' : ''}`;
-                pill.innerHTML = `${botIconImg(bt, 14)}${allDead ? '<span style="font-size:8px;">⏹</span>' : (n > 1 ? n : '')}`;
-                pill.title = allDead ? `${bt} stopped` : `${n} active ${bt} bot${n > 1 ? 's' : ''}`;
+                pill.style.cssText = `display:inline-flex;align-items:center;gap:2px;padding:2px 6px;background:${c}22;border:1px solid ${c}55;border-radius:4px;font-size:9px;font-weight:700;color:${c};cursor:pointer;`;
+                pill.innerHTML = `${botIconImg(bt, 14)}${n > 1 ? n : ''}`;
+                pill.title = `${n} active ${BOT_NAMES[bt] || bt} bot${n > 1 ? 's' : ''} — click to view`;
+                pill.onclick = (e) => { e.stopPropagation(); navigateToBot(market.ticker, bt); };
                 iconRow.appendChild(pill);
             }
         }
@@ -2512,15 +2536,33 @@ function createMarketRow(market, label) {
             iconRow.appendChild(pill);
         }
     }
+    // ── Spread badge ──
+    const _yB = getPrice(market, 'yes_bid') || 0;
+    const _yA = getPrice(market, 'yes_ask') || 0;
+    const _nB = getPrice(market, 'no_bid') || 0;
+    const _nA = getPrice(market, 'no_ask') || 0;
+    const _ySpr = (_yA > 0 && _yB > 0) ? (_yA - _yB) : 0;
+    const _nSpr = (_nA > 0 && _nB > 0) ? (_nA - _nB) : 0;
+    const _spr = (_ySpr > 0 && _nSpr > 0) ? Math.min(_ySpr, _nSpr) : (_ySpr || _nSpr);
+    if (_spr > 0 && _spr < 99) {
+        const _sprCol = _spr <= 2 ? '#00ff88' : _spr <= 5 ? '#00d4ff' : _spr <= 10 ? '#ffaa00' : '#ff4444';
+        const sprBadge = document.createElement('span');
+        sprBadge.style.cssText = `color:${_sprCol};font-size:9px;font-weight:700;opacity:0.8;margin-left:2px;`;
+        sprBadge.textContent = `${_spr}¢`;
+        sprBadge.title = `Spread: YES ${_ySpr}¢ / NO ${_nSpr}¢`;
+        iconRow.appendChild(sprBadge);
+        hasIcons = true;
+    }
+
     // Always append pill container so live refresh can populate it
     labelDiv.appendChild(iconRow);
     labelDiv.setAttribute('data-market-ticker', market.ticker);
-    
+
     // Read all prices first for cross-referencing
-    const yesBid = getPrice(market, 'yes_bid');
-    const yesAsk = getPrice(market, 'yes_ask');
-    const noBid = getPrice(market, 'no_bid');
-    const noAsk = getPrice(market, 'no_ask');
+    const yesBid = _yB;
+    const yesAsk = _yA;
+    const noBid = _nB;
+    const noAsk = _nA;
 
     // Suppress phantom asks: 100¢ ask when opposite side has no bids = no real liquidity
     // Fall back to same-side bid (what the order book actually shows)

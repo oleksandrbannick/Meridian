@@ -5709,13 +5709,6 @@ def _refresh_milestones_cache():
                 break
     _milestones_cache = {'data': event_info, 'ts': time.time()}
     live_events = [k for k, v in event_info.items() if _is_milestone_live(v, k)]
-    # Debug: log raw vs accepted live events
-    raw_live = [k for k, v in event_info.items() if v.get('status') == 'live']
-    if raw_live:
-        for rl in raw_live:
-            info = event_info[rl]
-            accepted = rl in live_events
-            print(f'🎾 DEBUG {rl}: raw=live accepted={accepted} start_date={info.get("start_date","")}')
     if live_events:
         print(f'🎾 Milestones cache: {len(live_events)} live — {", ".join(live_events[:5])}')
 

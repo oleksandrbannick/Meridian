@@ -20943,6 +20943,13 @@ def phantom_edit(bot_id):
                         bot['yes_order_id'] = _amend_new_oid
                     else:
                         bot['no_order_id'] = _amend_new_oid
+                # Reset timing so monitor doesn't immediately re-trigger
+                bot['posted_at'] = time.time()
+                bot['_last_repost_at'] = time.time()
+                bot['_last_retreat_at'] = time.time()
+                # Recalc precalc hedge for potentially new qty
+                bot['_precalc_hedge_price'] = _precalc_phantom_hedge(
+                    _amend_price, bot.get('target_width', 5), dog_side, _amend_qty)
                 applied_now = True
                 print(f'🔧 PHANTOM EDIT: {bot_id} amended order with new settings (qty={_amend_qty})')
             except Exception as e:

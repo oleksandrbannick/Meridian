@@ -2488,70 +2488,18 @@ function createMarketRow(market, label) {
         }
     }
 
-    // ── Bot recommendation icons (dimmed) ──
-    const recoTypes = [];
-    // Apex: quality score 0-100 — spread tightness + balance + live + volume
-    if (liq.yesBid > 0 && liq.noBid > 0 && !botTypes.apex) {
-        const bidSum = liq.yesBid + liq.noBid;
-        const priceLean = Math.abs(liq.yesBid - liq.noBid);
-        const isLiveGame = isKalshiLive(market);
-        const ySpr = liq.yesSpread;
-        const nSpr = liq.noSpread;
-        const aq = liq.apexQuality;
-        const spreadVal = Math.min(ySpr, nSpr);
-        const isWideSpread = ySpr > 5 && nSpr > 5;
-        const leanLabel = priceLean <= 10 ? 'coin-flip' : priceLean <= 25 ? 'lean game' : 'strong lean';
-        const balPct = Math.round((liq.balance || 0) * 100);
-        // Show recommendation for any live market with reasonable lean — gapped spreads get WIDE label + wider width recs
-        if (aq >= 15 && priceLean <= 40 && bidSum >= 80) {
-            const qualLabel = aq >= 60 ? '🟢' : aq >= 35 ? '🟡' : '🔴';
-            const _aqLabelColor = aq >= 60 ? '#00ff88' : aq >= 35 ? '#ffaa00' : '#ff4444';
-            const _spreadColor = spreadVal > 10 ? '#ff4444' : spreadVal > 5 ? '#ffaa00' : '#00ff88';
-            const _widthHint = isWideSpread ? (spreadVal > 10 ? ' 10¢+' : ' 8¢+') : '';
-            recoTypes.push({
-                type: 'apex',
-                label: `${qualLabel}${aq} <span style="color:${_spreadColor};font-size:7px;">${spreadVal}¢${_widthHint}</span>`,
-                labelColor: _aqLabelColor,
-                tip: `Apex: ${leanLabel} ${liq.yesBid}/${liq.noBid}¢ · spread ${spreadVal}¢${isWideSpread ? ` (use ${spreadVal > 10 ? '10' : '8'}¢+ widths)` : ''} · balance ${balPct}% · vol ${liq.vol} · ${qualLabel} ${aq}/100`,
-            });
-        }
-    }
-    // Phantom recommendation removed — PPI handles market quality assessment at runtime
-    const middleReco = (window._middleRecoMap || {})[market.ticker];
-    if (middleReco && !botTypes.meridian) {
-        recoTypes.push({ type: 'meridian', tip: `Meridian: ${middleReco.tip}` });
-    }
-    if (recoTypes.length > 0) {
-        hasIcons = true;
-        for (const r of recoTypes) {
-            const c = BOT_COLORS[r.type] || '#888';
-            const pill = document.createElement('span');
-            pill.style.cssText = `display:inline-flex;align-items:center;gap:2px;padding:2px 6px;border:1px dashed ${c}88;border-radius:4px;opacity:0.75;`;
-            pill.innerHTML = botIconImg(r.type, 14, 0.75);
-            if (r.label) {
-                pill.innerHTML += `<span class="ghost-label" style="font-size:8px;color:${r.labelColor || c};font-weight:700;">${r.label}</span>`;
-            }
-            pill.title = r.tip;
-            if (r.type === 'phantom') pill.setAttribute('data-ghost-ticker', market.ticker);
-            iconRow.appendChild(pill);
-        }
-    }
-    // ── Spread badge ──
+    // ── Room badge ──
     const _yB = getPrice(market, 'yes_bid') || 0;
     const _yA = getPrice(market, 'yes_ask') || 0;
     const _nB = getPrice(market, 'no_bid') || 0;
     const _nA = getPrice(market, 'no_ask') || 0;
-    const _ySpr = (_yA > 0 && _yB > 0) ? (_yA - _yB) : 0;
-    const _nSpr = (_nA > 0 && _nB > 0) ? (_nA - _nB) : 0;
-    const _spr = (_ySpr > 0 && _nSpr > 0) ? Math.min(_ySpr, _nSpr) : (_ySpr || _nSpr);
-    if (_spr > 0 && _spr < 99) {
-        // Neutral color — tight vs wide matters differently per bot type
-        // Tight = Phantom territory, Wide = Apex territory
-        const sprBadge = document.createElement('span');
-        sprBadge.style.cssText = `color:#8892a6;font-size:9px;font-weight:600;opacity:0.85;margin-left:2px;letter-spacing:0.3px;`;
-        sprBadge.textContent = `${_spr}¢ spr`;
-        sprBadge.title = `Spread: YES ${_ySpr}¢ / NO ${_nSpr}¢ — Tight = Phantom, Wide = Apex`;
-        iconRow.appendChild(sprBadge);
+    const _room = (_yB > 0 && _nB > 0) ? (100 - _yB - _nB) : 0;
+    if (_room > 0 && _room < 90) {
+        const roomBadge = document.createElement('span');
+        roomBadge.style.cssText = `color:#8892a6;font-size:9px;font-weight:600;opacity:0.85;margin-left:2px;letter-spacing:0.3px;`;
+        roomBadge.textContent = `${_room}¢ room`;
+        roomBadge.title = `Room: 100 - ${_yB}(YES) - ${_nB}(NO) = ${_room}¢ — Small = Phantom, Large = Apex MM`;
+        iconRow.appendChild(roomBadge);
         hasIcons = true;
     }
 
@@ -10850,50 +10798,52 @@ function showScanResults(opportunities, minWidth, totalScanned) {
     const countEl = document.getElementById('scan-count');
     if (!modal || !results) return;
 
-    if (countEl) countEl.textContent = `${opportunities.length} found / ${totalScanned} scanned (≥ ${minWidth}¢)`;
+    if (countEl) countEl.textContent = `${opportunities.length} found / ${totalScanned} scanned (≥ ${minWidth}¢ room)`;
 
     if (opportunities.length === 0) {
         results.innerHTML = `<p style="color:#8892a6;text-align:center;padding:24px;">
-            No limit-order arb opportunities ≥ ${minWidth}¢ spread found across ${totalScanned} markets.<br>
-            <span style="font-size:12px;">Try lowering the min width, or check back when more games are active.</span>
+            No markets with ≥ ${minWidth}¢ room found across ${totalScanned} markets.<br>
+            <span style="font-size:12px;">Try lowering the min room, or check back when more games are active.</span>
         </p>`;
     } else {
         results.innerHTML = opportunities.slice(0, 50).map(opp => {
-            const profitColor = opp.width >= 10 ? '#ffaa00' : opp.width >= 5 ? '#00ff88' : '#8892a6';
+            const room = opp.room || opp.width;
+            const recW = opp.recommended_width || Math.max(2, Math.round(room * 0.7));
+            const roomColor = room >= 10 ? '#ffaa00' : room >= 5 ? '#00ff88' : '#00d4ff';
             const liveTag = opp.is_live
                 ? `<span style="background:#ff333333;color:#ff3333;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:6px;">🔴 LIVE</span>`
                 : '';
-            // Game date/time tag
             const dateStr = opp.game_date || '';
             const timeStr = opp.game_time || '';
             const dateTimeLabel = dateStr ? `<span style="color:#6a7488;font-size:10px;margin-left:6px;">📅 ${dateStr}${timeStr ? ' · ' + timeStr : ''}</span>` : '';
-            // Catch speed badge
             const speedColors = { prime: '#00ff88', fast: '#ffaa00', moderate: '#ff9944', slow: '#555' };
             const speedColor = speedColors[opp.catch_speed] || '#555';
             const speedLabel = (opp.catch_speed || 'slow').toUpperCase();
-            return `<div style="background:#0a0e1a;border-radius:8px;padding:10px 14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:10px;border-left:3px solid ${profitColor};">
+            const midpoint = Math.round((opp.yes_bid + (100 - opp.no_bid)) / 2);
+            return `<div style="background:#0a0e1a;border-radius:8px;padding:10px 14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:10px;border-left:3px solid ${roomColor};">
                 <div style="flex:1;min-width:0;">
                     <div style="color:#fff;font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
                         ${opp.title || opp.ticker}${liveTag}${dateTimeLabel}
                         <span style="background:${speedColor}22;color:${speedColor};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:6px;">${speedLabel}</span>
                     </div>
                     <div style="color:#8892a6;font-size:11px;margin-top:3px;">
-                        Bids: YES ${opp.yes_bid}¢ / NO ${opp.no_bid}¢ &nbsp;·&nbsp;
-                        Raw gap: ${opp.width}¢ &nbsp;·&nbsp; Liq: ${Math.round((opp.liquidity || 0) * 100)}%
+                        YES ${opp.yes_bid}¢ / NO ${opp.no_bid}¢ &nbsp;·&nbsp;
+                        <span style="color:${roomColor};font-weight:700;">Room: ${room}¢</span> &nbsp;·&nbsp;
+                        Bal: ${Math.round((opp.balance || 0) * 100)}%
                     </div>
                     <div style="color:#6a7488;font-size:10px;margin-top:2px;">
-                        Post at YES ${opp.suggested_yes}¢ + NO ${opp.suggested_no}¢ (bid+1, front of queue) → +${opp.profit_posted}¢/contract
+                        Apex MM: W${recW}¢ · 5 rungs · mid ~${midpoint}¢
                         &nbsp;·&nbsp; Catch: ${opp.catch_score || 0}
                     </div>
                 </div>
                 <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex-shrink:0;">
                     <div style="text-align:right;">
-                        <div style="color:${profitColor};font-weight:800;font-size:1.3rem;">+${opp.profit_posted}¢</div>
-                        <div style="color:#6a7488;font-size:10px;">after queue jump</div>
+                        <div style="color:${roomColor};font-weight:800;font-size:1.3rem;">${room}¢</div>
+                        <div style="color:#6a7488;font-size:10px;">room · W${recW}</div>
                     </div>
-                    <button onclick="quickBot('${opp.ticker}', ${opp.suggested_yes}, ${opp.suggested_no})"
-                            style="background:#00ff88;color:#000;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-weight:700;font-size:12px;">
-                        🤖 Bot
+                    <button onclick="quickApexMM('${opp.ticker}', ${Math.floor(recW / 2)}, ${room})"
+                            style="background:linear-gradient(135deg,#00d4ff,#00ff88);color:#000;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-weight:700;font-size:12px;">
+                        📊 Apex MM
                     </button>
                 </div>
             </div>`;
@@ -11041,6 +10991,40 @@ async function quickBot(ticker, yesPrice, noPrice) {
         if (data.success) {
             const profitPer = 100 - yesPrice - noPrice;
             showNotification(`✅ ARB deployed: ${quantity} contracts | ${profitPer}¢ width | YES ${yesPrice}¢ → NO ${noPrice}¢ queued`);
+            loadBots();
+            if (!autoMonitorInterval) toggleAutoMonitor();
+        } else {
+            showNotification(`❌ Error: ${data.error}`);
+        }
+    } catch (err) {
+        showNotification(`❌ Network error: ${err.message}`);
+    }
+}
+
+async function quickApexMM(ticker, startGap, room) {
+    const qty = parseInt(document.getElementById('scan-qty')?.value) || 10;
+    const levels = 5;
+    const width = startGap * 2;
+
+    if (!confirm(`📊 Deploy Apex MM\n\nTicker: ${ticker}\nRoom: ${room}¢\nWidth: W${width} (gap=${startGap})\nRungs: ${levels} · ${qty}x/rung\nAuto-scale: ON\nLoss limit: $5.00\n\nConfirm?`)) return;
+
+    try {
+        const resp = await fetch(`${API_BASE}/bot/ladder-arb`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                ticker,
+                start_gap: startGap,
+                levels,
+                spacing: 1,
+                qty_per_level: qty,
+                auto_scale: true,
+                loss_limit_cents: 500,
+            }),
+        });
+        const data = await resp.json();
+        if (data.bot_id) {
+            showNotification(`✅ Apex MM deployed: W${width} · ${levels} rungs · ${qty}x | Room ${room}¢`);
             loadBots();
             if (!autoMonitorInterval) toggleAutoMonitor();
         } else {

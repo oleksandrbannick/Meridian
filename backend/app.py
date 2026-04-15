@@ -4397,6 +4397,15 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 bot['_sl_breach_phase'] = None
                 continue
 
+            # Fill grace period: suppress SL for N seconds after fill (liquidity cliff filter)
+            _last_fill_t = max(bot.get('_last_yes_fill_at', 0), bot.get('_last_no_fill_at', 0))
+            _in_fill_grace = _last_fill_t > 0 and (time.time() - _last_fill_t) < APEX_MM_SL_FILL_GRACE_S
+            if _in_fill_grace:
+                bot['_sl_breach_since'] = None
+                bot['_sl_breach_peak'] = None
+                bot['_sl_breach_phase'] = None
+                continue
+
             if net_yes > net_no:
                 held_avg = bot.get('avg_yes_cost', 0)
                 exit_side = 'no'
@@ -7401,6 +7410,7 @@ APEX_MM_OBI_DEPTH = 5           # MM uses top-5 levels for OBI (wider view than 
 # Soft breach (stop <= combined <= stop + HARD_MARGIN): persistence timer filters noise
 # Hard breach (combined > stop + HARD_MARGIN): instant eject, no timer (binary gap)
 APEX_MM_SL_HARD_MARGIN = 4      # Cents above stop for instant circuit-breaker eject
+APEX_MM_SL_FILL_GRACE_S = 5.0  # Suppress SL for 5s after fill (liquidity cliff filter)
 APEX_MM_SL_SOFT_PERSIST = {     # Soft breach persistence by game phase (seconds)
     'early':    1.5,            # Early/mid game: market makers will refill in <1s if noise
     'mid':      1.5,
@@ -7965,6 +7975,10 @@ def _apex_mm_check_inventory(bot_id, bot):
 
 def _apex_mm_check_loss_limit(bot_id, bot):
     """Check unrealized P&L. Returns True if loss limit hit (begin exit)."""
+    # Fill grace period — live bids are unreliable right after our fill (liquidity cliff)
+    _last_fill_t = max(bot.get('_last_yes_fill_at', 0), bot.get('_last_no_fill_at', 0))
+    if _last_fill_t > 0 and (time.time() - _last_fill_t) < APEX_MM_SL_FILL_GRACE_S:
+        return False
     loss_limit = bot.get('loss_limit_cents', 500)
     if loss_limit <= 0:
         return False
@@ -9875,8 +9889,8 @@ def create_ladder_arb_bot():
 
         if not ticker:
             return jsonify({'error': 'Missing ticker'}), 400
-        if start_gap < 2 or start_gap > 20:
-            return jsonify({'error': 'start_gap must be 2-20'}), 400
+        if start_gap < 1 or start_gap > 20:
+            return jsonify({'error': 'start_gap must be 1-20'}), 400
         if levels < 1 or levels > 15:
             return jsonify({'error': 'levels must be 1-15'}), 400
         if spacing < 1 or spacing > 5:
@@ -14896,52 +14910,62 @@ def _handle_apex(bot_id, bot, actions):
         bot['_sl_breach_peak'] = None
         bot['_sl_breach_phase'] = None
     if net_yes > 0 or net_no > 0:
-        _held_avg = bot.get('avg_yes_cost', 0) if net_yes > net_no else bot.get('avg_no_cost', 0)
-        _exit_side = 'no' if net_yes > net_no else 'yes'
-        _held_side = 'yes' if net_yes > net_no else 'no'
-        # Cheapest exit: buy opposite at ask OR sell held at ask (100 - held_ask)
-        _exit_ask = bot.get(f'live_{_exit_side}_ask', 0)
-        _held_ask = bot.get(f'live_{_held_side}_ask', 0)
-        _buy_opp_combined = _held_avg + _exit_ask if _exit_ask > 0 else 999
-        _sell_held_combined = _held_avg + (100 - _held_ask) if _held_ask > 0 else 999
-        _best_combined = min(_buy_opp_combined, _sell_held_combined)
-        _width = bot.get('start_gap', 4) * 2
-        _stop = 100 + _width  # symmetric: risk = reward
-        # Drift stop: dual-threshold matrix (soft breach = timer, hard breach = instant)
-        # Use >= to match WS handler — prevents monitor from resetting WS breach timer at exact boundary
-        if _best_combined >= _stop and _best_combined < 999:
-            _hard_stop = _stop + APEX_MM_SL_HARD_MARGIN
-            _pc = time.perf_counter()  # monotonic clock for sub-second precision
-
-            # ── HARD BREACH: circuit breaker — instant eject ──
-            if _best_combined > _hard_stop:
-                _breach_dur = _pc - bot['_sl_breach_since'] if bot.get('_sl_breach_since') else 0
-                print(f'🚨 APEX MM CIRCUIT BREAKER: {bot_id} combined={_best_combined}c > {_hard_stop}c — INSTANT EJECT (breach_dur={_breach_dur:.3f}s)')
-                _apex_mm_begin_exit(bot_id, bot, f'circuit_breaker (combined={_best_combined}c > {_hard_stop}c, hard_margin={APEX_MM_SL_HARD_MARGIN}c)')
-                return
-
-            # ── SOFT BREACH: persistence gate ──
-            _persist_s, _phase = _apex_mm_sl_persist(ticker)
-            if not bot.get('_sl_breach_since'):
-                bot['_sl_breach_since'] = _pc
-                bot['_sl_breach_peak'] = _best_combined
-                bot['_sl_breach_phase'] = _phase
-                print(f'⏱ APEX MM SOFT BREACH: {bot_id} combined={_best_combined}c > {_stop}c — gate {_persist_s}s ({_phase})')
-                return
-            bot['_sl_breach_peak'] = max(bot.get('_sl_breach_peak', 0), _best_combined)
-            _breach_age = _pc - bot['_sl_breach_since']
-            if _breach_age < _persist_s:
-                return  # still within persistence window
-            _apex_mm_begin_exit(bot_id, bot, f'drift_stop (combined={_best_combined}c > {_stop}c, persisted={_breach_age:.3f}s/{_persist_s}s, phase={_phase})')
-            return
+        # Fill grace period: suppress SL for N seconds after any fill.
+        # In wide markets, our filled order was the best bid — its removal
+        # makes prices look catastrophic even though market value didn't change.
+        _last_fill_t = max(bot.get('_last_yes_fill_at', 0), bot.get('_last_no_fill_at', 0))
+        if _last_fill_t > 0 and (time.time() - _last_fill_t) < APEX_MM_SL_FILL_GRACE_S:
+            bot['_sl_breach_since'] = None
+            bot['_sl_breach_peak'] = None
+            bot['_sl_breach_phase'] = None
+            pass  # skip SL block but fall through to drift/room/OBI guards below
         else:
-            # Below threshold — reset persistence gate instantly
-            if bot.get('_sl_breach_since'):
-                _breach_dur = time.perf_counter() - bot['_sl_breach_since']
-                print(f'✅ APEX MM SL RESET: {bot_id} combined={_best_combined}c <= {_stop}c — filtered {_breach_dur:.3f}s spike (peak={bot.get("_sl_breach_peak", 0)}c, phase={bot.get("_sl_breach_phase", "?")})')
-                bot['_sl_breach_since'] = None
-                bot['_sl_breach_peak'] = None
-                bot['_sl_breach_phase'] = None
+          _held_avg = bot.get('avg_yes_cost', 0) if net_yes > net_no else bot.get('avg_no_cost', 0)
+          _exit_side = 'no' if net_yes > net_no else 'yes'
+          _held_side = 'yes' if net_yes > net_no else 'no'
+          # Cheapest exit: buy opposite at ask OR sell held at ask (100 - held_ask)
+          _exit_ask = bot.get(f'live_{_exit_side}_ask', 0)
+          _held_ask = bot.get(f'live_{_held_side}_ask', 0)
+          _buy_opp_combined = _held_avg + _exit_ask if _exit_ask > 0 else 999
+          _sell_held_combined = _held_avg + (100 - _held_ask) if _held_ask > 0 else 999
+          _best_combined = min(_buy_opp_combined, _sell_held_combined)
+          _width = bot.get('start_gap', 4) * 2
+          _stop = 100 + _width  # symmetric: risk = reward
+          # Drift stop: dual-threshold matrix (soft breach = timer, hard breach = instant)
+          # Use >= to match WS handler — prevents monitor from resetting WS breach timer at exact boundary
+          if _best_combined >= _stop and _best_combined < 999:
+              _hard_stop = _stop + APEX_MM_SL_HARD_MARGIN
+              _pc = time.perf_counter()  # monotonic clock for sub-second precision
+
+              # ── HARD BREACH: circuit breaker — instant eject ──
+              if _best_combined > _hard_stop:
+                  _breach_dur = _pc - bot['_sl_breach_since'] if bot.get('_sl_breach_since') else 0
+                  print(f'🚨 APEX MM CIRCUIT BREAKER: {bot_id} combined={_best_combined}c > {_hard_stop}c — INSTANT EJECT (breach_dur={_breach_dur:.3f}s)')
+                  _apex_mm_begin_exit(bot_id, bot, f'circuit_breaker (combined={_best_combined}c > {_hard_stop}c, hard_margin={APEX_MM_SL_HARD_MARGIN}c)')
+                  return
+
+              # ── SOFT BREACH: persistence gate ──
+              _persist_s, _phase = _apex_mm_sl_persist(ticker)
+              if not bot.get('_sl_breach_since'):
+                  bot['_sl_breach_since'] = _pc
+                  bot['_sl_breach_peak'] = _best_combined
+                  bot['_sl_breach_phase'] = _phase
+                  print(f'⏱ APEX MM SOFT BREACH: {bot_id} combined={_best_combined}c > {_stop}c — gate {_persist_s}s ({_phase})')
+                  return
+              bot['_sl_breach_peak'] = max(bot.get('_sl_breach_peak', 0), _best_combined)
+              _breach_age = _pc - bot['_sl_breach_since']
+              if _breach_age < _persist_s:
+                  return  # still within persistence window
+              _apex_mm_begin_exit(bot_id, bot, f'drift_stop (combined={_best_combined}c > {_stop}c, persisted={_breach_age:.3f}s/{_persist_s}s, phase={_phase})')
+              return
+          else:
+              # Below threshold — reset persistence gate instantly
+              if bot.get('_sl_breach_since'):
+                  _breach_dur = time.perf_counter() - bot['_sl_breach_since']
+                  print(f'✅ APEX MM SL RESET: {bot_id} combined={_best_combined}c <= {_stop}c — filtered {_breach_dur:.3f}s spike (peak={bot.get("_sl_breach_peak", 0)}c, phase={bot.get("_sl_breach_phase", "?")})')
+                  bot['_sl_breach_since'] = None
+                  bot['_sl_breach_peak'] = None
+                  bot['_sl_breach_phase'] = None
 
     # 0.5. Active drift guard — pull ladder if market is decided (one side > 80c)
     _active_max_bid = max(bot.get('live_yes_bid', 0), bot.get('live_no_bid', 0))
@@ -20784,8 +20808,8 @@ def apex_mm_edit(bot_id):
     new_loss_limit = payload.get('loss_limit_cents')
     if new_gap is not None:
         new_gap = int(new_gap)
-        if new_gap < 2 or new_gap > 20:
-            return jsonify({'error': 'Width (start_gap) must be 2-20'}), 400
+        if new_gap < 1 or new_gap > 20:
+            return jsonify({'error': 'Width (start_gap) must be 1-20'}), 400
     if new_qty is not None:
         new_qty = int(new_qty)
         if new_qty < 1 or new_qty > 100:
@@ -21337,8 +21361,8 @@ def scan_arb_opportunities():
             if min_bid_val < 5:
                 continue
 
-            # Skip extreme width — phantom bids on dead markets
-            if width > 50:
+            # Skip extreme room — phantom bids on dead markets
+            if width > 80:
                 continue
 
             # ── Liquidity score (0-1): tight spread = high ─────────
@@ -21394,6 +21418,9 @@ def scan_arb_opportunities():
             else:
                 catch_speed = 'slow'     # wide spread or unbalanced
 
+            # Recommended Apex MM width: 70% of room, clamped to valid range
+            recommended_width = max(2, min(20, round(width * 0.7)))
+
             opportunities.append({
                 'ticker':        ticker_str,
                 'title':         m.get('title', ''),
@@ -21405,7 +21432,9 @@ def scan_arb_opportunities():
                 'no_ask':        no_ask or 0,
                 'yes_spread':    yes_spread if yes_spread < 99 else 0,
                 'no_spread':     no_spread if no_spread < 99 else 0,
-                'width':         width,
+                'room':          width,
+                'width':         width,  # backward compat
+                'recommended_width': recommended_width,
                 'suggested_yes': sug_yes,
                 'suggested_no':  sug_no,
                 'profit_posted': posted_profit,

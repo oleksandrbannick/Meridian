@@ -8748,7 +8748,9 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
                 _rf_qty = abs(_rf_kalshi_net)
                 bot[f'net_{_rf_side}'] = _rf_qty
                 if bot.get(f'avg_{_rf_side}_cost', 0) == 0:
-                    _rf_est = bot.get(f'live_{_rf_side}_ask', 0) or bot.get(f'live_{_rf_side}_bid', 50) or 50
+                    # Use last fill price from fill_log if available, not live market price
+                    _rf_fills = [f for f in bot.get('_fill_log', []) if f.get('side') == _rf_side and not f.get('is_exit')]
+                    _rf_est = _rf_fills[-1]['price'] if _rf_fills else (bot.get(f'live_{_rf_side}_bid', 50) or 50)
                     bot[f'avg_{_rf_side}_cost'] = _rf_est
                     bot[f'total_{_rf_side}_cost'] = _rf_est * _rf_qty
                 print(f'🚨 CYCLE REFILL KALSHI BLOCK: {bot_id} bot flat but kalshi has {_rf_qty}x {_rf_side.upper()} — posting exit instead of cycle_reset')

@@ -6507,9 +6507,9 @@ _PHANTOM_DEATH_ZONE = {
     'KXNFL':    {'period': 4, 'secs': 120, 'name': 'NFL Q4 <2:00'},
     'KXNHL':    {'period': 3, 'secs': 180, 'name': 'NHL P3 <3:00'},
     'KXMLB':    {'period': 9, 'secs': None, 'name': 'MLB 9th inning'},
-    # Tennis: death zone DISABLED — false-triggers on set scores kill fill rate
-    # 'KXATP':    {'tennis': True, 'score_dz': True, 'name': 'ATP Tennis'},
-    # 'KXWTA':    {'tennis': True, 'score_dz': True, 'name': 'WTA Tennis'},
+    # Tennis: score-based death zone — fires when either player is serving for match
+    'KXATP':    {'tennis': True, 'score_dz': True, 'name': 'ATP Tennis'},
+    'KXWTA':    {'tennis': True, 'score_dz': True, 'name': 'WTA Tennis'},
 }
 
 
@@ -6534,8 +6534,8 @@ def _tennis_death_zone_check(match_data):
     # P2 serving for match
     if p2_sets == sets_to_win - 1 and g2 >= 5 and g2 > g1 and g1 <= 4:
         return True, f'serving for match (sets {p2_sets}-{p1_sets}, games {g2}-{g1})'
-    # Tiebreak in deciding set (either player 1 set from winning)
-    if (p1_sets == sets_to_win - 1 or p2_sets == sets_to_win - 1) and g1 == 6 and g2 == 6:
+    # Tiebreak in deciding set (BOTH players 1 set from winning — not just one)
+    if (p1_sets == sets_to_win - 1 and p2_sets == sets_to_win - 1) and g1 == 6 and g2 == 6:
         return True, f'tiebreak in deciding set (sets {p1_sets}-{p2_sets})'
     return False, ''
 

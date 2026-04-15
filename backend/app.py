@@ -11,6 +11,7 @@ import os
 import sys
 import json
 import requests
+import signal
 from typing import Dict, List, Optional
 import time
 
@@ -2551,6 +2552,99 @@ def _smart_mode_should_repeat(bot, cycle_pnl, exit_type=None):
         bot['consecutive_losses'] = 0
         bot['_smart_wins'] = bot.get('_smart_wins', 0) + 1
         return True, 'smart_win'
+
+
+# ─── Graceful Shutdown ────────────────────────────────────────────────────────
+# On SIGTERM (systemctl restart), cleanly shut down:
+# 1. Wait for in-flight hedges to complete (dog_filled bots)
+# 2. Cancel ONLY unfilled dog orders (dog_anchor_posted)
+# 3. Leave fav hedge orders live on Kalshi (fav_hedge_posted)
+# 4. Save final state
+# 5. Exit
+
+_shutting_down = False
+
+def _graceful_shutdown(signum=None, frame=None):
+    global _shutting_down
+    if _shutting_down:
+        return  # already shutting down
+    _shutting_down = True
+    print(f'\n🛑 GRACEFUL SHUTDOWN: signal received, cleaning up...')
+
+    # Step 1: Wait for in-flight hedges (dog_filled bots waiting for fav post)
+    _max_wait = 15  # seconds max
+    _waited = 0
+    while _waited < _max_wait:
+        _inflight = [bid for bid, b in active_bots.items()
+                     if b.get('status') == 'dog_filled' and not b.get('fav_order_id')]
+        if not _inflight:
+            break
+        print(f'⏳ SHUTDOWN: waiting for {len(_inflight)} in-flight hedges... ({_waited}s)')
+        time.sleep(1)
+        _waited += 1
+    if _waited >= _max_wait:
+        _still = [bid[:40] for bid, b in active_bots.items()
+                  if b.get('status') == 'dog_filled' and not b.get('fav_order_id')]
+        if _still:
+            print(f'⚠ SHUTDOWN: {len(_still)} hedges still in-flight after {_max_wait}s — saving state anyway')
+
+    # Step 2: Cancel unfilled dog orders (dog_anchor_posted with 0 fills)
+    _cancelled = 0
+    for bot_id, bot in list(active_bots.items()):
+        status = bot.get('status', '')
+        if status in ('dog_anchor_posted', 'ladder_posted'):
+            dog_oid = bot.get('dog_order_id')
+            if dog_oid and bot.get('dog_fill_qty', 0) == 0:
+                try:
+                    result = _safe_cancel(dog_oid, f'graceful_shutdown_{bot_id}')
+                    if isinstance(result, tuple) and result[0] == 'filled':
+                        # Filled during cancel — mark it so startup fires hedge
+                        _fills = result[1]
+                        bot['dog_fill_qty'] = _fills
+                        bot['_hedge_fired'] = False
+                        bot['dog_filled_at'] = time.time()
+                        bot['status'] = 'dog_filled'
+                        if _fills < bot.get('quantity', 1):
+                            bot['_original_qty'] = bot.get('quantity', 1)
+                            bot['_partial_hedge_qty'] = _fills
+                        print(f'🚨 SHUTDOWN FILL: {bot_id} filled {_fills} during cancel — will hedge on restart')
+                    else:
+                        bot['dog_order_id'] = None
+                        bot['_restart_repost'] = True
+                        _cancelled += 1
+                except Exception as e:
+                    print(f'⚠ SHUTDOWN: cancel failed for {bot_id}: {e}')
+                    bot['_restart_repost'] = True
+
+        elif status == 'waiting_repeat':
+            # Cancel any stale dog order from previous run
+            dog_oid = bot.get('dog_order_id')
+            if dog_oid:
+                try:
+                    _safe_cancel(dog_oid, f'graceful_shutdown_repeat_{bot_id}')
+                except Exception:
+                    pass
+                bot['dog_order_id'] = None
+            bot['_restart_repost'] = True
+
+        # fav_hedge_posted: do NOT cancel fav order — it stays live on Kalshi
+        # dog_filled with fav_order_id: hedge posted, leave it alone
+        # completed/stopped: nothing to do
+
+    # Step 3: Save final state
+    save_state()
+    print(f'✅ GRACEFUL SHUTDOWN: cancelled {_cancelled} unfilled dog orders, state saved')
+    print(f'   Bots in fav_hedge_posted: fav orders left live on Kalshi')
+    _inflight_final = [bid[:30] for bid, b in active_bots.items()
+                       if b.get('status') == 'dog_filled']
+    if _inflight_final:
+        print(f'   Bots in dog_filled: {len(_inflight_final)} — will hedge on restart')
+
+    # Step 4: Exit
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, _graceful_shutdown)
+signal.signal(signal.SIGINT, _graceful_shutdown)
 
 
 # ─── Data Migrations ─────────────────────────────────────────────────────────
@@ -15522,6 +15616,11 @@ def _run_monitor():
         # Auto-reset P&L if the date has changed
         auto_reset_daily_pnl()
 
+        # ── Shutdown guard: stop processing if graceful shutdown is in progress ──
+        if _shutting_down:
+            print('🛑 Monitor skipped — graceful shutdown in progress')
+            return
+
         # ── Pending maker sells: follow bid until filled ──
         for _sk, _sv in list(_pending_maker_sells.items()):
             try:
@@ -23493,6 +23592,70 @@ def _run_startup():
             import traceback
             print(f'⚠ Startup orphan check failed: {e}')
             traceback.print_exc()
+
+    # ── Graceful restart resume: repost dogs that were cancelled on shutdown ──
+    if kalshi_client:
+        _repost_count = 0
+        for _bid, _bot in list(active_bots.items()):
+            if not _bot.get('_restart_repost'):
+                continue
+            _bot.pop('_restart_repost', None)
+            _bcat = _bot.get('bot_category', '')
+            _bst = _bot.get('status', '')
+
+            if _bcat == 'anchor_dog' and _bst in ('dog_anchor_posted', 'waiting_repeat'):
+                # Re-post dog order at saved price
+                try:
+                    _ticker = _bot['ticker']
+                    _dog_side = _bot.get('dog_side', 'no')
+                    _qty = _bot.get('quantity', 1)
+                    _dog_price = _bot.get('dog_price', 10)
+                    # Get fresh bid to recalculate price
+                    try:
+                        api_read_limiter.wait()
+                        _ob = kalshi_client.get_market_orderbook(_ticker)
+                        _fresh_bid = _best_bid(_ob, _dog_side)
+                        _depth = _bot.get('anchor_depth', 5)
+                        if _fresh_bid > 0:
+                            _dog_price = max(1, _fresh_bid - _depth)
+                    except Exception:
+                        pass  # use saved price as fallback
+
+                    if _dog_price < 1:
+                        print(f'⚠ RESTART RESUME: {_bid} price too low ({_dog_price}¢) — staying pulled')
+                        continue
+
+                    _resp, _actual = create_order_maker(
+                        ticker=_ticker, side=_dog_side, action='buy',
+                        count=_qty, price=_dog_price
+                    )
+                    _new_oid = _resp['order']['order_id']
+                    _bot['dog_order_id'] = _new_oid
+                    _bot['_all_dog_order_ids'] = [_new_oid]
+                    _bot['dog_price'] = _actual
+                    _bot['posted_at'] = time.time()
+                    _bot['_last_repost_at'] = time.time()
+                    _bot['status'] = 'dog_anchor_posted'
+                    _bot['_precalc_hedge_price'] = _precalc_phantom_hedge(
+                        _actual, _bot.get('target_width', 5), _dog_side, _qty)
+                    if _dog_side == 'yes':
+                        _bot['yes_order_id'] = _new_oid
+                        _bot['yes_price'] = _actual
+                    else:
+                        _bot['no_order_id'] = _new_oid
+                        _bot['no_price'] = _actual
+                    _repost_count += 1
+                    print(f'🔄 RESTART RESUME: {_bid} dog reposted @{_actual}¢ ({_dog_side})')
+                except Exception as _re:
+                    print(f'⚠ RESTART RESUME FAILED: {_bid}: {_re}')
+
+        if _repost_count:
+            print(f'🔄 Restart resume: reposted {_repost_count} phantom dog order(s)')
+            save_state()
+        else:
+            # Clean any leftover _restart_repost flags
+            for _bot in active_bots.values():
+                _bot.pop('_restart_repost', None)
 
     # Start notification monitor thread
     _start_notification_thread()

@@ -19548,6 +19548,19 @@ def add_runs(bot_id):
     bot = active_bots.get(bot_id)
     if not bot:
         return jsonify({'error': 'Bot not found'}), 404
+    # Check if market is actually settled on Kalshi before allowing restart
+    _restart_ticker = bot.get('ticker', '')
+    if _restart_ticker and kalshi_client:
+        try:
+            api_read_limiter.wait()
+            _rm = kalshi_client.get_market(_restart_ticker)
+            _rmd = _rm.get('market', _rm) if isinstance(_rm, dict) else {}
+            _rms = (_rmd.get('status', '') or '').lower()
+            if _rms in ('settled', 'finalized'):
+                return jsonify({'error': f'Market already settled ({_rms}) — cannot restart'}), 400
+        except Exception:
+            pass  # if check fails, allow restart and let monitor handle it
+
     if bot.get('smart_mode'):
         # Smart mode bot that was stopped — restart it by resetting loss counter
         bot['_smart_stopped'] = False
@@ -19568,6 +19581,7 @@ def add_runs(bot_id):
             bot.pop('completed_at', None)
             bot.pop('stopped_at', None)
             bot.pop('awaiting_since', None)
+            bot.pop('_market_settled_at', None)  # clear so settlement check doesn't instantly re-settle
             # Clear stale fills from previous run so monitor doesn't think legs are filled
             bot['dog_fill_qty'] = 0
             bot['fav_fill_qty'] = 0
@@ -19601,6 +19615,7 @@ def add_runs(bot_id):
         bot.pop('completed_at', None)
         bot.pop('stopped_at', None)
         bot.pop('awaiting_since', None)
+        bot.pop('_market_settled_at', None)  # clear so settlement check doesn't instantly re-settle
         # Clear stale fills from previous run so monitor doesn't think legs are filled
         bot['dog_fill_qty'] = 0
         bot['fav_fill_qty'] = 0

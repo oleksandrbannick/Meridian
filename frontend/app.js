@@ -7615,7 +7615,7 @@ async function loadBots() {
                     });
                     const _dgDotHtml = Object.entries(_dgStateCounts)
                         .sort((a, b) => b[1] - a[1])
-                        .map(([col, n]) => `<span style="color:${col};font-size:10px;font-weight:700;">●${n > 1 ? n : ''}</span>`)
+                        .map(([col, n]) => `<span style="color:${col};font-size:12px;font-weight:700;text-shadow:0 0 4px ${col}66;">●${n > 1 ? '<span style="font-size:10px;">' + n + '</span>' : ''}</span>`)
                         .join('');
                     const header = document.createElement('div');
                     header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:6px 12px;margin-top:12px;margin-bottom:4px;background:#0d1117;border-left:3px solid #ffaa00;border-radius:4px;font-size:12px;';
@@ -7801,7 +7801,7 @@ async function loadBots() {
             });
             const _dotHtml = Object.entries(_stateCounts)
                 .sort((a, b) => b[1] - a[1])
-                .map(([col, n]) => `<span style="color:${col};font-size:10px;font-weight:700;">●${n > 1 ? n : ''}</span>`)
+                .map(([col, n]) => `<span style="color:${col};font-size:12px;font-weight:700;text-shadow:0 0 4px ${col}66;">●${n > 1 ? '<span style="font-size:10px;">' + n + '</span>' : ''}</span>`)
                 .join('');
 
             const groupHeader = document.createElement('div');

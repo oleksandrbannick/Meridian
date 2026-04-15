@@ -1942,8 +1942,8 @@ _API_TENNIS_TTL = 20  # seconds
 
 def _set_won(score_obj, player):
     """Check if a set has been won by 'first' or 'second' player."""
-    s1 = int(score_obj.get('score_first', 0))
-    s2 = int(score_obj.get('score_second', 0))
+    s1 = int(float(score_obj.get('score_first', 0) or 0))
+    s2 = int(float(score_obj.get('score_second', 0) or 0))
     if player == 'first':
         return (s1 >= 6 and s1 - s2 >= 2) or s1 == 7
     else:
@@ -2010,7 +2010,7 @@ def _fetch_api_tennis_scoreboard(tour_filter):
             return False
         # Has scores with sets won = still in progress, keep it
         scores = m.get('scores', [])
-        if scores and any(int(s.get('score_first', 0)) > 0 or int(s.get('score_second', 0)) > 0 for s in scores):
+        if scores and any(int(float(s.get('score_first', 0) or 0)) > 0 or int(float(s.get('score_second', 0) or 0)) > 0 for s in scores):
             return False
         return True  # Pre-match tomorrow game — exclude
     filtered = [m for m in filtered if not _is_tomorrow_prematch(m)]
@@ -2272,7 +2272,7 @@ def _flatten_tennis_scoreboard(data: dict) -> dict:
                     other_ls = away_ls if side == 'home' else home_ls
                     set_parts = []
                     for i in range(min(len(paired_ls), len(other_ls))):
-                        set_parts.append(f'{int(paired_ls[i])}-{int(other_ls[i])}')
+                        set_parts.append(f'{int(float(paired_ls[i] or 0))}-{int(float(other_ls[i] or 0))}')
                     set_scores_str = ' '.join(set_parts)
                     xformed.append({
                         'homeAway': side,
@@ -4199,7 +4199,11 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
                             _new_oid = _order.get('order_id', '')
                             if _new_oid:
                                 bot['fav_order_id'] = _new_oid
-                                bot.setdefault('_all_hedge_order_ids', []).append(fav_oid)
+                                _hedge_ids = bot.setdefault('_all_hedge_order_ids', [])
+                                if fav_oid and fav_oid not in _hedge_ids:
+                                    _hedge_ids.append(fav_oid)  # old order (has partial fills)
+                                if _new_oid not in _hedge_ids:
+                                    _hedge_ids.append(_new_oid)  # new order (will get remaining fills)
                                 if fav_side == 'yes':
                                     bot['yes_order_id'] = _new_oid
                                 else:
@@ -4257,7 +4261,11 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
             _new_oid = _amend_order.get('order_id', '')
             if _new_oid and _new_oid != fav_oid:
                 bot['fav_order_id'] = _new_oid
-                bot.setdefault('_all_hedge_order_ids', []).append(fav_oid)
+                _hids = bot.setdefault('_all_hedge_order_ids', [])
+                if fav_oid not in _hids:
+                    _hids.append(fav_oid)
+                if _new_oid not in _hids:
+                    _hids.append(_new_oid)
                 if fav_side == 'yes':
                     bot['yes_order_id'] = _new_oid
                 else:
@@ -6813,7 +6821,7 @@ def _get_game_score_for_ticker(ticker: str) -> dict:
                         'home_team': _c2, 'away_team': _c1,
                         'home_score': p2_sets, 'away_score': p1_sets,
                         'period': cur_set, 'clock': game_score if game_score != '-' else '',
-                        'status_detail': _status_str or f'Set {cur_set}',
+                        'status_detail': f'Set {cur_set}' if _status_str in ('interrupted', 'break time', '') else (_status_str or f'Set {cur_set}'),
                         'status': _state,
                     }
                 return {}  # pre-match
@@ -13149,7 +13157,11 @@ def _handle_phantom(bot_id, bot, actions):
                 _walk_new_oid = _walk_order.get('order_id', '')
                 if _walk_new_oid and _walk_new_oid != fav_order_id:
                     bot['fav_order_id'] = _walk_new_oid
-                    bot.setdefault('_all_hedge_order_ids', []).append(fav_order_id)
+                    _hids = bot.setdefault('_all_hedge_order_ids', [])
+                    if fav_order_id not in _hids:
+                        _hids.append(fav_order_id)
+                    if _walk_new_oid not in _hids:
+                        _hids.append(_walk_new_oid)
                     if fav_side == 'yes':
                         bot['yes_order_id'] = _walk_new_oid
                     else:

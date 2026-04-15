@@ -11716,6 +11716,35 @@ def _handle_phantom(bot_id, bot, actions):
         save_state()
         return
 
+    # ── Tennis death zone revert: match point saved → restart bot ──
+    if status in ('completed', 'stopped') and bot.get('_death_zone_stopped') and not bot.get('_market_settled_at'):
+        _is_tennis_dz = ticker.startswith(('KXATP', 'KXWTA'))
+        if _is_tennis_dz:
+            _dz_still, _ = _is_phantom_death_zone(ticker, bot)
+            if not _dz_still:
+                # Match point was saved — revert to waiting_repeat
+                bot['_death_zone_stopped'] = False
+                bot['_death_zone_reason'] = None
+                bot['_smart_stopped'] = False
+                bot['_smart_stop_reason'] = None
+                bot['status'] = 'waiting_repeat'
+                bot['waiting_repeat_since'] = time.time()
+                bot.pop('stopped_at', None)
+                bot.pop('completed_at', None)
+                bot.pop('_market_settled_at', None)
+                bot['dog_order_id'] = None
+                bot['_all_dog_order_ids'] = []
+                bot['dog_fill_qty'] = 0
+                bot['fav_fill_qty'] = 0
+                bot['yes_fill_qty'] = 0
+                bot['no_fill_qty'] = 0
+                bot['_hedge_fired'] = False
+                bot['_trade_recorded'] = False
+                bot_log('DEATH_ZONE_REVERT', bot_id, {'reason': 'tennis match point saved'})
+                print(f'🔄 DEATH ZONE REVERT: {bot_id} match point saved — restarting')
+                save_state()
+                return
+
     # ── Death zone transition for stopped bots — remove restart capability ──
     if status in ('completed', 'stopped') and not bot.get('_death_zone_stopped') and not bot.get('_market_settled_at'):
         _dz_check, _dz_reason_check = _is_phantom_death_zone(ticker, bot)
@@ -11803,23 +11832,52 @@ def _handle_phantom(bot_id, bot, actions):
 
     # ── STATE: dog_anchor_posted — waiting for dog to fill ────────
     if status == 'dog_anchor_posted':
-        # Death zone flagged but bot never transitioned — move to stopped for settlement purge
+        # Death zone flagged — check if still active (tennis match points get saved)
         if bot.get('_death_zone_stopped'):
-            _cancel_oid = bot.get('dog_order_id')
-            if _cancel_oid:
-                try:
-                    api_rate_limiter.wait()
-                    kalshi_client.cancel_order(_cancel_oid)
-                except Exception:
-                    pass
-            bot['dog_order_id'] = None
-            bot['status'] = 'stopped'
-            bot['stopped_at'] = time.time()
-            bot['_stop_reason'] = bot.get('_death_zone_reason', 'death_zone')
-            bot_log('DEATH_ZONE_STUCK_FIX', bot_id, {'prev_status': 'dog_anchor_posted'})
-            print(f'🛑 DEATH ZONE FIX: {bot_id} was stuck in dog_anchor_posted → stopped')
-            save_state()
-            return
+            _is_tennis_dz2 = ticker.startswith(('KXATP', 'KXWTA'))
+            if _is_tennis_dz2:
+                _dz_still2, _ = _is_phantom_death_zone(ticker, bot)
+                if not _dz_still2:
+                    # Match point saved — clear flag and continue normally
+                    bot['_death_zone_stopped'] = False
+                    bot['_death_zone_reason'] = None
+                    bot_log('DEATH_ZONE_REVERT', bot_id, {'reason': 'tennis match point saved', 'state': 'dog_anchor_posted'})
+                    print(f'🔄 DEATH ZONE REVERT: {bot_id} match point saved — resuming')
+                    # Fall through to normal dog_anchor_posted handling
+                else:
+                    # Still in death zone — transition to stopped
+                    _cancel_oid = bot.get('dog_order_id')
+                    if _cancel_oid:
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(_cancel_oid)
+                        except Exception:
+                            pass
+                    bot['dog_order_id'] = None
+                    bot['status'] = 'stopped'
+                    bot['stopped_at'] = time.time()
+                    bot['_stop_reason'] = bot.get('_death_zone_reason', 'death_zone')
+                    bot_log('DEATH_ZONE_STUCK_FIX', bot_id, {'prev_status': 'dog_anchor_posted'})
+                    print(f'🛑 DEATH ZONE: {bot_id} → stopped')
+                    save_state()
+                    return
+            else:
+                # Non-tennis — always transition to stopped
+                _cancel_oid = bot.get('dog_order_id')
+                if _cancel_oid:
+                    try:
+                        api_rate_limiter.wait()
+                        kalshi_client.cancel_order(_cancel_oid)
+                    except Exception:
+                        pass
+                bot['dog_order_id'] = None
+                bot['status'] = 'stopped'
+                bot['stopped_at'] = time.time()
+                bot['_stop_reason'] = bot.get('_death_zone_reason', 'death_zone')
+                bot_log('DEATH_ZONE_STUCK_FIX', bot_id, {'prev_status': 'dog_anchor_posted'})
+                print(f'🛑 DEATH ZONE: {bot_id} → stopped')
+                save_state()
+                return
         _dz, _dz_reason = _is_phantom_death_zone(ticker, bot)
         if _dz:
             dog_order_id = bot.get('dog_order_id')

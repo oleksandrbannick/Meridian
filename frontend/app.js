@@ -7620,13 +7620,13 @@ async function loadBots() {
                     const header = document.createElement('div');
                     header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:6px 12px;margin-top:12px;margin-bottom:4px;background:#0d1117;border-left:3px solid #ffaa00;border-radius:4px;font-size:12px;';
                     header.innerHTML = `
-                        <div style="display:flex;align-items:center;gap:8px;">
+                        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                             <a href="#" onclick="navigateToMarket('${_mktTickerDog}');return false;" style="color:#ffaa00;font-weight:700;text-decoration:none;" title="View in Meridian">${sportIcon} ${groupName}</a>
                             <span style="color:${groupIsLive ? '#ff6666' : '#556'};font-size:10px;font-weight:700;">${groupPhase}</span>
+                            <span style="display:inline-flex;align-items:center;gap:2px;">${_dgDotHtml}</span>
                             ${scoreBadge}
                         </div>
                         <div style="display:flex;align-items:center;gap:8px;">
-                            <span style="display:inline-flex;align-items:center;gap:3px;font-size:10px;color:#555;">${groupIds.length} ${_dgDotHtml}</span>
                             <span style="color:${groupPnlTotal >= 0 ? '#00ff88' : '#ff4444'};font-size:11px;font-weight:700;">${groupPnlTotal >= 0 ? '+' : ''}${groupPnlTotal}¢</span>
                             <button onclick="emergencyExitGame('${escapedGk}')" title="Cancel & sell ALL bots for this game" style="background:#ff333322;color:#ff6666;border:1px solid #ff333355;border-radius:5px;padding:2px 8px;font-size:10px;font-weight:700;cursor:pointer;">🚨 Exit</button>
                         </div>`;
@@ -7819,14 +7819,14 @@ async function loadBots() {
             const escapedGameKey = gameKey.replace(/'/g, "\\'");
             const _mktTickerApex = rawTickerApex.toUpperCase().split('-').slice(0,2).join('-');
             groupHeader.innerHTML = `
-                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                     <a href="#" onclick="navigateToMarket('${_mktTickerApex}');return false;" style="color:#00d4ff;font-weight:700;text-decoration:none;" title="View in Meridian">${sportIcon} ${groupMatchup}</a>
                     <span style="color:${groupIsLive ? '#ff6666' : '#556'};font-size:10px;font-weight:700;">${groupPhase}</span>
+                    <span style="display:inline-flex;align-items:center;gap:2px;">${_dotHtml}</span>
                     ${groupScoreBadge}
                     ${groupSignalBadge}
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;">
-                    <span style="display:inline-flex;align-items:center;gap:3px;font-size:10px;color:#8892a6;">${groupBots.length} ${_dotHtml}</span>
                     <span style="color:${groupProfitTotal >= 0 ? '#00ff88' : '#ff4444'};font-size:11px;font-weight:700;">${groupProfitTotal >= 0 ? '+' : ''}${(groupProfitTotal / 100).toFixed(2)}</span>
                     <button onclick="emergencyExitGame('${escapedGameKey}')" title="Cancel & sell ALL bots for this game" style="background:#ff333322;color:#ff6666;border:1px solid #ff333355;border-radius:5px;padding:2px 8px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;">🚨 Exit All</button>
                 </div>

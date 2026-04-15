@@ -1523,18 +1523,18 @@ _QTY_CAP_REC = 100   # Stealth ceiling: dynamic sizing capped here on deep marke
 _QTY_CAP_MAX = 250   # Absolute ceiling: never recommend more than this
 
 def _qty_rec(fav):
-    tob = fav.get('top1Qty', 0)
-    if tob <= 0: return 1
-    tier = _qty_tier(fav)
+    depth = fav.get('top3Qty', 0) or fav.get('top1Qty', 0)
+    if depth <= 0: return 1
+    tier = _qty_tier(fav)  # spoof detection still uses L1
     rate = {1: 0.15, 2: 0.25, 3: 0.40}[tier]
-    return min(max(1, int(tob * rate)), _QTY_CAP_REC)
+    return min(max(1, int(depth * rate)), _QTY_CAP_REC)
 
 def _qty_max(fav):
-    tob = fav.get('top1Qty', 0)
-    if tob <= 0: return 1
-    tier = _qty_tier(fav)
+    depth = fav.get('top3Qty', 0) or fav.get('top1Qty', 0)
+    if depth <= 0: return 1
+    tier = _qty_tier(fav)  # spoof detection still uses L1
     rate = {1: 0.25, 2: 0.40, 3: 0.50}[tier]
-    return min(max(1, int(tob * rate)), _QTY_CAP_MAX)
+    return min(max(1, int(depth * rate)), _QTY_CAP_MAX)
 
 
 @app.route('/api/depth-rec/<ticker>', methods=['GET'])
@@ -3297,6 +3297,7 @@ class LocalOrderbook:
                     'concentration': 0}
         total = sum(q for _, q in levels)
         top1 = levels[0][1]
+        top3 = sum(q for _, q in levels[:3])
         # Count gaps: missing levels AND dust levels between real levels
         gaps = 0
         for i in range(len(levels) - 1):
@@ -3306,7 +3307,8 @@ class LocalOrderbook:
         per_level = round(total / max(1, len(levels)))
         conc = top1 / total if total > 0 else 0
         return {'gaps': gaps, 'perLevel': per_level, 'top1Qty': round(top1),
-                'totalDepth': round(total), 'concentration': round(conc, 2)}
+                'top3Qty': round(top3), 'totalDepth': round(total),
+                'concentration': round(conc, 2)}
 
 
 # Registry of local orderbooks — {ticker: LocalOrderbook}

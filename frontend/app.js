@@ -3919,6 +3919,8 @@ function setTradeMode(mode) {
         titleEl.textContent = 'Apex MM';
         subtitleEl.textContent = 'Market Maker · Inventory Skew';
         if (typeof drawLegendBot === 'function') drawLegendBot(document.getElementById('apex-form-ghost'), 'apex');
+        // Trigger room-based width recommendation
+        selectMMWidth(_mmSelectedWidth || 4);
         updateMMPreview();
     }
 }
@@ -5734,6 +5736,25 @@ function selectMMWidth(w) {
     });
     const label = document.getElementById('mm-width-label');
     if (label) label.textContent = w + '¢';
+    // Room vs width recommendation
+    const recEl = document.getElementById('mm-width-rec');
+    if (recEl && currentArbMarket) {
+        const yb = getPrice(currentArbMarket, 'yes_bid') || 0;
+        const nb = getPrice(currentArbMarket, 'no_bid') || 0;
+        const room = (yb > 0 && nb > 0) ? 100 - yb - nb : -1;
+        if (room > 0) {
+            const recW = Math.max(2, Math.round(room * 0.7));
+            if (w < room) {
+                recEl.innerHTML = `<span style="color:#00ff88;">Room ${room}¢ — W${w} is BBO ✓</span> <span style="color:#556;">rec: W${recW}</span>`;
+            } else if (w === room) {
+                recEl.innerHTML = `<span style="color:#ffd740;">Room ${room}¢ — W${w} matches market</span> <span style="color:#556;">rec: W${recW}</span>`;
+            } else {
+                recEl.innerHTML = `<span style="color:#ff4444;">Room ${room}¢ — W${w} is behind the book ⚠</span> <span style="color:#556;">rec: W${recW}</span>`;
+            }
+        } else {
+            recEl.textContent = '';
+        }
+    }
     updateMMPreview();
 }
 
@@ -6464,9 +6485,10 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         if (gs) liveScoreHtml = buildScoreBadgeHtml(gs, 'compact');
     }
 
-    // Room + OBI for footer
+    // Room + OBI for footer — color relative to bot width
     const room = (liveYesBid > 0 && liveNoBid > 0) ? 100 - liveYesBid - liveNoBid : -1;
-    const roomCol = room >= 6 ? '#00ff88' : room >= 3 ? '#ffaa00' : '#ff4444';
+    const roomCol = room <= 0 ? '#556' : room > width ? '#00ff88' : room === width ? '#ffd740' : '#ff4444';
+    const roomTag = room <= 0 ? '' : room > width ? ' BBO' : room === width ? ' =W' : ' ⚠';
     let obiLabel = '';
     if (bot._obi != null) {
         const obi = bot._obi;
@@ -6778,7 +6800,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             <span style="color:#00d4ff;">W:${width}</span>
             <span style="color:#e0e0e0;">Mid:${midpoint}</span>
             <span style="color:#ff7043;">${bot.base_qty || bot.qty_per_level || '?'}x${bot.levels || '?'}${bot.auto_scale !== false ? ' scaled' : ''}</span>
-            ${room >= 0 ? `<span style="color:${roomCol};">${room <= 2 ? '! ' : ''}Room:${room}</span>` : ''}
+            ${room >= 0 ? `<span style="color:${roomCol};font-weight:${room < width ? 700 : 400};">Room:${room}${roomTag}</span>` : ''}
             ${obiLabel}
             ${pullCount > 0 ? `<span style="color:#ffaa00;">Pulls:${pullCount}</span>` : ''}
         </div>
@@ -9589,7 +9611,7 @@ async function apexMmModify(botId) {
         : status === 'mm_depth_pulled'
         ? '<div style="color:#00e5ff;font-size:10px;margin-bottom:8px;">Pulled — changes apply on next repost</div>'
         : '<div style="color:#ff8800;font-size:10px;margin-bottom:8px;">Holding inventory — changes queued for next cycle</div>';
-    const _widths = [4, 5, 6, 7, 8, 10, 12];
+    const _widths = [2, 3, 4, 5, 6, 7, 8, 10];
     const _rungs = [3, 5, 7, 10];
     const _wBtnStyle = (active) => `width:36px;height:36px;border-radius:50%;background:${active ? '#00d4ff18' : 'transparent'};border:1px solid ${active ? '#00d4ff' : '#1e2740'};color:${active ? '#00d4ff' : '#556'};cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;`;
     const _rBtnStyle = (active) => `width:36px;height:36px;border-radius:50%;background:${active ? '#ff704318' : 'transparent'};border:1px solid ${active ? '#ff7043' : '#1e2740'};color:${active ? '#ff7043' : '#556'};cursor:pointer;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;`;
@@ -9608,6 +9630,15 @@ async function apexMmModify(botId) {
                     ${_widths.map(w => `<button onclick="document.getElementById('apex-edit-width').value=${w};document.querySelectorAll('.ae-w-btn').forEach(b=>b.style.cssText='${_wBtnStyle(false)}');this.style.cssText='${_wBtnStyle(true)}'" class="ae-w-btn" style="${_wBtnStyle(w === curWidth)}">${w}</button>`).join('')}
                 </div>
                 <input id="apex-edit-width" type="hidden" value="${curWidth}">
+                ${(() => {
+                    const _yb = bot.live_yes_bid || 0, _nb = bot.live_no_bid || 0;
+                    const _rm = (_yb > 0 && _nb > 0) ? 100 - _yb - _nb : -1;
+                    if (_rm <= 0) return '';
+                    const _recW = Math.max(2, Math.round(_rm * 0.7));
+                    const _col = curWidth < _rm ? '#00ff88' : curWidth === _rm ? '#ffd740' : '#ff4444';
+                    const _lbl = curWidth < _rm ? `BBO ✓` : curWidth === _rm ? 'at market' : 'behind book ⚠';
+                    return `<div style="margin-top:6px;font-size:10px;text-align:center;color:${_col};">Room ${_rm}¢ — W${curWidth} ${_lbl} <span style="color:#556;">rec: W${_recW}</span></div>`;
+                })()}
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
                 <div>

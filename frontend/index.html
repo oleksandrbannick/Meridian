@@ -1118,15 +1118,17 @@
                             <label style="color:#00d4ff;font-weight:700;font-size:11px;letter-spacing:.05em;">WIDTH</label>
                             <span id="mm-width-label" style="color:#00d4ff;font-weight:800;font-size:13px;">4¢</span>
                         </div>
-                        <div style="display:flex;justify-content:space-between;gap:5px;" id="mm-width-grid">
-                            <button onclick="selectMMWidth(4)" class="mm-width-btn" data-width="4" style="width:36px;height:36px;border-radius:50%;background:#00d4ff18;border:1px solid #00d4ff;color:#00d4ff;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;">4</button>
-                            <button onclick="selectMMWidth(5)" class="mm-width-btn" data-width="5" style="width:36px;height:36px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;">5</button>
-                            <button onclick="selectMMWidth(6)" class="mm-width-btn" data-width="6" style="width:36px;height:36px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;">6</button>
-                            <button onclick="selectMMWidth(7)" class="mm-width-btn" data-width="7" style="width:36px;height:36px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;">7</button>
-                            <button onclick="selectMMWidth(8)" class="mm-width-btn" data-width="8" style="width:36px;height:36px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;">8</button>
-                            <button onclick="selectMMWidth(10)" class="mm-width-btn" data-width="10" style="width:36px;height:36px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;transition:all .15s;">10</button>
-                            <button onclick="selectMMWidth(12)" class="mm-width-btn" data-width="12" style="width:36px;height:36px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;transition:all .15s;">12</button>
+                        <div style="display:flex;justify-content:space-between;gap:4px;" id="mm-width-grid">
+                            <button onclick="selectMMWidth(2)" class="mm-width-btn" data-width="2" style="width:32px;height:32px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;">2</button>
+                            <button onclick="selectMMWidth(3)" class="mm-width-btn" data-width="3" style="width:32px;height:32px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;">3</button>
+                            <button onclick="selectMMWidth(4)" class="mm-width-btn" data-width="4" style="width:32px;height:32px;border-radius:50%;background:#00d4ff18;border:1px solid #00d4ff;color:#00d4ff;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;">4</button>
+                            <button onclick="selectMMWidth(5)" class="mm-width-btn" data-width="5" style="width:32px;height:32px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;">5</button>
+                            <button onclick="selectMMWidth(6)" class="mm-width-btn" data-width="6" style="width:32px;height:32px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;">6</button>
+                            <button onclick="selectMMWidth(7)" class="mm-width-btn" data-width="7" style="width:32px;height:32px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;">7</button>
+                            <button onclick="selectMMWidth(8)" class="mm-width-btn" data-width="8" style="width:32px;height:32px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;">8</button>
+                            <button onclick="selectMMWidth(10)" class="mm-width-btn" data-width="10" style="width:32px;height:32px;border-radius:50%;background:transparent;border:1px solid #1e2740;color:#556;cursor:pointer;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;transition:all .15s;">10</button>
                         </div>
+                        <div id="mm-width-rec" style="margin-top:6px;font-size:10px;color:#556;text-align:center;"></div>
                     </div>
 
                     <!-- Rungs (fixed) + Base Qty -->
@@ -3211,7 +3213,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260415082800"></script>
+    <script src="app.js?v=20260415091500"></script>
     <!-- Bottom status bar — always visible -->
     <div id="bottom-status-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#080c16;border-top:1px solid #1a2035;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;font-size:11px;">
         <span style="color:#3a4560;font-size:10px;letter-spacing:.03em;">hi irene</span>

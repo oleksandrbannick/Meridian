@@ -19579,6 +19579,7 @@ def add_runs(bot_id):
             bot['fav_order_id'] = None
             bot['fav_price'] = None
             bot['dog_filled_at'] = None
+            bot['dog_order_id'] = None  # clear so startup recovery doesn't find old completed fills
             bot['_all_dog_order_ids'] = []
         save_state()
         bot_log('SMART_RESTART', bot_id, {
@@ -19613,6 +19614,7 @@ def add_runs(bot_id):
         bot['fav_order_id'] = None
         bot['fav_price'] = None
         bot['dog_filled_at'] = None
+        bot['dog_order_id'] = None  # clear so startup recovery doesn't find old completed fills
         bot['_all_dog_order_ids'] = []
     save_state()
     bot_log('ADD_RUNS', bot_id, {'added': count, 'new_total': bot['repeat_count'], 'repeats_done': bot.get('repeats_done', 0)})

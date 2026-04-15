@@ -3755,8 +3755,9 @@ def _ws_realtime_flip_check(ticker, yes_bid, no_bid):
 _phantom_retreat_lock = threading.Lock()
 
 def _ws_phantom_retreat(ticker, yes_bid, no_bid):
-    """Real-time retreat: if dog bid drops within 2¢ of our posted price, pull the order.
-    Runs synchronously on WS thread — fast check, only cancels if needed."""
+    """Real-time retreat: if dog bid drops within 1¢ of our posted price, amend deeper.
+    Order stays live with same ID — no cancel window, no race condition.
+    Runs synchronously on WS thread — fast check, amend in background."""
     if not _phantom_retreat_lock.acquire(blocking=False):
         return  # another retreat in progress
     try:
@@ -3777,68 +3778,84 @@ def _ws_phantom_retreat(ticker, yes_bid, no_bid):
                 continue
             depth = bot.get('anchor_depth', 5)
             gap = dog_bid - dog_price
-            # Retreat when bid is within 2¢ of our order (about to fill at bad price)
-            if 0 <= gap <= 2:
-                def _retreat_cancel(oid, _ctx_bot_id, bot_ref=bot, bot_id_ref=bot_id):
-                    result = _safe_cancel(oid, f'ws_retreat_{_ctx_bot_id}')
-                    # _safe_cancel returns ('filled', count) when 404 with fills
-                    # Only recover if WS fill handler hasn't already fired the hedge
-                    _fills = 0
-                    if isinstance(result, tuple) and result[0] == 'filled':
-                        _fills = result[1]
-                    elif result == '404' or result is None:
-                        try:
-                            api_read_limiter.wait()
-                            _ord = kalshi_client.get_order(oid)
-                            _od = _ord.get('order', _ord) if isinstance(_ord, dict) else {}
-                            _fills = _parse_fill_count(_od)
-                        except Exception as _e:
-                            print(f'⚠ WS RETREAT FILL CHECK FAILED: {bot_id_ref}: {_e}')
-                    # Guard: if bot already re-anchored (new dog_order_id), these fills are
-                    # from a COMPLETED cycle and were already hedged. Skip to prevent double-hedge.
-                    _current_dog_oid = bot_ref.get('dog_order_id')
-                    _stale = _current_dog_oid is not None and _current_dog_oid != oid
-                    if _fills > 0 and not bot_ref.get('_hedge_fired') and not _stale:
-                        print(f'🚨 WS RETREAT FILL DETECTED: {bot_id_ref} order {oid[:12]} had {_fills} fills!')
-                        bot_log('WS_RETREAT_FILL_ON_404', bot_id_ref, {
-                            'order_id': oid, 'fills': _fills, 'dog_price': bot_ref.get('dog_price'),
-                        }, level='ERROR')
-                        bot_ref['dog_fill_qty'] = max(bot_ref.get('dog_fill_qty', 0), _fills)
-                        _ds = bot_ref.get('dog_side', 'no')
-                        bot_ref[f'{_ds}_fill_qty'] = bot_ref['dog_fill_qty']
-                        bot_ref['status'] = 'dog_filled'
-                        bot_ref['dog_filled_at'] = time.time()
-                        bot_ref['_hedge_fired'] = True
-                        _qty = bot_ref.get('quantity', 1)
-                        if _fills < _qty:
-                            bot_ref['_original_qty'] = _qty
-                            bot_ref['_partial_hedge_qty'] = _fills
-                        _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id_ref,)))
-                        print(f'⚡ WS RETREAT → INSTANT HEDGE: {bot_id_ref} {_fills}x fills — hedge fired')
+            # Retreat when bid is within 1¢ of our order (about to fill at bad price)
+            if 0 <= gap <= 1:
+                # Amend to restore full depth — order stays live, same ID
+                new_price = max(1, dog_bid - depth)
+                if new_price >= dog_price:
+                    continue  # can't go deeper, skip
+                qty = bot.get('quantity', 1)
+                def _retreat_amend(oid, _new_price, _dog_side, _qty, _ticker,
+                                   bot_ref=bot, bot_id_ref=bot_id, _old_price=dog_price,
+                                   _dog_bid=dog_bid, _depth=depth, _gap=gap):
+                    try:
+                        _price_kw = {f'{_dog_side}_price': _new_price}
+                        api_rate_limiter.wait()
+                        _resp = kalshi_client.amend_order(
+                            oid, ticker=_ticker, side=_dog_side,
+                            count=_qty, action='buy', **_price_kw
+                        )
+                        # Check if amend returned a new order ID
+                        _ord = _resp.get('order', _resp) if isinstance(_resp, dict) else {}
+                        _new_oid = _ord.get('order_id', '')
+                        if _new_oid and _new_oid != oid:
+                            bot_ref['dog_order_id'] = _new_oid
+                            bot_ref.setdefault('_all_dog_order_ids', []).append(_new_oid)
+                            if _dog_side == 'yes':
+                                bot_ref['yes_order_id'] = _new_oid
+                            else:
+                                bot_ref['no_order_id'] = _new_oid
+                        bot_ref['dog_price'] = _new_price
+                        if _dog_side == 'yes':
+                            bot_ref['yes_price'] = _new_price
+                        else:
+                            bot_ref['no_price'] = _new_price
+                        bot_ref['_last_retreat_at'] = time.time()
+                        # Recalculate precalc hedge for new dog price
+                        _tw = bot_ref.get('target_width', 5)
+                        bot_ref['_precalc_hedge_price'] = _precalc_phantom_hedge(_new_price, _tw, _dog_side, _qty)
                         save_state()
-                    elif _fills > 0 and _stale:
-                        print(f'🛡️ WS RETREAT STALE BLOCKED: {bot_id_ref} {_fills} fills on old order {oid[:12]} — bot already re-anchored, skipping')
-                        bot_log('WS_RETREAT_STALE_BLOCKED', bot_id_ref, {
-                            'order_id': oid[:12], 'fills': _fills, 'current_dog_oid': (_current_dog_oid or '')[:12],
-                        }, level='WARN')
-                threading.Thread(target=_retreat_cancel, args=(dog_order_id, bot_id), daemon=True).start()
-                bot['dog_order_id'] = None
-                bot['_last_retreat_at'] = time.time()
-                # Clear fill state to prevent stale fills from triggering ghost hedge
-                bot['dog_fill_qty'] = 0
-                bot['fav_fill_qty'] = 0
-                bot['yes_fill_qty'] = 0
-                bot['no_fill_qty'] = 0
-                bot['dog_filled_at'] = None
-                bot['_hedge_fired'] = False
-                bot['_trade_recorded'] = False
-                bot['status'] = 'waiting_repeat'
-                bot['waiting_repeat_since'] = time.time() + 1
-                print(f'⚡ WS RETREAT: {bot_id} bid={dog_bid}¢ gap={gap}¢ from dog@{dog_price}¢ — pulled instantly')
+                    except Exception as _e:
+                        _err = str(_e)
+                        if '404' in _err:
+                            # Order filled during amend — check fills and hedge
+                            _fills = 0
+                            try:
+                                api_read_limiter.wait()
+                                _ord_resp = kalshi_client.get_order(oid)
+                                _od = _ord_resp.get('order', _ord_resp) if isinstance(_ord_resp, dict) else {}
+                                _fills = _parse_fill_count(_od)
+                            except Exception:
+                                pass
+                            if _fills > 0 and not bot_ref.get('_hedge_fired'):
+                                print(f'🔍 WS RETREAT AMEND FILL: {bot_id_ref} order {oid[:12]} filled {_fills} during amend!')
+                                bot_ref['dog_fill_qty'] = _fills
+                                bot_ref[f'{_dog_side}_fill_qty'] = _fills
+                                bot_ref['status'] = 'dog_filled'
+                                bot_ref['dog_filled_at'] = time.time()
+                                bot_ref['_hedge_fired'] = True
+                                if _fills < _qty:
+                                    bot_ref['_original_qty'] = _qty
+                                    bot_ref['_partial_hedge_qty'] = _fills
+                                _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id_ref,)))
+                                bot_log('WS_RETREAT_AMEND_FILL', bot_id_ref, {
+                                    'order_id': oid[:12], 'fills': _fills,
+                                }, level='WARN')
+                                save_state()
+                                return
+                            # Order gone with 0 fills — enter waiting_repeat for reanchor
+                            bot_ref['dog_order_id'] = None
+                            bot_ref['status'] = 'waiting_repeat'
+                            bot_ref['waiting_repeat_since'] = time.time()
+                            save_state()
+                        else:
+                            print(f'⚠ WS RETREAT AMEND FAILED: {bot_id_ref} {_e}')
+                threading.Thread(target=_retreat_amend, args=(dog_order_id, new_price, dog_side, qty, ticker), daemon=True).start()
+                print(f'⚡ WS RETREAT: {bot_id} bid={dog_bid}¢ gap={gap}¢ dog@{dog_price}¢→{new_price}¢ (amend)')
                 bot_log('PHANTOM_WS_RETREAT', bot_id, {
                     'dog_bid': dog_bid, 'dog_price': dog_price, 'gap': gap, 'depth': depth,
+                    'new_price': new_price, 'mode': 'amend',
                 })
-                save_state()
     finally:
         _phantom_retreat_lock.release()
 
@@ -4048,9 +4065,9 @@ def _ws_phantom_drift_guard(ticker, yes_bid, no_bid):
         if not dog_oid:
             continue
 
-        # Same-market: flip sides instead of killing
-        _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
-        if not _is_cross:
+        # Flip sides — works for both same-market and cross-market
+        # (flip is about dog side on THIS ticker, hedge ticker doesn't matter)
+        if True:
             _opp = 'yes' if dog_side == 'no' else 'no'
             _opp_bid = (yes_bid if _opp == 'yes' else no_bid)
             if _opp_bid > 0 and _opp_bid < dog_bid:

@@ -4152,14 +4152,6 @@ def _ws_phantom_drift_guard(ticker, yes_bid, no_bid):
     # Ceiling sell follow removed — no more dog sell system
 
 
-def _phantom_taker_depth_tier(fav_depth):
-    """Thin book = taker sooner (nobody lifting maker). Thick book = more patient (fills likely).
-    Returns timer_seconds only — no threshold. Once timer expires, cross the spread unconditionally."""
-    if fav_depth < 200:    return 10    # THIN: nobody taking, cross fast
-    elif fav_depth < 500:  return 15    # MODERATE: give maker a fair shot
-    else:                  return 30    # THICK: plenty of takers, be patient
-
-
 def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
     """Instant snap UP: if fav bid rose above posted price, amend up immediately.
     Catches fast market moves (tennis breaks, game events) before the 2s monitor cycle.
@@ -4182,98 +4174,8 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
         if fav_bid <= 0:
             continue
 
-        # ── Depth-aware taker fallback: thin books fire sooner, thick books stay patient ──
-        fav_ask = (yes_ask if fav_side == 'yes' else no_ask) if hedge_ticker == ticker else 0
-        dog_price = bot.get('dog_price', 0)
-        posted_at = bot.get('fav_posted_at', bot.get('dog_filled_at', 0))
-        hedge_age = time.time() - posted_at if posted_at > 0 else 0
-
-        # Read real-time fav depth at bid level (1 level = what the card shows)
-        _lob = _local_orderbooks.get(hedge_ticker)
-        _fav_depth = round(_lob.get_total_depth(fav_side, 1)) if _lob and _lob.last_update_ts > 0 else 0
-        _taker_timer = _phantom_taker_depth_tier(_fav_depth)
-
-        # ── Timer expired: cancel post_only order, repost at bid+1 as regular limit ──
-        # Regular limit (post_only=False) crosses the spread if bid+1 hits the ask,
-        # and can cross later if the ask drops to it. No special taker detection needed.
-        if fav_bid > 0 and hedge_age >= _taker_timer and not bot.get('_taker_fired'):
-            _target = fav_bid + 1
-            if _target > fav_price:  # only if bid+1 is above current posted price
-                if not _phantom_drop_lock.acquire(blocking=False):
-                    return
-                try:
-                    fav_oid = bot.get('fav_order_id')
-                    if fav_oid:
-                        qty = bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1))
-                        # Cancel the post_only maker order — verify fills before reposting
-                        _cancel_result = _safe_cancel(fav_oid, f'bid_plus_one_{bot_id}')
-                        _cancel_race_fills = 0
-                        if isinstance(_cancel_result, tuple) and _cancel_result[0] == 'filled':
-                            _cancel_race_fills = _cancel_result[1]
-                        if _cancel_race_fills > 0:
-                            bot['fav_fill_qty'] = max(bot.get('fav_fill_qty', 0), _cancel_race_fills)
-                            if fav_side == 'yes':
-                                bot['yes_fill_qty'] = bot['fav_fill_qty']
-                            else:
-                                bot['no_fill_qty'] = bot['fav_fill_qty']
-                            print(f'⚡ BID+1 CANCEL-RACE: {bot_id} old order had {_cancel_race_fills} fills — counted before repost')
-                            bot_log('PHANTOM_BID1_CANCEL_RACE', bot_id, {
-                                'fills': _cancel_race_fills, 'old_oid': fav_oid[:12],
-                            })
-                        # Repost as regular limit order at bid+1
-                        _filled_already = bot.get('fav_fill_qty', 0)
-                        _repost_qty = qty - _filled_already
-                        if _repost_qty > 0:
-                            price_key = 'yes_price' if fav_side == 'yes' else 'no_price'
-                            api_rate_limiter.wait(priority=True)
-                            _resp = kalshi_client.create_order(
-                                ticker=hedge_ticker, side=fav_side, action='buy',
-                                count=_repost_qty, **{price_key: _target}
-                            )
-                            _order = _resp.get('order', _resp) if isinstance(_resp, dict) else {}
-                            _new_oid = _order.get('order_id', '')
-                            if _new_oid:
-                                bot['fav_order_id'] = _new_oid
-                                _hedge_ids = bot.setdefault('_all_hedge_order_ids', [])
-                                if fav_oid and fav_oid not in _hedge_ids:
-                                    _hedge_ids.append(fav_oid)  # old order (has partial fills)
-                                if _new_oid not in _hedge_ids:
-                                    _hedge_ids.append(_new_oid)  # new order (will get remaining fills)
-                                if fav_side == 'yes':
-                                    bot['yes_order_id'] = _new_oid
-                                else:
-                                    bot['no_order_id'] = _new_oid
-                        _is_taker = fav_ask > 0 and _target >= fav_ask
-                        bot['fav_price'] = _target
-                        bot['_taker_fired'] = True
-                        bot['_fav_was_taker'] = _is_taker
-                        _depth_label = 'THIN' if _fav_depth < 200 else ('MOD' if _fav_depth < 500 else 'THICK')
-                        _mode = 'TAKER (bid+1=ask)' if _is_taker else f'BID+1 (ask={fav_ask}¢)'
-                        combined = dog_price + _target
-                        print(f'⚡ WS PHANTOM {_mode}: {bot_id} fav→{_target}¢ (combined={combined}¢, waited {int(hedge_age)}s, depth={_fav_depth} [{_depth_label}])')
-                        bot_log('PHANTOM_WS_TAKER', bot_id, {
-                            'fav_price': _target, 'dog_price': dog_price,
-                            'combined': combined, 'hedge_age_s': int(hedge_age),
-                            'was_price': fav_price, 'fav_ask': fav_ask,
-                            'is_taker': _is_taker, 'fav_bid': fav_bid,
-                            'fav_depth': _fav_depth, 'depth_tier': _depth_label,
-                            'taker_timer': _taker_timer,
-                        })
-                        save_state()
-                finally:
-                    _phantom_drop_lock.release()
-                return
-
-        # Snap target: bid+1 if in bid+1 mode, otherwise bid
-        # In bid+1 mode, the live bid INCLUDES our order (we ARE bid+1).
-        # So if bid == fav_price - 1, we're already correctly positioned — skip.
-        # Only move if the underlying bid actually changed.
-        if bot.get('_taker_fired'):
-            if fav_bid == fav_price - 1 or fav_bid == fav_price:
-                continue  # we're at bid+1 or bid caught up to us, stay put
-            snap_target = fav_bid + 1
-        else:
-            snap_target = fav_bid
+        # Always snap to bid — pure maker, no bid+1 escalation
+        snap_target = fav_bid
 
         # Skip if already at target
         if snap_target == fav_price:
@@ -4315,12 +4217,11 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
             _snap_dog_price = bot.get('dog_price', 0)
             combined = _snap_dog_price + snap_target
             _snap_dir = '↑' if snap_target > fav_price else '↓'
-            _snap_mode = 'BID+1' if bot.get('_taker_fired') else 'BID'
-            print(f'⚡ WS PHANTOM SNAP {_snap_dir} {_snap_mode}: {bot_id} fav {fav_price}→{snap_target}¢ (bid={fav_bid}¢ combined={combined}¢)')
+            print(f'⚡ WS PHANTOM SNAP {_snap_dir}: {bot_id} fav {fav_price}→{snap_target}¢ (bid={fav_bid}¢ combined={combined}¢)')
             bot_log('PHANTOM_WS_INSTANT_SNAP', bot_id, {
                 'old_price': fav_price, 'new_price': snap_target,
                 'fav_bid': fav_bid, 'dog_price': _snap_dog_price,
-                'combined': combined, 'mode': _snap_mode,
+                'combined': combined,
             })
             save_state()
         except Exception as e:
@@ -5186,7 +5087,6 @@ def _execute_phantom_hedge(bot_id):
         bot['fav_posted_at'] = time.time()
         bot['fav_walk_count'] = 0
         bot['fav_last_walk_at'] = None
-        bot['_taker_fired'] = False
         if fav_side == 'yes':
             bot['yes_price'] = actual_fav_price
             bot['yes_order_id'] = fav_order_id
@@ -12596,8 +12496,7 @@ def _handle_phantom(bot_id, bot, actions):
             return
 
         dog_price = bot['dog_price']
-        # Post at fav bid, or bid+1 if in bid+1 mode
-        hedge_price = (fav_bid + 1) if bot.get('_taker_fired') else fav_bid
+        hedge_price = fav_bid
         if hedge_price > 99:
             hedge_price = 99  # Kalshi max is 99c for buy orders
         if hedge_price < 1:
@@ -12630,20 +12529,10 @@ def _handle_phantom(bot_id, bot, actions):
                 print(f'🔧 PHANTOM REPOST SKIP: {bot_id} already fully filled ({_already_filled}/{qty}) → fav_hedge_posted for completion')
                 save_state()
                 return
-            if bot.get('_taker_fired'):
-                # Taker mode: regular limit order (can cross the spread)
-                price_key = 'yes_price' if fav_side == 'yes' else 'no_price'
-                api_rate_limiter.wait(priority=True)
-                fav_resp = kalshi_client.create_order(
-                    ticker=hedge_ticker, side=fav_side, action='buy',
-                    count=_repost_qty, **{price_key: hedge_price}
-                )
-                actual_fav_price = hedge_price
-            else:
-                fav_resp, actual_fav_price = create_order_maker(
-                    ticker=hedge_ticker, side=fav_side, action='buy',
-                    count=_repost_qty, price=hedge_price
-                )
+            fav_resp, actual_fav_price = create_order_maker(
+                ticker=hedge_ticker, side=fav_side, action='buy',
+                count=_repost_qty, price=hedge_price
+            )
             bot['_partial_hedge_qty'] = _repost_qty
             fav_order_id = fav_resp['order']['order_id']
             bot['fav_order_id'] = fav_order_id
@@ -13136,7 +13025,6 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['raw_hedge_ms'] = None
                 bot['hedge_latency_ms'] = None
                 bot['hedge_fill_latency_ms'] = None
-                bot['_fav_was_taker'] = False
                 bot['fav_order_id'] = None
                 bot['fav_fill_qty'] = 0
                 bot['dog_fill_qty'] = 0
@@ -13393,14 +13281,8 @@ def _handle_phantom(bot_id, bot, actions):
         # Fav bid is back — reset no-bid counter
         bot['_no_fav_bid_count'] = 0
 
-        # Walk target: bid+1 if in bid+1 mode, otherwise bid
-        # In bid+1 mode, bid includes our order — if bid == price-1, we're correct
-        if bot.get('_taker_fired'):
-            if current_fav_bid == current_fav_price - 1 or current_fav_bid == current_fav_price:
-                return  # already at bid+1, no move needed
-            new_fav_price = current_fav_bid + 1
-        else:
-            new_fav_price = current_fav_bid
+        # Always snap to bid — pure maker, $0 fees
+        new_fav_price = current_fav_bid
 
         if new_fav_price <= 0:
             return

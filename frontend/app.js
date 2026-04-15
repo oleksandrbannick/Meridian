@@ -5972,7 +5972,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const statusMap = {
         'dog_anchor_posted': _isPulledFloor ? '⏸ PULLED' : _isParked ? '🅿️ PARKED' : '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
         'dog_filled': bot._orphan_hedge ? '🚨 ORPHAN — HEDGING' : '👻 FILLED — HEDGING', 'ladder_filled_no_fav': '👻 FILLED — HEDGING',
-        'fav_hedge_posted': bot._game_over_holding ? '⏳ HOLDING — SETTLEMENT' : bot._taker_fired ? '⚡ BID+1' : '⭐ HEDGE POSTED', 'waiting_repeat': bot._just_completed ? '✅ COMPLETED' : bot._flip_pending ? '⚡ FLIPPING' : '🔄 REPEATING',
+        'fav_hedge_posted': bot._game_over_holding ? '⏳ HOLDING — SETTLEMENT' : '⭐ HEDGE POSTED', 'waiting_repeat': bot._just_completed ? '✅ COMPLETED' : bot._flip_pending ? '⚡ FLIPPING' : '🔄 REPEATING',
         'completed': _isSettled ? '🏁 SETTLED' : _isAwaitingSettlement ? '⏳ AWAITING SETTLEMENT' : _isDeathZone ? '💀 DEATH ZONE' : _isSmartStopped ? '⏹ SMART STOP' : _isCompletedRuns ? '✅ COMPLETED RUNS' : '✅ COMPLETE',
         'stopped': bot._stop_reason === 'scout_orphan_cleanup' ? '🛑 STOPPED — Scout managing' : _isDeathZone ? '💀 DEATH ZONE' : _isSmartStopped ? '⏹ SMART STOP' : (bot._pending_sells?.length ? '📤 SELLING' : '🛑 STOPPED'),
         'paused_by_scout': '⏸️ PAUSED — Scout active',

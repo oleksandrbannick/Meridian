@@ -1203,16 +1203,11 @@ function isKalshiLive(market) {
 
     const ticker = market.event_ticker || market.ticker || '';
 
-    // ── Tennis: Use Kalshi milestone_status (authoritative) when available ──
+    // ── Tennis: milestone_status only — pregame tennis has active books,
+    // so price-based detection creates massive false positives ──
     const isTennis = /KXATP|KXWTA/i.test(ticker);
     if (isTennis) {
-        // Milestones are authoritative when available
         if (market.milestone_status) return market.milestone_status === 'live';
-        // Fallback: if both sides have bids and combined < 105, likely live
-        // (pregame tennis has wide spreads or no bids)
-        const yb = getPrice(market, 'yes_bid') || 0;
-        const nb = getPrice(market, 'no_bid') || 0;
-        if (yb > 0 && nb > 0 && (yb + nb) > 80) return true;
         return false;
     }
 
@@ -2229,6 +2224,34 @@ function displayEventRow(eventData, container) {
         liveBanner.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:8px;background:linear-gradient(135deg,#0a1a0a,#0f1f12);border:1px solid #00ff88;border-radius:8px;padding:10px 16px;margin-bottom:12px;';
         liveBanner.innerHTML = `<span style="color:#ff3333;font-size:10px;font-weight:800;letter-spacing:1px;display:flex;align-items:center;gap:4px;"><span style="animation:pulse 1.5s infinite;">●</span> LIVE</span><span style="color:#8892a6;font-size:12px;">Score unavailable</span>`;
         card.appendChild(liveBanner);
+    } else if (!gameScore && eventData.markets && eventData.markets.length > 0) {
+        // No score data at all — show Kalshi open_time as scheduled start
+        const _sampleMkt = eventData.markets[0];
+        const _openTime = _sampleMkt.open_time || _sampleMkt.expected_expiration_time || '';
+        if (_openTime) {
+            const _d = new Date(_openTime);
+            if (!isNaN(_d.getTime())) {
+                const _timeLabel = _d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZoneName: 'short' });
+                const _isTennis = ((_sampleMkt.event_ticker || _sampleMkt.ticker || '').toUpperCase().match(/KXATP|KXWTA/));
+                const _names = eventData.markets.filter(m => m.title).map(m => {
+                    const nm = (m.title || '').match(/^Will\s+(.+?)\s+win\s/i);
+                    return nm ? nm[1] : '';
+                }).filter(Boolean);
+                const _p1 = _names[0] || '';
+                const _p2 = _names[1] || '';
+                if (_p1 || _p2) {
+                    const pregameBanner = document.createElement('div');
+                    pregameBanner.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:10px;background:#111825;border:1px solid #2a3447;border-radius:8px;padding:10px 16px;margin-bottom:12px;';
+                    pregameBanner.innerHTML = `
+                        <span style="color:#8892a6;font-size:13px;font-weight:600;">${_p1}</span>
+                        <span style="color:#4a5568;font-size:12px;">vs</span>
+                        <span style="color:#8892a6;font-size:13px;font-weight:600;">${_p2}</span>
+                        <span style="color:#2a3447;margin:0 6px;">│</span>
+                        <span style="color:#6a7488;font-size:12px;">🕐 ${_timeLabel}</span>`;
+                    card.appendChild(pregameBanner);
+                }
+            }
+        }
     } else if (gameScore) {
         // Pregame scoreboard (no Kalshi activity)
         const scoreboard = buildScoreboard(gameScore);

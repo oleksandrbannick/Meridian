@@ -7583,6 +7583,50 @@ def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, scale=Tru
     return yes_levels, no_levels
 
 
+def _apex_mm_sweep_orphans(bot_id, bot):
+    """Cancel ALL resting orders on this ticker that aren't owned by other active bots.
+    Catches stale orders from previous cycles that weren't properly cancelled."""
+    ticker = bot.get('ticker', '')
+    if not ticker:
+        return 0
+    try:
+        _protected = set()
+        for _ob_id, _ob in active_bots.items():
+            if _ob_id == bot_id:
+                continue
+            if _ob.get('status', '') in ('completed', 'stopped', 'cancelled'):
+                continue
+            if _ob.get('ticker') != ticker:
+                continue
+            for _ok in ('dog_order_id', 'fav_order_id', 'yes_order_id', 'no_order_id', 'hedge_order_id'):
+                _ov = _ob.get(_ok)
+                if _ov:
+                    _protected.add(_ov)
+            for _ov in _ob.get('_all_placed_order_ids', []):
+                _protected.add(_ov)
+            for _side_key in ('yes_orders', 'no_orders'):
+                for _lvl in _ob.get(_side_key, {}).values():
+                    _ov = _lvl.get('oid')
+                    if _ov:
+                        _protected.add(_ov)
+        api_read_limiter.wait()
+        _resting = kalshi_client.get_orders(status='resting', ticker=ticker)
+        _resting_orders = _resting.get('orders', []) if isinstance(_resting, dict) else []
+        _orphan_cancelled = 0
+        for _ro in _resting_orders:
+            _ro_oid = _ro.get('order_id', '')
+            if _ro_oid and _ro_oid not in _protected:
+                _safe_cancel(_ro_oid, f'apex_mm_orphan_sweep_{bot_id}')
+                _orphan_cancelled += 1
+        if _orphan_cancelled:
+            print(f'🧹 APEX MM ORPHAN SWEEP: {bot_id} cancelled {_orphan_cancelled} stale orders on {ticker}')
+            bot_log('APEX_MM_ORPHAN_SWEEP', bot_id, {'cancelled': _orphan_cancelled, 'ticker': ticker}, level='WARN')
+        return _orphan_cancelled
+    except Exception as _e:
+        print(f'⚠ APEX MM ORPHAN SWEEP FAIL: {bot_id}: {_e}')
+        return 0
+
+
 def _apex_mm_pull_all(bot_id, bot, reason):
     """Cancel all live ladder orders. Set status to mm_depth_pulled.
     CRITICAL: check for fills during cancel — if orders filled before cancel went through,
@@ -7839,6 +7883,8 @@ def _apex_mm_repost_ladder(bot_id, bot):
         bot_log('APEX_MM_REPOST', bot_id, {'midpoint': midpoint, 'skew_pending': True})
         print(f'📊 APEX MM REPOST: {bot_id} mid={midpoint} (skew pending, holding inventory)')
     else:
+        # Sweep orphaned orders before posting fresh ladder
+        _apex_mm_sweep_orphans(bot_id, bot)
         yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, scale=bot.get('auto_scale', False), inv_limit=bot.get('inventory_limit', 0))
         if not yes_levels and not no_levels:
             return
@@ -8718,6 +8764,10 @@ def _apex_mm_fresh_ladder(bot_id, bot):
         for _lv in bot.get(_sk, {}).values():
             _lv['fill_qty'] = 0
             _lv['oid'] = None
+
+    # Sweep orphaned orders from previous cycles before posting fresh ladder
+    _apex_mm_sweep_orphans(bot_id, bot)
+
     yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, scale=bot.get('auto_scale', False), inv_limit=bot.get('inventory_limit', 0))
     _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
     bot['midpoint'] = midpoint

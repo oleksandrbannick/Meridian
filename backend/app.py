@@ -13656,14 +13656,48 @@ def _handle_phantom(bot_id, bot, actions):
             new_dog_price = bot.get('dog_price', 10)  # fallback to old price
 
         # Defensive: cancel old dog order before placing new one
-        # DO NOT hedge cancel-race fills here — this order is from the COMPLETED run,
-        # its fills are already hedged. Hedging again creates naked orphan positions.
+        # Check for cancel-race fills — the order may have filled between posting and this cancel
         old_dog_oid = bot.get('dog_order_id')
         if old_dog_oid:
             _rc = _safe_cancel(old_dog_oid, f'phantom repeat cleanup {bot_id}')
             if _rc == False:
                 print(f'⚠ REPEAT REPOST ABORTED: {bot_id} cancel of old order failed — not posting duplicate')
                 return
+            # Cancel-race: order filled during waiting_repeat → fire hedge instead of reanchoring
+            if isinstance(_rc, tuple) and _rc[0] == 'filled':
+                _race_fills = _rc[1]
+                # Double-check: if WS already caught this fill and fired hedge, don't double-hedge
+                if bot.get('_hedge_fired') or bot.get('dog_fill_qty', 0) > 0:
+                    print(f'⚠ REPEAT CANCEL-RACE: {bot_id} {_race_fills} fills but hedge already fired — skipping')
+                else:
+                    # Verify fills via API to be sure
+                    _verified_fills = _race_fills
+                    try:
+                        api_read_limiter.wait()
+                        _old_resp = kalshi_client.get_order(old_dog_oid)
+                        _old_data = _old_resp.get('order', _old_resp) if isinstance(_old_resp, dict) else {}
+                        _verified_fills = _parse_fill_count(_old_data)
+                    except Exception:
+                        pass  # use _safe_cancel's count as fallback
+                    if _verified_fills > 0:
+                        print(f'🔍 REPEAT RACE CATCH: {bot_id} old order {old_dog_oid[:12]} filled {_verified_fills} during waiting_repeat!')
+                        bot['dog_fill_qty'] = _verified_fills
+                        if dog_side == 'yes':
+                            bot['yes_fill_qty'] = _verified_fills
+                        else:
+                            bot['no_fill_qty'] = _verified_fills
+                        bot['_hedge_fired'] = True
+                        bot['dog_filled_at'] = time.time()
+                        bot['status'] = 'dog_filled'
+                        if _verified_fills < qty:
+                            bot['_original_qty'] = qty
+                            bot['_partial_hedge_qty'] = _verified_fills
+                        _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
+                        bot_log('PHANTOM_REPEAT_RACE_RECOVERED', bot_id, {
+                            'old_oid': old_dog_oid[:12], 'fills': _verified_fills, 'qty': qty,
+                        })
+                        save_state()
+                        return
             bot['dog_order_id'] = None
 
         try:

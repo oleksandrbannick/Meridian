@@ -13212,7 +13212,7 @@ function renderApexMMStats(trades, pnl) {
             ${_bub('Trades', totalTrades, `${wins}W / ${losses}L`, '#00d4ff')}
             ${_bub(`${monthlyLabel}`, monthlyContracts.toLocaleString(), `${monthlyPct}% of 300k goal`, monthlyPct >= 100 ? '#00ff88' : '#ff8800')}
             ${_bub('Lifetime', lifetimeContracts.toLocaleString(), 'contracts', '#ff8800')}
-            ${hasAnyFilter ? _bub(`${filterLabel}`, filteredContracts.toLocaleString(), 'contracts', '#ff8800') : _bub('Total Qty', (totalTrades > 0 ? Math.round(filteredContracts / totalTrades) : 0) + 'x avg', `${filteredContracts.toLocaleString()} contracts`, '#ff8800')}
+            ${hasAnyFilter ? _bub(`${filterLabel}`, filteredContracts.toLocaleString(), 'contracts', '#ff8800') : _bub('Contracts', filteredContracts.toLocaleString(), `~${totalTrades > 0 ? Math.round(filteredContracts / totalTrades) : 0} per trade`, '#ff8800')}
             ${_bub('Avg Hold', fmtHold(avgHoldS), `${holdTrades.length} round trips`, '#00d4ff')}
             ${_bub('Snap Rate', `${snapRate}%`, `${snappedCount}/${snappableTrades.length} snapped`, snapRate > 50 ? '#ff4444' : snapRate > 25 ? '#ffaa00' : '#00ff88')}
         </div>`;
@@ -14349,7 +14349,7 @@ function renderDogStatsAndDepth(trades, pnl) {
                 ${_bub('Trades', totalTrades, `${wins}W / ${losses}L`, '#ffaa00')}
                 ${_bub(`${monthlyLabel}`, monthlyContracts.toLocaleString(), `${monthlyPct}% of 300k goal`, monthlyPct >= 100 ? '#00ff88' : '#ff66aa')}
                 ${_bub('Lifetime', lifetimeContracts.toLocaleString(), 'contracts', '#ff66aa')}
-                ${hasAnyFilter ? _bub(`${filterLabel}`, filteredContracts.toLocaleString(), 'contracts', '#ff66aa') : _bub('Total Qty', (totalTrades > 0 ? Math.round(filteredContracts / totalTrades) : 0) + 'x avg', `${filteredContracts.toLocaleString()} contracts`, '#ff66aa')}
+                ${hasAnyFilter ? _bub(`${filterLabel}`, filteredContracts.toLocaleString(), 'contracts', '#ff66aa') : _bub('Contracts', filteredContracts.toLocaleString(), `~${totalTrades > 0 ? Math.round(filteredContracts / totalTrades) : 0} per trade`, '#ff66aa')}
                 ${_bub('Hedge Speed', avgHedgeMs === '—' ? '—' : `${avgHedgeMs}ms`, `${hedgeTrades.length} samples`, '#ffaa00')}
                 ${_bub('Hedge Fill', fmtFillTime(avgHedgeFillS), `${hfTrades.length} samples`, '#ff66aa')}
             </div>`;

@@ -369,11 +369,13 @@ async function navigateToMarket(eventTickerPrefix) {
 // Navigate from Markets tab to Bots tab and scroll/highlight the bot card
 function navigateToBot(ticker, botType) {
     switchTab('bots');
+    // Switch to the correct sub-tab based on bot type
+    const subTab = botType === 'phantom' ? 'dog' : botType === 'meridian' ? 'middle' : botType === 'scout' ? 'bets' : 'arb';
+    if (typeof setBotsTab === 'function') setBotsTab(subTab);
     // After tab switch + render, find and highlight the bot card by ticker
     setTimeout(() => {
-        // Bot cards contain the ticker in links/text — find by searching card content
         const gameKey = ticker.split('-').length >= 2 ? ticker.split('-')[1] : ticker;
-        const allCards = document.querySelectorAll('#bots-list > div, #dog-bots-list > div, #middle-bots-list > div');
+        const allCards = document.querySelectorAll('#bots-list > div, #dog-bots-list > div, #middle-bots-list > div, #bets-bots-list > div');
         for (const card of allCards) {
             const text = card.textContent || '';
             const html = card.innerHTML || '';

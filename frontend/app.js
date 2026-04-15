@@ -7622,7 +7622,7 @@ async function loadBots() {
                     });
                     const _dgDotHtml = Object.entries(_dgStateCounts)
                         .sort((a, b) => b[1] - a[1])
-                        .map(([col, n]) => `<span style="color:${col};font-size:12px;font-weight:700;text-shadow:0 0 4px ${col}66;">●${n > 1 ? '<span style="font-size:10px;">' + n + '</span>' : ''}</span>`)
+                        .map(([col, n]) => `<span style="color:${col};font-size:18px;font-weight:700;text-shadow:0 0 6px ${col}88;line-height:1;">●${n > 1 ? '<span style="font-size:11px;color:' + col + ';">' + n + '</span>' : ''}</span>`)
                         .join('');
                     const header = document.createElement('div');
                     header.style.cssText = 'padding:6px 12px;margin-top:12px;margin-bottom:4px;background:#0d1117;border-left:3px solid #ffaa00;border-radius:4px;font-size:12px;';
@@ -7637,7 +7637,7 @@ async function loadBots() {
                         </div>
                         <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
                             <span style="display:inline-flex;align-items:center;gap:3px;">${_dgDotHtml}</span>
-                            <span style="color:${groupPnlTotal >= 0 ? '#00ff88' : '#ff4444'};font-size:11px;font-weight:700;">${groupPnlTotal >= 0 ? '+' : ''}${groupPnlTotal}¢</span>
+                            <span style="background:${groupPnlTotal >= 0 ? '#00ff8815' : '#ff444415'};border:1px solid ${groupPnlTotal >= 0 ? '#00ff8833' : '#ff444433'};border-radius:5px;padding:2px 8px;color:${groupPnlTotal >= 0 ? '#00ff88' : '#ff4444'};font-size:11px;font-weight:700;">${groupPnlTotal >= 0 ? '+' : ''}${groupPnlTotal}¢</span>
                         </div>`;
                     dogList.appendChild(header);
                     for (const botId of groupIds) {
@@ -7809,7 +7809,7 @@ async function loadBots() {
             });
             const _dotHtml = Object.entries(_stateCounts)
                 .sort((a, b) => b[1] - a[1])
-                .map(([col, n]) => `<span style="color:${col};font-size:12px;font-weight:700;text-shadow:0 0 4px ${col}66;">●${n > 1 ? '<span style="font-size:10px;">' + n + '</span>' : ''}</span>`)
+                .map(([col, n]) => `<span style="color:${col};font-size:18px;font-weight:700;text-shadow:0 0 6px ${col}88;line-height:1;">●${n > 1 ? '<span style="font-size:11px;color:' + col + ';">' + n + '</span>' : ''}</span>`)
                 .join('');
 
             const groupHeader = document.createElement('div');
@@ -7838,7 +7838,7 @@ async function loadBots() {
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
                     <span style="display:inline-flex;align-items:center;gap:3px;">${_dotHtml}</span>
-                    <span style="color:${groupProfitTotal >= 0 ? '#00ff88' : '#ff4444'};font-size:11px;font-weight:700;">${groupProfitTotal >= 0 ? '+' : ''}${(groupProfitTotal / 100).toFixed(2)}</span>
+                    <span style="background:${groupProfitTotal >= 0 ? '#00ff8815' : '#ff444415'};border:1px solid ${groupProfitTotal >= 0 ? '#00ff8833' : '#ff444433'};border-radius:5px;padding:2px 8px;color:${groupProfitTotal >= 0 ? '#00ff88' : '#ff4444'};font-size:11px;font-weight:700;">${groupProfitTotal >= 0 ? '+' : ''}${(groupProfitTotal / 100).toFixed(2)}</span>
                 </div>
             `;
             botsList.appendChild(groupHeader);

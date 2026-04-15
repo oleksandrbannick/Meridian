@@ -14518,6 +14518,51 @@ def _handle_apex(bot_id, bot, actions):
 
     # ── STATUS: mm_depth_pulled — check recovery ──
     if status == 'mm_depth_pulled':
+        # CRITICAL: reconcile even while depth-pulled — catches orphaned positions
+        # that accumulated during pull (bot thinks flat but Kalshi has contracts)
+        _dp_net_yes = bot.get('net_yes', 0)
+        _dp_net_no = bot.get('net_no', 0)
+        if now - bot.get('_last_reconcile', 0) >= 30:
+            bot['_last_reconcile'] = now
+            try:
+                if api_read_limiter.try_wait():
+                    _dp_pos = kalshi_client.get_positions(ticker=ticker)
+                    _dp_pos_list = _dp_pos.get('market_positions', _dp_pos.get('positions', []))
+                    _dp_kalshi_net = 0
+                    for _dp in _dp_pos_list:
+                        if _dp.get('ticker') == ticker:
+                            _dp_kalshi_net = _parse_position_qty(_dp)
+                            break
+                    _dp_ky = max(0, _dp_kalshi_net)
+                    _dp_kn = max(0, -_dp_kalshi_net)
+                    if _dp_ky != _dp_net_yes or _dp_kn != _dp_net_no:
+                        if _dp_ky > _dp_net_yes:
+                            _m = _dp_ky - _dp_net_yes
+                            _fl = [f for f in bot.get('_fill_log', []) if f.get('side') == 'yes' and not f.get('is_exit')]
+                            _ec = _fl[-1]['price'] if _fl else bot.get('midpoint', 50)
+                            bot['net_yes'] = _dp_ky
+                            bot['total_yes_cost'] = bot.get('total_yes_cost', 0) + (_ec * _m)
+                            bot['avg_yes_cost'] = round(bot['total_yes_cost'] / _dp_ky) if _dp_ky > 0 else 0
+                        if _dp_kn > _dp_net_no:
+                            _m = _dp_kn - _dp_net_no
+                            _fl = [f for f in bot.get('_fill_log', []) if f.get('side') == 'no' and not f.get('is_exit')]
+                            _ec = _fl[-1]['price'] if _fl else (100 - bot.get('midpoint', 50))
+                            bot['net_no'] = _dp_kn
+                            bot['total_no_cost'] = bot.get('total_no_cost', 0) + (_ec * _m)
+                            bot['avg_no_cost'] = round(bot['total_no_cost'] / _dp_kn) if _dp_kn > 0 else 0
+                        if _dp_ky > 0 or _dp_kn > 0:
+                            _held = 'yes' if _dp_ky > _dp_kn else 'no'
+                            print(f'🚨 DEPTH_PULLED RECONCILE: {bot_id} found {_dp_ky}Y/{_dp_kn}N on Kalshi — posting exit')
+                            bot_log('APEX_MM_DEPTH_PULLED_RECONCILE', bot_id, {
+                                'kalshi_yes': _dp_ky, 'kalshi_no': _dp_kn,
+                                'bot_yes': _dp_net_yes, 'bot_no': _dp_net_no,
+                            }, level='WARN')
+                            threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _held), daemon=True).start()
+                        _dp_net_yes = bot.get('net_yes', 0)
+                        _dp_net_no = bot.get('net_no', 0)
+            except Exception as _dpe:
+                print(f'⚠ DEPTH_PULLED RECONCILE FAIL: {bot_id} {_dpe}')
+
         if bot.get('_pull_count', 0) >= APEX_MM_MAX_PULL_CYCLES:
             _apex_mm_begin_exit(bot_id, bot, 'max_pull_cycles')
             return

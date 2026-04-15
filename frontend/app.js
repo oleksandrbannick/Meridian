@@ -1522,20 +1522,19 @@ function displayMarkets(markets) {
                 const pnl = (b.net_pnl_cents || 0);
                 pnlMap[t] = (pnlMap[t] || 0) + pnl;
             }
-            // Show pill for ALL bots — stopped/completed shown dimmed
+            // Show pill only for active bots — dead bots don't belong in scanner
             if (!t) continue;
             let label = catLabel[b.bot_category] || (b.type === 'middle' ? 'meridian' : (b.type === 'watch' ? 'scout' : null));
             if (!label) continue;
             const _isDead = b.status === 'completed' || b.status === 'stopped' || b.status === 'cancelled';
+            if (_isDead) continue;
             if (!botMap[t]) botMap[t] = {};
             if (!botMap[t][label]) botMap[t][label] = { total: 0, dead: 0 };
             botMap[t][label].total++;
-            if (_isDead) botMap[t][label].dead++;
             // Track phantom details for side+cross display
             if (label === 'phantom') {
                 if (!phantomDetails[t]) phantomDetails[t] = [];
-                const _isDead = b.status === 'completed' || b.status === 'stopped' || b.status === 'cancelled';
-                phantomDetails[t].push({ side: b.dog_side || '?', cross: !!b.cross_market, dead: _isDead });
+                phantomDetails[t].push({ side: b.dog_side || '?', cross: !!b.cross_market, dead: false });
                 // Cross-market: also tag the hedge ticker
                 if (b.cross_market && b.hedge_ticker && b.hedge_ticker !== t) {
                     const ht = b.hedge_ticker;
@@ -1553,7 +1552,6 @@ function displayMarkets(markets) {
                         if (!botMap[lt]) botMap[lt] = {};
                         if (!botMap[lt].meridian) botMap[lt].meridian = { total: 0, dead: 0 };
                         botMap[lt].meridian.total++;
-                        if (_isDead) botMap[lt].meridian.dead++;
                     }
                 }
             }

@@ -1551,7 +1551,8 @@ function displayMarkets(markets) {
             let label = catLabel[b.bot_category] || (b.type === 'middle' ? 'meridian' : (b.type === 'watch' ? 'scout' : null));
             if (!label) continue;
             const _isDead = b.status === 'completed' || b.status === 'stopped' || b.status === 'cancelled';
-            if (_isDead) continue;
+            if (b.status === 'cancelled') continue;  // cancelled bots don't show pills
+            // stopped/completed still show pills (dimmed) so user can navigate to them
             if (!botMap[t]) botMap[t] = {};
             if (!botMap[t][label]) botMap[t][label] = { total: 0, dead: 0, botIds: [] };
             botMap[t][label].total++;
@@ -1559,7 +1560,7 @@ function displayMarkets(markets) {
             // Track phantom details for side+cross display
             if (label === 'phantom') {
                 if (!phantomDetails[t]) phantomDetails[t] = [];
-                phantomDetails[t].push({ side: b.dog_side || '?', cross: !!b.cross_market, dead: false });
+                phantomDetails[t].push({ side: b.dog_side || '?', cross: !!b.cross_market, dead: _isDead });
                 // Cross-market: also tag the hedge ticker
                 if (b.cross_market && b.hedge_ticker && b.hedge_ticker !== t) {
                     const ht = b.hedge_ticker;
@@ -2458,11 +2459,12 @@ function createMarketRow(market, label) {
                 const sameMkt = phDetails.filter(p => !p.cross);
                 const crossMkt = phDetails.filter(p => p.cross);
                 if (sameMkt.length > 0) {
-                    const c = BOT_COLORS['phantom'] || '#ffaa00';
+                    const _allDead = sameMkt.every(p => p.dead);
+                    const c = _allDead ? '#ff4444' : (BOT_COLORS['phantom'] || '#ffaa00');
                     const pill = document.createElement('span');
-                    pill.style.cssText = `display:inline-flex;align-items:center;gap:2px;padding:2px 6px;background:${c}22;border:1px solid ${c}55;border-radius:4px;font-size:9px;font-weight:700;color:${c};cursor:pointer;`;
-                    pill.innerHTML = `${botIconImg('phantom', 14)} <span style="font-size:8px;">=</span>`;
-                    pill.title = 'Phantom active — click to view';
+                    pill.style.cssText = `display:inline-flex;align-items:center;gap:2px;padding:2px 6px;background:${c}22;border:1px solid ${c}55;border-radius:4px;font-size:9px;font-weight:700;color:${c};cursor:pointer;${_allDead ? 'opacity:0.6;' : ''}`;
+                    pill.innerHTML = _allDead ? `${botIconImg('phantom', 14)} <span style="font-size:8px;">⏹</span>` : `${botIconImg('phantom', 14)} <span style="font-size:8px;">=</span>`;
+                    pill.title = _allDead ? 'Phantom stopped — click to view' : 'Phantom active — click to view';
                     pill.onclick = (e) => { e.stopPropagation(); navigateToBot(market.ticker, 'phantom'); };
                     iconRow.appendChild(pill);
                 }

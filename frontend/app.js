@@ -7598,6 +7598,17 @@ async function loadBots() {
                         return sum + (b.lifetime_pnl ?? b.net_pnl_cents ?? 0);
                     }, 0);
                     const _mktTickerDog = rawTickerDog.toUpperCase().split('-').slice(0,2).join('-');
+                    // State dots for phantom group header
+                    const _dgStateCounts = {};
+                    groupIds.forEach(id => {
+                        const s = bots[id].status || '';
+                        const col = _stateColors[s] || '#556';
+                        _dgStateCounts[col] = (_dgStateCounts[col] || 0) + 1;
+                    });
+                    const _dgDotHtml = Object.entries(_dgStateCounts)
+                        .sort((a, b) => b[1] - a[1])
+                        .map(([col, n]) => `<span style="color:${col};font-size:10px;font-weight:700;">●${n > 1 ? n : ''}</span>`)
+                        .join('');
                     const header = document.createElement('div');
                     header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:6px 12px;margin-top:12px;margin-bottom:4px;background:#0d1117;border-left:3px solid #ffaa00;border-radius:4px;font-size:12px;';
                     header.innerHTML = `
@@ -7607,7 +7618,7 @@ async function loadBots() {
                             ${scoreBadge}
                         </div>
                         <div style="display:flex;align-items:center;gap:8px;">
-                            <span style="color:#555;font-size:10px;">${groupIds.length} bot${groupIds.length > 1 ? 's' : ''}</span>
+                            <span style="display:inline-flex;align-items:center;gap:3px;font-size:10px;color:#555;">${groupIds.length} ${_dgDotHtml}</span>
                             <span style="color:${groupPnlTotal >= 0 ? '#00ff88' : '#ff4444'};font-size:11px;font-weight:700;">${groupPnlTotal >= 0 ? '+' : ''}${groupPnlTotal}¢</span>
                             <button onclick="emergencyExitGame('${escapedGk}')" title="Cancel & sell ALL bots for this game" style="background:#ff333322;color:#ff6666;border:1px solid #ff333355;border-radius:5px;padding:2px 8px;font-size:10px;font-weight:700;cursor:pointer;">🚨 Exit</button>
                         </div>`;
@@ -7712,6 +7723,14 @@ async function loadBots() {
             return firstB - firstA;  // newest game first, but stable within a game
         });
 
+        // State color map for group header dots (shared across Apex + Phantom tabs)
+        const _stateColors = {
+            'market_making_active': '#00d4ff', 'mm_depth_pulled': '#aa77ff', 'mm_exiting': '#ff7043',
+            'dog_anchor_posted': '#ffaa00', 'ladder_posted': '#ffaa00', 'fav_hedge_posted': '#ff66aa',
+            'dog_filled': '#ff66aa', 'ladder_filled_no_fav': '#ff66aa', 'waiting_repeat': '#ffaa00',
+            'completed': '#00ff88', 'stopped': '#ff4444', 'awaiting_settlement': '#ffd740',
+        };
+
         // Render grouped bots (filtered by sport if active)
         sortedGameKeys.forEach(gameKey => {
             const _filterTicker = (bots[gameGroups[gameKey][0]]?.ticker || '').toUpperCase();
@@ -7773,6 +7792,18 @@ async function loadBots() {
                 return sum + lifetimePnl;
             }, 0);
 
+            // State dot summary: count bots per state, show colored dots
+            const _stateCounts = {};
+            groupBots.forEach(id => {
+                const s = bots[id].status || '';
+                const col = _stateColors[s] || '#556';
+                _stateCounts[col] = (_stateCounts[col] || 0) + 1;
+            });
+            const _dotHtml = Object.entries(_stateCounts)
+                .sort((a, b) => b[1] - a[1])
+                .map(([col, n]) => `<span style="color:${col};font-size:10px;font-weight:700;">●${n > 1 ? n : ''}</span>`)
+                .join('');
+
             const groupHeader = document.createElement('div');
             groupHeader.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:8px 12px;margin-top:16px;margin-bottom:4px;background:#0d1117;border-left:3px solid #00d4ff;border-radius:4px;font-size:12px;';
             const rawTickerApex = sampleBot.ticker || '';
@@ -7795,7 +7826,7 @@ async function loadBots() {
                     ${groupSignalBadge}
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;">
-                    <span style="color:#8892a6;font-size:10px;">${groupBots.length} bot${groupBots.length > 1 ? 's' : ''}</span>
+                    <span style="display:inline-flex;align-items:center;gap:3px;font-size:10px;color:#8892a6;">${groupBots.length} ${_dotHtml}</span>
                     <span style="color:${groupProfitTotal >= 0 ? '#00ff88' : '#ff4444'};font-size:11px;font-weight:700;">${groupProfitTotal >= 0 ? '+' : ''}${(groupProfitTotal / 100).toFixed(2)}</span>
                     <button onclick="emergencyExitGame('${escapedGameKey}')" title="Cancel & sell ALL bots for this game" style="background:#ff333322;color:#ff6666;border:1px solid #ff333355;border-radius:5px;padding:2px 8px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;">🚨 Exit All</button>
                 </div>

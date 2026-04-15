@@ -7403,19 +7403,16 @@ async function loadBots() {
         const awaitingBotIds = botIds.filter(id => bots[id].status === 'awaiting_settlement');
         const activeBots = botIds.filter(id => {
             const s = bots[id].status;
-            // Active/in-progress statuses always show
-            if (s !== 'completed' && s !== 'stopped' && s !== 'cancelled') return true;
-            // Awaiting settlement always shows
-            if (s === 'awaiting_settlement') return true;
-            // Cross-market bots with positions show until Kalshi settles
-            if (bots[id].hedge_ticker && bots[id].hedge_ticker !== bots[id].ticker
-                && (bots[id]._cross_settled_qty > 0 || bots[id]._cross_settled_qty_dog > 0)) return true;
-            // Smart Apex: keep for restart button
-            if (bots[id].smart_mode && bots[id].bot_category === 'ladder_arb') return true;
-            // Completed: show for 5min so user can review and restart
-            const fin = bots[id].completed_at || bots[id].stopped_at;
-            if (!fin) return false;  // no timestamp + completed = old bot, hide
-            return (now - fin * 1000) < 300000;
+            // Cancelled bots: hide after 5 min (user explicitly removed them)
+            if (s === 'cancelled') {
+                const ca = bots[id].cancelled_at;
+                return ca && (now - ca * 1000) < 300000;
+            }
+            // Completed/stopped: show until backend purges (settlement path)
+            // Backend only deletes after _market_settled_at + 5 min
+            if (s === 'completed' || s === 'stopped') return true;
+            // Everything else (active/in-progress) always shows
+            return true;
         });
         const dogBotIds    = activeBots.filter(id => ['anchor_dog','anchor_ladder'].includes(bots[id].bot_category));
         const betsBotIds   = activeBots.filter(id => bots[id].type === 'watch');

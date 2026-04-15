@@ -12300,62 +12300,67 @@ def _handle_phantom(bot_id, bot, actions):
                     else:
                         bot['_fav_dry_count'] = 0  # fav is healthy, reset counter
 
-                # Track old order ID before overwriting (in case cancel fails)
-                all_dog_ids = bot.get('_all_dog_order_ids', [])
-                all_dog_ids.append(dog_order_id)
-                bot['_all_dog_order_ids'] = all_dog_ids
-
-                # Cancel old order — check for cancel-race fills
-                _repost_cancel = _safe_cancel(dog_order_id, f'phantom dog repost {bot_id}')
-                if _repost_cancel == False:
-                    print(f'⚠ REPOST ABORTED: {bot_id} cancel of old order failed — old order still live, not posting duplicate')
-                    return
-                if isinstance(_repost_cancel, tuple) and _repost_cancel[0] == 'filled':
-                    print(f'⚠ REPOST CANCEL-RACE: {bot_id} {_repost_cancel[1]} fills on old order — letting verify handle it')
+                # Amend price — no cancel window, no cancel-race, order stays live
                 # If WS already detected a fill and fired hedge, abort repost
                 if bot.get('_hedge_fired') or bot.get('status') != 'dog_anchor_posted':
-                    print(f'⚠ REPOST ABORT: {bot_id} WS fill detected during cancel — hedge already firing')
+                    print(f'⚠ REPOST ABORT: {bot_id} WS fill detected — hedge already firing')
                     save_state()
                     return
-                # Verify old order has 0 fills — catch race fills WS might have missed
+                old_price = bot['dog_price']
                 try:
-                    api_read_limiter.wait()
-                    _old_resp = kalshi_client.get_order(dog_order_id)
-                    _old_data = _old_resp.get('order', _old_resp) if isinstance(_old_resp, dict) else {}
-                    _old_fills = _parse_fill_count(_old_data)
-                    if _old_fills > 0:
-                        print(f'🔍 REPOST RACE CATCH: {bot_id} old order {dog_order_id[:12]} filled {_old_fills} during cancel!')
-                        bot['dog_fill_qty'] = _old_fills
+                    _price_kw = {f'{dog_side}_price': new_dog_price}
+                    api_rate_limiter.wait()
+                    _amend_resp = kalshi_client.amend_order(
+                        dog_order_id, ticker=ticker, side=dog_side,
+                        count=qty, action='buy', **_price_kw
+                    )
+                    # Amend keeps same order ID — check response for new ID just in case
+                    _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
+                    _amend_new_oid = _amend_ord.get('order_id', '')
+                    if _amend_new_oid and _amend_new_oid != dog_order_id:
+                        bot['dog_order_id'] = _amend_new_oid
+                        bot.setdefault('_all_dog_order_ids', []).append(_amend_new_oid)
                         if dog_side == 'yes':
-                            bot['yes_fill_qty'] = _old_fills
+                            bot['yes_order_id'] = _amend_new_oid
                         else:
-                            bot['no_fill_qty'] = _old_fills
-                        if _old_fills > 0 and not bot.get('_hedge_fired'):
+                            bot['no_order_id'] = _amend_new_oid
+                    actual_new_price = new_dog_price
+                except Exception as _amend_err:
+                    _amend_str = str(_amend_err)
+                    if '404' in _amend_str:
+                        # Order gone — check if it filled
+                        _fills = 0
+                        try:
+                            api_read_limiter.wait()
+                            _old_resp = kalshi_client.get_order(dog_order_id)
+                            _old_data = _old_resp.get('order', _old_resp) if isinstance(_old_resp, dict) else {}
+                            _fills = _parse_fill_count(_old_data)
+                        except Exception:
+                            pass
+                        if _fills > 0 and not bot.get('_hedge_fired'):
+                            print(f'🔍 AMEND FILL CATCH: {bot_id} order {dog_order_id[:12]} filled {_fills} during amend!')
+                            bot['dog_fill_qty'] = _fills
+                            if dog_side == 'yes':
+                                bot['yes_fill_qty'] = _fills
+                            else:
+                                bot['no_fill_qty'] = _fills
                             bot['_hedge_fired'] = True
                             bot['dog_filled_at'] = time.time()
                             bot['status'] = 'dog_filled'
-                            if _old_fills < qty:
+                            if _fills < qty:
                                 bot['_original_qty'] = qty
-                                bot['_partial_hedge_qty'] = _old_fills
+                                bot['_partial_hedge_qty'] = _fills
                             _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
-                            bot_log('PHANTOM_REPOST_RACE_RECOVERED', bot_id, {
-                                'old_oid': dog_order_id[:12], 'fills': _old_fills, 'qty': qty,
+                            bot_log('PHANTOM_AMEND_FILL_CATCH', bot_id, {
+                                'old_oid': dog_order_id[:12], 'fills': _fills, 'qty': qty,
                             })
                             save_state()
                             return
-                except Exception as _rc_err:
-                    print(f'⚠ Repost race check failed: {_rc_err}')
-
-                new_resp, actual_new_price = create_order_maker(
-                    ticker=ticker, side=dog_side, action='buy',
-                    count=qty, price=new_dog_price
-                )
-                new_order_id = _extract_order_id(new_resp, f'phantom dog repost {bot_id}')
-                if not new_order_id:
+                        print(f'⚠ REPOST AMEND 404: {bot_id} order gone, 0 fills — will re-anchor next cycle')
+                    else:
+                        print(f'⚠ REPOST AMEND FAILED: {bot_id} {_amend_err}')
                     return
-                old_price = bot['dog_price']
-                bot['dog_order_id'] = new_order_id
-                bot.setdefault('_all_dog_order_ids', []).append(new_order_id)
+
                 bot['dog_price'] = actual_new_price
                 bot['posted_at'] = now
                 bot['_bid_at_post'] = current_dog_bid
@@ -12365,10 +12370,8 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['dog_repost_count'] = bot.get('dog_repost_count', 0) + 1
                 # Update compat fields
                 if dog_side == 'yes':
-                    bot['yes_order_id'] = new_order_id
                     bot['yes_price'] = actual_new_price
                 else:
-                    bot['no_order_id'] = new_order_id
                     bot['no_price'] = actual_new_price
 
                 # Recalculate precalc hedge price for new dog price

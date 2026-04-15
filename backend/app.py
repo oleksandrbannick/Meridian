@@ -5675,17 +5675,13 @@ def _refresh_milestones_cache():
     if not kalshi_client:
         return
     event_info = {}  # event_ticker → {status, start_date}
-    # Fetch both 'open' and 'closed' — tennis events go to 'closed' during active
-    # play (between points/changeovers) but the match is still live.
-    _fetch_statuses = ['open', 'closed']
     for i, series in enumerate(('KXATPCHALLENGERMATCH', 'KXWTACHALLENGERMATCH', 'KXATPMATCH', 'KXWTAMATCH')):
-      for _fs in _fetch_statuses:
         for attempt in range(2):
             try:
-                if i > 0 or attempt > 0 or _fs != 'open':
+                if i > 0 or attempt > 0:
                     time.sleep(0.5)  # 500ms spacing to avoid 429s
                 api_read_limiter.wait()
-                resp = kalshi_client.get_events(status=_fs, with_milestones=True, series_ticker=series)
+                resp = kalshi_client.get_events(status='open', with_milestones=True, series_ticker=series)
                 milestones = resp.get('milestones', [])
                 events = resp.get('events', [])
                 if not milestones:

@@ -1203,9 +1203,13 @@ function isKalshiLive(market) {
     // ── Tennis: Use Kalshi milestone_status (authoritative) when available ──
     const isTennis = /KXATP|KXWTA/i.test(ticker);
     if (isTennis) {
-        // Milestones only — pregame tennis has thousands of contracts,
-        // price-based detection creates false positives
+        // Milestones are authoritative when available
         if (market.milestone_status) return market.milestone_status === 'live';
+        // Fallback: if both sides have bids and combined < 105, likely live
+        // (pregame tennis has wide spreads or no bids)
+        const yb = getPrice(market, 'yes_bid') || 0;
+        const nb = getPrice(market, 'no_bid') || 0;
+        if (yb > 0 && nb > 0 && (yb + nb) > 80) return true;
         return false;
     }
 

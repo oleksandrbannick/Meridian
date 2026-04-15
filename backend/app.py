@@ -12489,19 +12489,20 @@ def _handle_phantom(bot_id, bot, actions):
                 target_width = bot.get('target_width', 5)
                 bot['_precalc_hedge_price'] = _precalc_phantom_hedge(actual_new_price, target_width, dog_side, qty)
 
+                _repost_oid = bot.get('dog_order_id', dog_order_id)
                 print(f'🔄 PHANTOM REPOST: {bot_id} dog {old_price}¢→{actual_new_price}¢ '
                       f'({trigger_reason} bid={current_dog_bid}¢ ask={current_dog_ask}¢ #{bot["dog_repost_count"]})')
                 bot_log('PHANTOM_DOG_REPOST', bot_id, {
                     'old_price': old_price, 'new_price': actual_new_price,
                     'dog_bid': current_dog_bid, 'dog_ask': current_dog_ask,
                     'trigger': trigger_reason, 'repost_count': bot['dog_repost_count'],
-                    'new_order_id': new_order_id[:12],
+                    'order_id': _repost_oid[:12] if _repost_oid else '',
                     'precalc_hedge': bot.get('_precalc_hedge_price'),
-                    'anchor_depth': anchor_depth, 'dog_ask': current_dog_ask,
+                    'anchor_depth': anchor_depth,
                 })
                 _audit('PHANTOM_DOG_REPOST', bot_id, {
                     'ticker': ticker, 'old_price': old_price, 'new_price': actual_new_price,
-                    'trigger': trigger_reason, 'new_order_id': new_order_id,
+                    'trigger': trigger_reason, 'order_id': _repost_oid,
                 })
                 actions.append({'bot_id': bot_id, 'action': 'anchor_dog_repost',
                                 'old_price': old_price, 'new_price': actual_new_price,
@@ -15917,6 +15918,42 @@ def _run_monitor():
                         print(f'🏟 AUTO-PHASE: {bot_id} switched to LIVE (game in progress)')
                 except Exception:
                     pass
+
+        # ── Tennis death zone revert pre-pass: stopped phantoms that may recover ──
+        for bot_id, bot in list(active_bots.items()):
+            if bot['status'] not in ('stopped', 'completed'):
+                continue
+            if bot.get('bot_category') != 'anchor_dog':
+                continue
+            if not bot.get('_death_zone_stopped') or bot.get('_market_settled_at'):
+                continue
+            _dz_ticker = bot.get('ticker', '')
+            if not _dz_ticker.startswith(('KXATP', 'KXWTA')):
+                continue
+            try:
+                _dz_still, _ = _is_phantom_death_zone(_dz_ticker, bot)
+                if not _dz_still:
+                    bot['_death_zone_stopped'] = False
+                    bot['_death_zone_reason'] = None
+                    bot['_smart_stopped'] = False
+                    bot['_smart_stop_reason'] = None
+                    bot['status'] = 'waiting_repeat'
+                    bot['waiting_repeat_since'] = time.time()
+                    bot.pop('stopped_at', None)
+                    bot.pop('completed_at', None)
+                    bot['dog_order_id'] = None
+                    bot['_all_dog_order_ids'] = []
+                    bot['dog_fill_qty'] = 0
+                    bot['fav_fill_qty'] = 0
+                    bot['yes_fill_qty'] = 0
+                    bot['no_fill_qty'] = 0
+                    bot['_hedge_fired'] = False
+                    bot['_trade_recorded'] = False
+                    bot_log('DEATH_ZONE_REVERT', bot_id, {'reason': 'tennis match point saved'})
+                    print(f'🔄 DEATH ZONE REVERT: {bot_id} match point saved — restarting')
+                    save_state()
+            except Exception as _dz_err:
+                print(f'⚠ Death zone revert check failed for {bot_id}: {_dz_err}')
 
         for bot_id, bot in list(active_bots.items()):
             if bot['status'] not in active_statuses:

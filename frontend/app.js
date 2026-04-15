@@ -7528,13 +7528,21 @@ async function loadBots() {
             }
         }
 
-        // State color map for group header dots (shared across Apex + Phantom tabs)
-        const _stateColors = {
+        // State color for group header dots — checks flags for sub-states
+        const _stateColorMap = {
             'market_making_active': '#00d4ff', 'mm_depth_pulled': '#aa77ff', 'mm_exiting': '#ff7043',
             'dog_anchor_posted': '#ffaa00', 'ladder_posted': '#ffaa00', 'fav_hedge_posted': '#ff66aa',
             'dog_filled': '#ff66aa', 'ladder_filled_no_fav': '#ff66aa', 'waiting_repeat': '#ffaa00',
             'completed': '#00ff88', 'stopped': '#ff4444', 'awaiting_settlement': '#ffd740',
         };
+        function _getBotDotColor(b) {
+            const s = b.status || '';
+            // Phantom pulled/parked = purple (status is still dog_anchor_posted)
+            if (s === 'dog_anchor_posted' && (b._price_floor_pulled || b._parked_at_ceiling)) return '#aa77ff';
+            // Phantom death zone = magenta
+            if ((s === 'completed' || s === 'stopped') && b._death_zone_stopped) return '#ff3366';
+            return _stateColorMap[s] || '#556';
+        }
 
         // Render dog bots list
         if (dogList) {
@@ -7609,8 +7617,7 @@ async function loadBots() {
                     // State dots for phantom group header
                     const _dgStateCounts = {};
                     groupIds.forEach(id => {
-                        const s = bots[id].status || '';
-                        const col = _stateColors[s] || '#556';
+                        const col = _getBotDotColor(bots[id]);
                         _dgStateCounts[col] = (_dgStateCounts[col] || 0) + 1;
                     });
                     const _dgDotHtml = Object.entries(_dgStateCounts)
@@ -7795,8 +7802,7 @@ async function loadBots() {
             // State dot summary: count bots per state, show colored dots
             const _stateCounts = {};
             groupBots.forEach(id => {
-                const s = bots[id].status || '';
-                const col = _stateColors[s] || '#556';
+                const col = _getBotDotColor(bots[id]);
                 _stateCounts[col] = (_stateCounts[col] || 0) + 1;
             });
             const _dotHtml = Object.entries(_stateCounts)

@@ -8807,7 +8807,7 @@ def _apex_mm_fresh_ladder(bot_id, bot):
 
     # Drift guard: don't post into a decided market
     _drift_max = max(bot.get('live_yes_bid', 0), bot.get('live_no_bid', 0))
-    if _drift_max >= 80:
+    if _drift_max >= 85:
         print(f'🛡️ APEX MM FRESH LADDER DRIFT BLOCK: {bot_id} max_bid={_drift_max}c — too decided, pulling instead')
         bot['status'] = 'mm_depth_pulled'
         bot['_drift_pulled'] = True
@@ -14890,7 +14890,7 @@ def _handle_apex(bot_id, bot, actions):
             return
         # Drift guard: don't recover if market is too decided
         _drift_max = max(bot.get('live_yes_bid', 0), bot.get('live_no_bid', 0))
-        if _drift_max >= 75:
+        if _drift_max >= 85:
             # Update pull reason to show drift guard is active (overrides OBI reason)
             bot['_last_pull_reason'] = f'drift guard {_drift_max}c (market decided)'
             if not bot.get('_drift_pulled'):

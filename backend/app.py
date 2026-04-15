@@ -6795,7 +6795,12 @@ def _get_game_score_for_ticker(ticker: str) -> dict:
     if is_tennis and _api_tennis_cache.get('data'):
         parts = ticker.split('-')
         player_code = parts[-1].upper() if len(parts) >= 3 else ''
+        # Extract BOTH player codes from the game segment to avoid matching
+        # a player's OTHER match (e.g., Aboian vs CIG instead of Mena vs Aboian)
+        _game_seg = parts[1] if len(parts) >= 2 else ''
+        _game_seg_upper = re.sub(r'^\d{2}[A-Z]{3}\d{2,}', '', _game_seg).upper()  # strip date prefix
         if player_code:
+            _best_match = None
             for _tm in _api_tennis_cache['data']:
                 _p1 = _tm.get('event_first_player', '')
                 _p2 = _tm.get('event_second_player', '')
@@ -6803,6 +6808,10 @@ def _get_game_score_for_ticker(ticker: str) -> dict:
                 _c2 = _tennis_player_code(_p2)
                 if player_code not in (_c1, _c2):
                     continue
+                # Verify BOTH players match the game segment (prevents cross-match collision)
+                _other_code = _c1 if player_code == _c2 else _c2
+                if _game_seg_upper and _other_code and _other_code not in _game_seg_upper:
+                    continue  # wrong match — other player doesn't appear in ticker
                 # Found the match — determine state
                 _is_live = _tm.get('event_live') == '1'
                 _status_str = (_tm.get('event_status') or '').lower()

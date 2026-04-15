@@ -19590,12 +19590,12 @@ def stop_bot(bot_id):
                 bot_log('STOP_MM_EXIT', bot_id, {'net_yes': net_yes, 'net_no': net_no})
                 print(f'⏹ STOP MM → EXITING: {bot_id} holding YES={net_yes} NO={net_no}')
             else:
-                bot['status'] = 'awaiting_settlement'
-                bot['awaiting_since'] = time.time()
-                bot_log('STOP_MM_IMMEDIATE', bot_id, {'prev_status': status})
-                print(f'⏹ STOP MM → AWAITING SETTLEMENT: {bot_id} flat')
+                bot['status'] = 'stopped'
+                bot['stopped_at'] = time.time()
+                bot_log('STOP_MM_FLAT', bot_id, {'prev_status': status})
+                print(f'⏹ STOP MM: {bot_id} flat — stopped')
             save_state()
-            return jsonify({'success': True, 'mode': 'graceful', 'message': 'Apex MM stopped — exiting inventory gracefully'})
+            return jsonify({'success': True, 'mode': 'graceful', 'message': 'Apex MM stopped' + (' — exiting inventory gracefully' if (net_yes > 0 or net_no > 0) else '')})
 
     # ── Smart mode bots (non-MM): delegate to existing smart_stop logic ──
     if bot.get('smart_mode'):

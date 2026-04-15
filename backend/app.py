@@ -13099,15 +13099,22 @@ def _handle_phantom(bot_id, bot, actions):
                         'pnl': net_pnl,
                     })
                 else:
-                    bot['status'] = 'completed'
-                    bot['completed_at'] = now
+                    # Smart-stopped bots → 'stopped' (visible, awaits settlement)
+                    # Exhausted-runs bots → 'completed' (also awaits settlement)
+                    if bot.get('_smart_stopped'):
+                        bot['status'] = 'stopped'
+                        bot['stopped_at'] = now
+                        bot['_stop_reason'] = bot.get('_smart_stop_reason', 'smart_consecutive')
+                    else:
+                        bot['status'] = 'completed'
+                        bot['completed_at'] = now
+                        if not bot.get('_stop_reason'):
+                            bot['_stop_reason'] = 'completed runs'
                     # Clear per-cycle fills so card doesn't show stale filled bars
                     bot['dog_fill_qty'] = 0
                     bot['fav_fill_qty'] = 0
                     bot['yes_fill_qty'] = 0
                     bot['no_fill_qty'] = 0
-                    if not bot.get('_smart_stopped') and not bot.get('_stop_reason'):
-                        bot['_stop_reason'] = 'completed runs'
                 bot['_just_completed'] = True
                 bot['_last_pnl'] = net_pnl
                 bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + net_pnl

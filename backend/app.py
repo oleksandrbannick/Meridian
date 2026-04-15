@@ -12901,11 +12901,30 @@ def _handle_phantom(bot_id, bot, actions):
                 _label = f'smart({_smart_reason})' if bot.get('smart_mode') else f'cycle {repeats_done_now}/{repeat_total}'
                 print(f'🔄 PHANTOM REPEAT: {bot_id} {_label} pnl={net_pnl}¢')
                 _audit('PHANTOM_REPEAT_ENTER', bot_id, {'ticker': ticker, 'cycle': repeats_done_now, 'total': repeat_total, 'smart': _smart_reason})
-                # Orphan guard REMOVED — was causing more problems than it solved:
-                # 1. Taker-selling legitimate arb positions (same-market YES+NO = net 0)
-                # 2. Creating orphans from its own sells
-                # 3. Masking root causes (stale fills, double counts)
-                # Root causes are now fixed. Orphans visible in Kalshi positions if they occur.
+                # Orphan guard: verify Kalshi position is flat before repeating.
+                # If non-zero, the completed run left orphaned contracts — sell them.
+                try:
+                    if api_read_limiter.try_wait():
+                        _rp_pos = kalshi_client.get_positions(ticker=ticker)
+                        _rp_list = _rp_pos.get('market_positions', _rp_pos.get('positions', []))
+                        _rp_net = 0
+                        for _rp in _rp_list:
+                            if _rp.get('ticker') == ticker:
+                                _rp_net = _parse_position_qty(_rp)
+                                break
+                        if _rp_net != 0:
+                            _rp_side = 'yes' if _rp_net > 0 else 'no'
+                            _rp_qty = abs(_rp_net)
+                            print(f'🚨 PHANTOM REPEAT ORPHAN: {bot_id} Kalshi has {_rp_qty}x {_rp_side.upper()} after completion — selling')
+                            bot_log('PHANTOM_REPEAT_ORPHAN', bot_id, {
+                                'side': _rp_side, 'qty': _rp_qty, 'ticker': ticker,
+                            }, level='WARN')
+                            try:
+                                execute_sell(ticker, _rp_side, _rp_qty, reason=f'phantom_repeat_orphan_{bot_id}')
+                            except Exception as _rpo_err:
+                                print(f'⚠ PHANTOM REPEAT ORPHAN SELL FAILED: {bot_id} {_rpo_err}')
+                except Exception as _rp_err:
+                    print(f'⚠ PHANTOM REPEAT ORPHAN CHECK FAILED: {bot_id} {_rp_err}')
             else:
                 if _is_cross:
                     bot['status'] = 'awaiting_settlement'

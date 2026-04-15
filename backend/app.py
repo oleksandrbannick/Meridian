@@ -14934,6 +14934,15 @@ def _handle_apex(bot_id, bot, actions):
         if bot.get('net_yes', 0) == 0 and bot.get('net_no', 0) == 0:
             bot['_yes_side_paused'] = False
             bot['_no_side_paused'] = False
+        else:
+            # Holding inventory while pulled — still walk the exit toward fill
+            _exit_side = 'yes' if bot.get('net_no', 0) > bot.get('net_yes', 0) else 'no'
+            if bot.get(f'_{_exit_side}_exit_oid'):
+                _apex_mm_walk_up(bot_id, bot)
+            else:
+                # No exit oid — create one
+                _held = 'no' if _exit_side == 'yes' else 'yes'
+                threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _held), daemon=True).start()
         if _apex_depth_recovered(ticker, bot, obi_threshold=APEX_MM_RECOVER_OBI):
             # Room guard: don't repost if room < width + 1 (need buffer above width)
             _rc_yb = bot.get('live_yes_bid', 0)

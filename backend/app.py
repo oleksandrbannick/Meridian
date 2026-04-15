@@ -6513,9 +6513,13 @@ def _is_phantom_death_zone(ticker, bot=None):
             _p2 = _tm.get('event_second_player', '')
             if player_code not in (_tennis_player_code(_p1), _tennis_player_code(_p2)):
                 continue
-            # Only check live matches (including break time / interrupted)
+            # Only check live matches — but NEVER during break time (between sets)
+            # Between sets, the completed set's score (e.g. 6-4) looks like death zone
+            # but the match has more sets to play. Only check during active play.
             _status_str = (_tm.get('event_status') or '').lower()
-            if _tm.get('event_live') != '1' and _status_str not in ('interrupted', 'break time'):
+            if _status_str in ('break time',):
+                return False, ''  # between sets is never death zone
+            if _tm.get('event_live') != '1' and _status_str not in ('interrupted',):
                 continue
             _dz, _dz_reason = _tennis_death_zone_check(_tm)
             if _dz:

@@ -7607,7 +7607,7 @@ async function loadBots() {
                         .sort((a, b) => b[1] - a[1])
                         .map(([key, n]) => {
                             const [col, label] = key.split('|');
-                            return `<span style="display:inline-flex;align-items:center;gap:3px;"><span style="color:${col};font-size:14px;text-shadow:0 0 4px ${col}66;">●</span><span style="color:${col};font-size:10px;font-weight:700;">${n}</span><span style="color:#8892a6;font-size:10px;">${label}</span></span>`;
+                            return `<span style="display:inline-flex;align-items:center;gap:3px;background:${col}11;border:1px solid ${col}33;border-radius:6px;padding:2px 8px;"><span style="color:${col};font-size:12px;text-shadow:0 0 4px ${col}66;">●</span><span style="color:${col};font-size:10px;font-weight:700;">${n}</span><span style="color:#8892a6;font-size:10px;">${label}</span></span>`;
                         }).join('');
                     dogList.appendChild(_statusBar);
                 }

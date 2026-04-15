@@ -5917,24 +5917,25 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     }
     const _isSettled = bot._smart_stop_reason === 'final' || bot._market_settled_at > 0;
     const _isCompletedRuns = bot._stop_reason === 'completed runs';
-    // Phantom phase colors: amber=waiting, blue=hedging, green=done, red=error/stopped, purple=parked
-    const _phAmber = '#ffaa00', _phBlue = '#00aaff', _phGreen = '#00ff88', _phRed = '#ff4444', _phPurple = '#aa77ff';
+    // Phantom phase colors: amber=dog waiting, pink=hedge active, green=done, red=error, purple=pulled, magenta=death zone
+    const _phAmber = '#ffaa00', _phPink = '#ff66aa', _phGreen = '#00ff88', _phRed = '#ff4444', _phPurple = '#aa77ff', _phDeath = '#ff3366';
     const _isParked = status === 'dog_anchor_posted' && bot._parked_at_ceiling;
+    const _isPulledFloor = status === 'dog_anchor_posted' && bot._price_floor_pulled;
     const statusMap = {
-        'dog_anchor_posted': _isParked ? '🅿️ PARKED' : '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
+        'dog_anchor_posted': _isPulledFloor ? '⏸ PULLED' : _isParked ? '🅿️ PARKED' : '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
         'dog_filled': bot._orphan_hedge ? '🚨 ORPHAN — HEDGING' : '👻 FILLED — HEDGING', 'ladder_filled_no_fav': '👻 FILLED — HEDGING',
         'fav_hedge_posted': bot._game_over_holding ? '⏳ HOLDING — SETTLEMENT' : bot._taker_fired ? '⚡ BID+1' : '⭐ HEDGE POSTED', 'waiting_repeat': bot._just_completed ? '✅ COMPLETED' : bot._flip_pending ? '⚡ FLIPPING' : '🔄 REPEATING',
-        'completed': _isSettled ? '🏁 SETTLED' : _isAwaitingSettlement ? '⏳ AWAITING SETTLEMENT' : _isDeathZone ? '🛑 END OF GAME' : _isSmartStopped ? '⏹ SMART STOP' : _isCompletedRuns ? '✅ COMPLETED RUNS' : '✅ COMPLETE',
-        'stopped': bot._stop_reason === 'scout_orphan_cleanup' ? '🛑 STOPPED — Scout managing' : _isDeathZone ? '🛑 END OF GAME' : _isSmartStopped ? '⏹ SMART STOP' : (bot._pending_sells?.length ? '📤 SELLING' : '🛑 STOPPED'),
+        'completed': _isSettled ? '🏁 SETTLED' : _isAwaitingSettlement ? '⏳ AWAITING SETTLEMENT' : _isDeathZone ? '💀 DEATH ZONE' : _isSmartStopped ? '⏹ SMART STOP' : _isCompletedRuns ? '✅ COMPLETED RUNS' : '✅ COMPLETE',
+        'stopped': bot._stop_reason === 'scout_orphan_cleanup' ? '🛑 STOPPED — Scout managing' : _isDeathZone ? '💀 DEATH ZONE' : _isSmartStopped ? '⏹ SMART STOP' : (bot._pending_sells?.length ? '📤 SELLING' : '🛑 STOPPED'),
         'paused_by_scout': '⏸️ PAUSED — Scout active',
         'awaiting_settlement': '⏳ AWAITING SETTLEMENT',
     };
     const borderMap = {
-        'dog_anchor_posted': _isParked ? _phPurple : _phAmber, 'ladder_posted': _phAmber,
-        'dog_filled': _phRed, 'ladder_filled_no_fav': _phRed,
-        'fav_hedge_posted': bot._game_over_holding ? _phAmber : _phBlue, 'waiting_repeat': bot._just_completed ? _phGreen : _phAmber,
-        'completed': _isSettled ? _phGreen : _isAwaitingSettlement ? _phAmber : _isDeathZone ? _phRed : _isSmartStopped ? _phRed : _phGreen,
-        'stopped': bot._pending_sells?.length ? _phAmber : _phRed,
+        'dog_anchor_posted': _isPulledFloor ? _phPurple : _isParked ? _phPurple : _phAmber, 'ladder_posted': _phAmber,
+        'dog_filled': _phPink, 'ladder_filled_no_fav': _phPink,
+        'fav_hedge_posted': bot._game_over_holding ? _phAmber : _phPink, 'waiting_repeat': bot._just_completed ? _phGreen : _phAmber,
+        'completed': _isSettled ? _phGreen : _isAwaitingSettlement ? _phAmber : _isDeathZone ? _phDeath : _isSmartStopped ? _phRed : _phGreen,
+        'stopped': _isDeathZone ? _phDeath : bot._pending_sells?.length ? _phAmber : _phRed,
         'awaiting_settlement': _phAmber,
     };
     const borderCol = borderMap[status] || '#ffaa00';
@@ -6385,21 +6386,22 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const _isTimeStop = _exitReason.includes('time_stop');
     const _isSmartStop = _exitReason.includes('smart_stop') || bot._smart_stop_reason === 'manual';
     const _apexSettled = bot._market_settled_at > 0 || bot._smart_stop_reason === 'final';
-    // Pull reason for distinct status display
+    // Apex MM phase colors: cyan=active, coral=exiting, purple=pulled, green=done, red=stopped, gold=awaiting
+    const _axCyan = '#00d4ff', _axCoral = '#ff7043', _axPurple = '#aa77ff', _axGreen = '#00ff88', _axRed = '#ff4444', _axGold = '#ffd740';
+    // Pull reason for sub-label (all pulled states use purple)
     const _pullReason = bot._last_pull_reason || '';
     const _isRoomPull = _pullReason.includes('room_guard');
     const _isDriftPull = _pullReason.includes('drift');
     const _isObiPull = _pullReason.includes('obi') || _pullReason.includes('thin') || _pullReason.includes('vanish');
     const _pulledLabel = _isRoomPull ? '⏸ ROOM' : _isDriftPull ? '⏸ DRIFT' : _isObiPull ? '⏸ OBI' : '⏸ PULLED';
-    const _pulledColor = _isRoomPull ? '#ff7043' : _isDriftPull ? '#818cf8' : _isObiPull ? '#ffaa00' : '#ffaa00';
     const statusMap = {
-        'market_making_active': ['● ACTIVE', '#00d4ff'],
-        'mm_depth_pulled': [_pulledLabel, _pulledColor],
-        'mm_exiting': ['◗ EXITING', '#ff8800'],
-        'awaiting_settlement': [_isDriftStop ? '⏳ DRIFT STOP' : _isTimeStop ? '⏳ TIME STOP' : _isSmartStop ? '⏳ SMART STOP' : '⏳ AWAITING', '#818cf8'],
+        'market_making_active': ['● ACTIVE', _axCyan],
+        'mm_depth_pulled': [_pulledLabel, _axPurple],
+        'mm_exiting': ['◗ EXITING', _axCoral],
+        'awaiting_settlement': [_isDriftStop ? '⏳ DRIFT STOP' : _isTimeStop ? '⏳ TIME STOP' : _isSmartStop ? '⏳ SMART STOP' : '⏳ AWAITING', _axGold],
         'completed': [_apexSettled ? '🏁 SETTLED' : _isDriftStop ? 'DRIFT STOP' : _isTimeStop ? 'TIME STOP' : _isSmartStop ? 'SMART STOP' : '✓ DONE',
-                      _apexSettled ? '#ffaa00' : (_isDriftStop || _isTimeStop || _isSmartStop ? '#ff8800' : '#00ff88')],
-        'stopped': [bot._pending_sells?.length ? '📤 SELLING' : '✕ STOPPED', bot._pending_sells?.length ? '#ffaa00' : '#ff4444'],
+                      _apexSettled ? _axGold : (_isDriftStop || _isTimeStop || _isSmartStop ? _axCoral : _axGreen)],
+        'stopped': [bot._pending_sells?.length ? '📤 SELLING' : '✕ STOPPED', bot._pending_sells?.length ? _axCoral : _axRed],
     };
     const [statusLabel, accentCol] = statusMap[status] || [status.toUpperCase(), '#8892a6'];
 

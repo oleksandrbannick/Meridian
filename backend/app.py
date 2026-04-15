@@ -19570,14 +19570,19 @@ def stop_bot(bot_id):
     bot_type = bot.get('type', 'arb')
     bot_cat = bot.get('bot_category', '')
 
-    # ── Smart mode bots: delegate to existing smart_stop logic ──
-    if bot.get('smart_mode'):
+    # ── Apex MM: always handle gracefully (smart mode or not) ──
+    if bot_type == 'apex_mm':
         bot['_smart_stopped'] = True
         bot['_smart_stop_reason'] = 'manual'
-        # Apex MM: pull ladder + exit
-        if status in ('market_making_active', 'mm_depth_pulled') and bot_type == 'apex_mm':
-            net_yes = bot.get('net_yes', 0)
-            net_no = bot.get('net_no', 0)
+        net_yes = bot.get('net_yes', 0)
+        net_no = bot.get('net_no', 0)
+        if status == 'mm_exiting':
+            # Already exiting — let it finish, just mark as manual stop
+            bot_log('STOP_MM_LET_EXIT', bot_id, {'net_yes': net_yes, 'net_no': net_no})
+            print(f'⏹ STOP MM — already exiting, letting exit finish: {bot_id}')
+            save_state()
+            return jsonify({'success': True, 'mode': 'graceful', 'message': 'Apex MM stopping — letting exit order finish'})
+        if status in ('market_making_active', 'mm_depth_pulled'):
             if status == 'market_making_active':
                 _apex_mm_pull_all(bot_id, bot, 'stop_manual')
             if net_yes > 0 or net_no > 0:
@@ -19590,7 +19595,12 @@ def stop_bot(bot_id):
                 bot_log('STOP_MM_IMMEDIATE', bot_id, {'prev_status': status})
                 print(f'⏹ STOP MM → AWAITING SETTLEMENT: {bot_id} flat')
             save_state()
-            return jsonify({'success': True, 'mode': 'immediate', 'message': 'Apex MM stopped'})
+            return jsonify({'success': True, 'mode': 'graceful', 'message': 'Apex MM stopped — exiting inventory gracefully'})
+
+    # ── Smart mode bots (non-MM): delegate to existing smart_stop logic ──
+    if bot.get('smart_mode'):
+        bot['_smart_stopped'] = True
+        bot['_smart_stop_reason'] = 'manual'
 
     # ── Scout / Watch bots: stop immediately ──
     if bot_type == 'watch':

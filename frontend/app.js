@@ -7528,6 +7528,14 @@ async function loadBots() {
             }
         }
 
+        // State color map for group header dots (shared across Apex + Phantom tabs)
+        const _stateColors = {
+            'market_making_active': '#00d4ff', 'mm_depth_pulled': '#aa77ff', 'mm_exiting': '#ff7043',
+            'dog_anchor_posted': '#ffaa00', 'ladder_posted': '#ffaa00', 'fav_hedge_posted': '#ff66aa',
+            'dog_filled': '#ff66aa', 'ladder_filled_no_fav': '#ff66aa', 'waiting_repeat': '#ffaa00',
+            'completed': '#00ff88', 'stopped': '#ff4444', 'awaiting_settlement': '#ffd740',
+        };
+
         // Render dog bots list
         if (dogList) {
             if (dogBotIds.length === 0) {
@@ -7722,14 +7730,6 @@ async function loadBots() {
             const firstB = Math.min(...gameGroups[b].map(id => bots[id].created_at || 0));
             return firstB - firstA;  // newest game first, but stable within a game
         });
-
-        // State color map for group header dots (shared across Apex + Phantom tabs)
-        const _stateColors = {
-            'market_making_active': '#00d4ff', 'mm_depth_pulled': '#aa77ff', 'mm_exiting': '#ff7043',
-            'dog_anchor_posted': '#ffaa00', 'ladder_posted': '#ffaa00', 'fav_hedge_posted': '#ff66aa',
-            'dog_filled': '#ff66aa', 'ladder_filled_no_fav': '#ff66aa', 'waiting_repeat': '#ffaa00',
-            'completed': '#00ff88', 'stopped': '#ff4444', 'awaiting_settlement': '#ffd740',
-        };
 
         // Render grouped bots (filtered by sport if active)
         sortedGameKeys.forEach(gameKey => {

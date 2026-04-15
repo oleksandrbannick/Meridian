@@ -8124,9 +8124,7 @@ def _apex_mm_walk_up(bot_id, bot):
                     bot[f'_{exit_side}_exit_oid'] = _new_oid
                 bot['_exit_price'] = snap_price
                 bot['_wall_parked'] = False
-                if snap_price <= target_price:
-                    bot['_exit_soak_start'] = now
-                    bot['_exit_walk_count'] = 0
+                # No soak reset — follow price freely
                 print(f'📊 APEX MM SNAP-BACK (soak): {bot_id} {exit_side.upper()} {current_price}→{snap_price}c (bid improved, combined={avg_held + snap_price}c)')
                 bot_log('APEX_MM_SNAP_BACK', bot_id, {'old': current_price, 'new': snap_price, 'bid': live_exit_bid, 'combined': avg_held + snap_price, 'in_soak': True})
             except Exception as e:
@@ -8158,11 +8156,9 @@ def _apex_mm_walk_up(bot_id, bot):
                 bot[f'_{exit_side}_exit_oid'] = _new_oid
             bot['_exit_price'] = snap_price
             bot['_wall_parked'] = False
-            if snap_price < target_price:
-                # Genuinely better than target — reset soak to protect the better price
-                bot['_exit_soak_start'] = now
-                bot['_exit_walk_count'] = 0
-            # Don't reset soak when snapping back TO target — prevents infinite 94→96→94 cycling
+            # Never reset soak on snap-back — soak is a one-time patience window.
+            # If price drops to 35c and rebounds to 44c, we want to follow it back up
+            # immediately, not sit at 35c for 25s while the market runs away.
             print(f'📊 APEX MM SNAP-BACK: {bot_id} {exit_side.upper()} {current_price}→{snap_price}c (bid improved, combined={avg_held + snap_price}c)')
             bot_log('APEX_MM_SNAP_BACK', bot_id, {'old': current_price, 'new': snap_price, 'bid': live_exit_bid, 'combined': avg_held + snap_price})
         except Exception as e:

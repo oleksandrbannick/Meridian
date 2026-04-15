@@ -6531,7 +6531,8 @@ _PHANTOM_DEATH_ZONE = {
 
 
 def _tennis_death_zone_check(match_data):
-    """Check if a tennis match is in death zone (serving for match / tiebreak).
+    """Check if a tennis match is at MATCH POINT — one point from ending.
+    Only fires to prevent catching a crashing knife on the final point.
     Returns (True, reason) or (False, '')."""
     scores = match_data.get('scores', [])
     if not scores:
@@ -6545,15 +6546,36 @@ def _tennis_death_zone_check(match_data):
     cur = scores[-1]
     g1 = int(float(cur.get('score_first', 0)))
     g2 = int(float(cur.get('score_second', 0)))
-    # P1 serving for match: needs 1 more set AND at 5-x (x<=4)
-    if p1_sets == sets_to_win - 1 and g1 >= 5 and g1 > g2 and g2 <= 4:
-        return True, f'serving for match (sets {p1_sets}-{p2_sets}, games {g1}-{g2})'
-    # P2 serving for match
-    if p2_sets == sets_to_win - 1 and g2 >= 5 and g2 > g1 and g1 <= 4:
-        return True, f'serving for match (sets {p2_sets}-{p1_sets}, games {g2}-{g1})'
-    # Tiebreak in deciding set (BOTH players 1 set from winning — not just one)
-    if (p1_sets == sets_to_win - 1 and p2_sets == sets_to_win - 1) and g1 == 6 and g2 == 6:
-        return True, f'tiebreak in deciding set (sets {p1_sets}-{p2_sets})'
+    # Point score (e.g. "40-15", "40-A", "0-40")
+    game_pts = (match_data.get('event_game_result', '') or '').strip()
+    if not game_pts or game_pts == '-':
+        return False, ''
+    pts = game_pts.split('-')
+    if len(pts) != 2:
+        return False, ''
+    pt1 = pts[0].strip()
+    pt2 = pts[1].strip()
+    # Match point: player needs 1 more set AND 1 more game AND is at 40+ (or A)
+    # P1 match point: p1 needs 1 set, has 5+ games, leads games, AND at 40/A
+    _p1_serving_for_match = p1_sets == sets_to_win - 1 and g1 >= 5 and g1 > g2 and g2 <= 4
+    _p2_serving_for_match = p2_sets == sets_to_win - 1 and g2 >= 5 and g2 > g1 and g1 <= 4
+    # Tiebreak in deciding set
+    _deciding_tb = (p1_sets == sets_to_win - 1 and p2_sets == sets_to_win - 1) and g1 == 6 and g2 == 6
+    if _p1_serving_for_match and pt1 in ('40', 'A') and pt2 not in ('40', 'A'):
+        return True, f'match point P1 (sets {p1_sets}-{p2_sets}, games {g1}-{g2}, pts {game_pts})'
+    if _p2_serving_for_match and pt2 in ('40', 'A') and pt1 not in ('40', 'A'):
+        return True, f'match point P2 (sets {p2_sets}-{p1_sets}, games {g2}-{g1}, pts {game_pts})'
+    # Tiebreak match point: one player ahead by 1+ with score >= 6
+    if _deciding_tb:
+        try:
+            _tb1 = int(pt1) if pt1.isdigit() else 0
+            _tb2 = int(pt2) if pt2.isdigit() else 0
+            if _tb1 >= 6 and _tb1 > _tb2:
+                return True, f'tiebreak match point P1 ({_tb1}-{_tb2})'
+            if _tb2 >= 6 and _tb2 > _tb1:
+                return True, f'tiebreak match point P2 ({_tb2}-{_tb1})'
+        except ValueError:
+            pass
     return False, ''
 
 

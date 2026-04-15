@@ -7971,13 +7971,17 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
 
         try:
             if exit_oid:
-                # Amend existing exit order — same ID, new price + count
+                # Amend existing exit order — update QTY but PRESERVE current price
+                # if exit is already walking/snapped past target. Don't kill snap progress.
+                _current_exit_price = bot.get('_exit_price', 0)
+                _use_price = _current_exit_price if _current_exit_price > 0 else exit_price
+                _amend_kwarg = {f'{exit_side}_price': _use_price}
                 api_rate_limiter.wait(priority=True)
                 kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
-                                          count=net_held, action='buy', **price_kwarg)
-                print(f'📊 APEX MM AMEND EXIT: {bot_id} {exit_side.upper()} @{exit_price}c x{net_held} (avg_{held_side}={avg_held}c)')
+                                          count=net_held, action='buy', **_amend_kwarg)
+                print(f'📊 APEX MM AMEND EXIT: {bot_id} {exit_side.upper()} @{_use_price}c x{net_held} (avg_{held_side}={avg_held}c, target={exit_price}c)')
             else:
-                # First fill — create exit order
+                # First fill — create exit order at target price
                 resp, actual_price = create_order_maker(ticker, exit_side, 'buy', net_held, exit_price)
                 oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''
                 if oid:
@@ -7989,7 +7993,9 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
                     return
 
             _old_target = bot.get('_exit_target_price', 0)
-            bot['_exit_price'] = exit_price
+            # Only set exit price on first creation — amends preserve walk/snap progress
+            if not exit_oid:
+                bot['_exit_price'] = exit_price
             bot['_exit_total_qty'] = net_held
             bot['_exit_side'] = exit_side
             bot['_exit_held_side'] = held_side
@@ -8152,9 +8158,11 @@ def _apex_mm_walk_up(bot_id, bot):
                 bot[f'_{exit_side}_exit_oid'] = _new_oid
             bot['_exit_price'] = snap_price
             bot['_wall_parked'] = False
-            if snap_price <= target_price:
+            if snap_price < target_price:
+                # Genuinely better than target — reset soak to protect the better price
                 bot['_exit_soak_start'] = now
                 bot['_exit_walk_count'] = 0
+            # Don't reset soak when snapping back TO target — prevents infinite 94→96→94 cycling
             print(f'📊 APEX MM SNAP-BACK: {bot_id} {exit_side.upper()} {current_price}→{snap_price}c (bid improved, combined={avg_held + snap_price}c)')
             bot_log('APEX_MM_SNAP_BACK', bot_id, {'old': current_price, 'new': snap_price, 'bid': live_exit_bid, 'combined': avg_held + snap_price})
         except Exception as e:
@@ -14909,8 +14917,15 @@ def _handle_apex(bot_id, bot, actions):
                     # Clamp UP: Kalshi has more than bot + others claim (missing fills)
                     if net_yes < _fair_yes:
                         _missing = _fair_yes - net_yes
-                        # Estimate cost from midpoint (best we can do without fill data)
-                        _est_cost = bot.get('midpoint', 50)
+                        # Use existing avg cost if available (preserves real fill prices).
+                        # Only fall back to ladder price estimate if no cost data exists.
+                        _existing_avg = bot.get('avg_yes_cost', 0)
+                        if _existing_avg > 0 and net_yes > 0:
+                            _est_cost = _existing_avg  # preserve actual fill avg
+                        else:
+                            # Use best available: last fill price from fill_log, or ladder price
+                            _fl = [f for f in bot.get('_fill_log', []) if f.get('side') == 'yes' and not f.get('is_exit')]
+                            _est_cost = _fl[-1]['price'] if _fl else bot.get('midpoint', 50)
                         bot['net_yes'] = _fair_yes
                         bot['total_yes_cost'] = bot.get('total_yes_cost', 0) + (_est_cost * _missing)
                         bot['avg_yes_cost'] = round(bot['total_yes_cost'] / _fair_yes) if _fair_yes > 0 else 0
@@ -14918,7 +14933,12 @@ def _handle_apex(bot_id, bot, actions):
                         _changed = True
                     if net_no < _fair_no:
                         _missing = _fair_no - net_no
-                        _est_cost = 100 - bot.get('midpoint', 50)
+                        _existing_avg = bot.get('avg_no_cost', 0)
+                        if _existing_avg > 0 and net_no > 0:
+                            _est_cost = _existing_avg
+                        else:
+                            _fl = [f for f in bot.get('_fill_log', []) if f.get('side') == 'no' and not f.get('is_exit')]
+                            _est_cost = _fl[-1]['price'] if _fl else (100 - bot.get('midpoint', 50))
                         bot['net_no'] = _fair_no
                         bot['total_no_cost'] = bot.get('total_no_cost', 0) + (_est_cost * _missing)
                         bot['avg_no_cost'] = round(bot['total_no_cost'] / _fair_no) if _fair_no > 0 else 0

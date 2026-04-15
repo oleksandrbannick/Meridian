@@ -14793,6 +14793,14 @@ def _handle_apex(bot_id, bot, actions):
             bot['_yes_side_paused'] = False
             bot['_no_side_paused'] = False
         if _apex_depth_recovered(ticker, bot, obi_threshold=APEX_MM_RECOVER_OBI):
+            # Room guard: don't repost if room < width + 1 (need buffer above width)
+            _rc_yb = bot.get('live_yes_bid', 0)
+            _rc_nb = bot.get('live_no_bid', 0)
+            _rc_w = bot.get('start_gap', 4) * 2
+            _rc_room = (100 - _rc_yb - _rc_nb) if (_rc_yb > 0 and _rc_nb > 0) else 99
+            if _rc_room < _rc_w + 1:
+                bot['_last_pull_reason'] = f'room_guard (room={_rc_room}c < W{_rc_w}+1)'
+                return  # room too tight — stay pulled
             _apex_mm_repost_ladder(bot_id, bot)
         return
 
@@ -14946,6 +14954,54 @@ def _handle_apex(bot_id, bot, actions):
             _apex_mm_pull_all(bot_id, bot, f'active_drift_guard (max_bid={_active_max_bid}c >= 80c)')
         print(f'🛡️ APEX MM ACTIVE DRIFT GUARD: {bot_id} max_bid={_active_max_bid}c — pulling/exiting')
         return
+
+    # 0.7. Room guard — pull if room < width (no profit space, behind the book)
+    _yb = bot.get('live_yes_bid', 0)
+    _nb = bot.get('live_no_bid', 0)
+    _width = bot.get('start_gap', 4) * 2
+    _room = (100 - _yb - _nb) if (_yb > 0 and _nb > 0) else 99
+    if _room < _width:
+        net_yes = bot.get('net_yes', 0)
+        net_no = bot.get('net_no', 0)
+        if net_yes <= 0 and net_no <= 0:
+            # Flat — pull everything
+            _apex_mm_pull_all(bot_id, bot, f'room_guard (room={_room}c < W{_width})')
+            print(f'🛡️ APEX MM ROOM GUARD: {bot_id} room={_room}c < width={_width}c — pulling (flat)')
+            return
+        else:
+            # Holding inventory — only pull entry side, keep exit alive
+            entry_side_key = 'no_orders' if net_yes > net_no else 'yes_orders'
+            _entry_side = 'no' if entry_side_key == 'no_orders' else 'yes'
+            cancelled = 0
+            for price_str, level in list(bot.get(entry_side_key, {}).items()):
+                oid = level.get('oid')
+                if oid:
+                    if level.get('fill_qty', 0) >= level.get('qty', 1) and level.get('fill_qty', 0) > 0:
+                        level['oid'] = None
+                        continue
+                    cr = _safe_cancel(oid, f'apex_mm_room_guard_{bot_id}')
+                    if isinstance(cr, tuple) and cr[0] == 'filled':
+                        _kf = cr[1]
+                        _ws = max(level.get('fill_qty', 0), bot.get('_counted_order_fills', {}).get(oid, 0))
+                        _nf = max(0, _kf - _ws)
+                        if _nf > 0:
+                            _pr = int(price_str)
+                            bot[f'net_{_entry_side}'] = bot.get(f'net_{_entry_side}', 0) + _nf
+                            bot[f'total_{_entry_side}_cost'] = bot.get(f'total_{_entry_side}_cost', 0) + (_pr * _nf)
+                            _n = bot[f'net_{_entry_side}']
+                            bot[f'avg_{_entry_side}_cost'] = round(bot[f'total_{_entry_side}_cost'] / _n) if _n > 0 else 0
+                            bot.setdefault('_counted_order_fills', {})[oid] = _kf
+                            print(f'🚨 ROOM GUARD LATE FILL: {bot_id} {_entry_side.upper()} +{_nf}x @{_pr}c')
+                    elif cr and cr != '404':
+                        cancelled += 1
+                    level['oid'] = None
+            bot['_pull_count'] = bot.get('_pull_count', 0) + 1
+            bot['_last_pull_at'] = time.time()
+            bot['_last_pull_reason'] = f'room_guard (room={_room}c < W{_width}, entry only)'
+            bot_log('APEX_MM_ROOM_GUARD_PULL', bot_id, {'room': _room, 'width': _width, 'cancelled': cancelled})
+            print(f'🛡️ APEX MM ROOM GUARD: {bot_id} room={_room}c < W{_width} — pulled {cancelled} entry orders (keeping exit)')
+            save_state()
+            # Fall through to walk_up so exit order follows market
 
     # 1. OBI check — pull if hostile (MM uses deeper book view)
     # Skip if refill is in progress — avoid racing with cycle_refill posting new orders

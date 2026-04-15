@@ -6435,14 +6435,21 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const _isTimeStop = _exitReason.includes('time_stop');
     const _isSmartStop = _exitReason.includes('smart_stop') || bot._smart_stop_reason === 'manual';
     const _apexSettled = bot._market_settled_at > 0 || bot._smart_stop_reason === 'final';
+    // Pull reason for distinct status display
+    const _pullReason = bot._last_pull_reason || '';
+    const _isRoomPull = _pullReason.includes('room_guard');
+    const _isDriftPull = _pullReason.includes('drift');
+    const _isObiPull = _pullReason.includes('obi') || _pullReason.includes('thin') || _pullReason.includes('vanish');
+    const _pulledLabel = _isRoomPull ? '⏸ ROOM' : _isDriftPull ? '⏸ DRIFT' : _isObiPull ? '⏸ OBI' : '⏸ PULLED';
+    const _pulledColor = _isRoomPull ? '#ff7043' : _isDriftPull ? '#818cf8' : _isObiPull ? '#ffaa00' : '#ffaa00';
     const statusMap = {
-        'market_making_active': ['ACTIVE', '#00d4ff'],
-        'mm_depth_pulled': ['PULLED', '#ffaa00'],
-        'mm_exiting': ['EXITING', '#ff8800'],
+        'market_making_active': ['● ACTIVE', '#00d4ff'],
+        'mm_depth_pulled': [_pulledLabel, _pulledColor],
+        'mm_exiting': ['◗ EXITING', '#ff8800'],
         'awaiting_settlement': [_isDriftStop ? '⏳ DRIFT STOP' : _isTimeStop ? '⏳ TIME STOP' : _isSmartStop ? '⏳ SMART STOP' : '⏳ AWAITING', '#818cf8'],
-        'completed': [_apexSettled ? '🏁 SETTLED' : _isDriftStop ? 'DRIFT STOP' : _isTimeStop ? 'TIME STOP' : _isSmartStop ? 'SMART STOP' : 'DONE',
+        'completed': [_apexSettled ? '🏁 SETTLED' : _isDriftStop ? 'DRIFT STOP' : _isTimeStop ? 'TIME STOP' : _isSmartStop ? 'SMART STOP' : '✓ DONE',
                       _apexSettled ? '#ffaa00' : (_isDriftStop || _isTimeStop || _isSmartStop ? '#ff8800' : '#00ff88')],
-        'stopped': [bot._pending_sells?.length ? '📤 SELLING' : 'STOPPED', bot._pending_sells?.length ? '#ffaa00' : '#ff4444'],
+        'stopped': [bot._pending_sells?.length ? '📤 SELLING' : '✕ STOPPED', bot._pending_sells?.length ? '#ffaa00' : '#ff4444'],
     };
     const [statusLabel, accentCol] = statusMap[status] || [status.toUpperCase(), '#8892a6'];
 

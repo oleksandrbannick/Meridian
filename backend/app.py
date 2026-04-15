@@ -5709,6 +5709,13 @@ def _refresh_milestones_cache():
                 break
     _milestones_cache = {'data': event_info, 'ts': time.time()}
     live_events = [k for k, v in event_info.items() if _is_milestone_live(v, k)]
+    # Debug: log raw vs accepted live events
+    raw_live = [k for k, v in event_info.items() if v.get('status') == 'live']
+    if raw_live:
+        for rl in raw_live:
+            info = event_info[rl]
+            accepted = rl in live_events
+            print(f'🎾 DEBUG {rl}: raw=live accepted={accepted} start_date={info.get("start_date","")}')
     if live_events:
         print(f'🎾 Milestones cache: {len(live_events)} live — {", ".join(live_events[:5])}')
 
@@ -12228,6 +12235,9 @@ def _handle_phantom(bot_id, bot, actions):
 
                 # Cancel old order — check for cancel-race fills
                 _repost_cancel = _safe_cancel(dog_order_id, f'phantom dog repost {bot_id}')
+                if _repost_cancel == False:
+                    print(f'⚠ REPOST ABORTED: {bot_id} cancel of old order failed — old order still live, not posting duplicate')
+                    return
                 if isinstance(_repost_cancel, tuple) and _repost_cancel[0] == 'filled':
                     print(f'⚠ REPOST CANCEL-RACE: {bot_id} {_repost_cancel[1]} fills on old order — letting verify handle it')
                 # If WS already detected a fill and fired hedge, abort repost
@@ -13578,7 +13588,10 @@ def _handle_phantom(bot_id, bot, actions):
         # its fills are already hedged. Hedging again creates naked orphan positions.
         old_dog_oid = bot.get('dog_order_id')
         if old_dog_oid:
-            _safe_cancel(old_dog_oid, f'phantom repeat cleanup {bot_id}')
+            _rc = _safe_cancel(old_dog_oid, f'phantom repeat cleanup {bot_id}')
+            if _rc == False:
+                print(f'⚠ REPEAT REPOST ABORTED: {bot_id} cancel of old order failed — not posting duplicate')
+                return
             bot['dog_order_id'] = None
 
         try:

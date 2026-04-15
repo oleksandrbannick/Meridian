@@ -3937,6 +3937,11 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
             _new_oid = _amend_order.get('order_id', '')
             if _new_oid and _new_oid != fav_oid:
                 bot['fav_order_id'] = _new_oid
+                _hids = bot.setdefault('_all_hedge_order_ids', [])
+                if fav_oid not in _hids:
+                    _hids.append(fav_oid)
+                if _new_oid not in _hids:
+                    _hids.append(_new_oid)
                 if fav_side == 'yes':
                     bot['yes_order_id'] = _new_oid
                 else:
@@ -4178,14 +4183,22 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
                     fav_oid = bot.get('fav_order_id')
                     if fav_oid:
                         qty = bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1))
-                        # Cancel the post_only maker order
-                        api_rate_limiter.wait(priority=True)
-                        try:
-                            kalshi_client.cancel_order(fav_oid)
-                        except Exception as _cancel_err:
-                            if '404' not in str(_cancel_err) and 'already' not in str(_cancel_err).lower():
-                                raise
-                        # Repost as regular limit order (can cross the spread)
+                        # Cancel the post_only maker order — verify fills before reposting
+                        _cancel_result = _safe_cancel(fav_oid, f'bid_plus_one_{bot_id}')
+                        _cancel_race_fills = 0
+                        if isinstance(_cancel_result, tuple) and _cancel_result[0] == 'filled':
+                            _cancel_race_fills = _cancel_result[1]
+                        if _cancel_race_fills > 0:
+                            bot['fav_fill_qty'] = max(bot.get('fav_fill_qty', 0), _cancel_race_fills)
+                            if fav_side == 'yes':
+                                bot['yes_fill_qty'] = bot['fav_fill_qty']
+                            else:
+                                bot['no_fill_qty'] = bot['fav_fill_qty']
+                            print(f'⚡ BID+1 CANCEL-RACE: {bot_id} old order had {_cancel_race_fills} fills — counted before repost')
+                            bot_log('PHANTOM_BID1_CANCEL_RACE', bot_id, {
+                                'fills': _cancel_race_fills, 'old_oid': fav_oid[:12],
+                            })
+                        # Repost as regular limit order at bid+1
                         _filled_already = bot.get('fav_fill_qty', 0)
                         _repost_qty = qty - _filled_already
                         if _repost_qty > 0:
@@ -12910,9 +12923,11 @@ def _handle_phantom(bot_id, bot, actions):
                 print(f'🔄 PHANTOM REPEAT: {bot_id} {_label} pnl={net_pnl}¢')
                 _audit('PHANTOM_REPEAT_ENTER', bot_id, {'ticker': ticker, 'cycle': repeats_done_now, 'total': repeat_total, 'smart': _smart_reason})
                 # Orphan guard: verify Kalshi position is flat before repeating.
-                # If non-zero, the completed run left orphaned contracts — sell them.
+                # Same-market only — cross-market positions are held until settlement.
+                # If non-zero, fire a supplemental hedge to flatten before next run.
+                _is_cross_og = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
                 try:
-                    if api_read_limiter.try_wait():
+                    if not _is_cross_og and api_read_limiter.try_wait():
                         _rp_pos = kalshi_client.get_positions(ticker=ticker)
                         _rp_list = _rp_pos.get('market_positions', _rp_pos.get('positions', []))
                         _rp_net = 0
@@ -12921,16 +12936,28 @@ def _handle_phantom(bot_id, bot, actions):
                                 _rp_net = _parse_position_qty(_rp)
                                 break
                         if _rp_net != 0:
-                            _rp_side = 'yes' if _rp_net > 0 else 'no'
                             _rp_qty = abs(_rp_net)
-                            print(f'🚨 PHANTOM REPEAT ORPHAN: {bot_id} Kalshi has {_rp_qty}x {_rp_side.upper()} after completion — selling')
+                            _rp_held_side = 'yes' if _rp_net > 0 else 'no'
+                            print(f'🚨 PHANTOM REPEAT ORPHAN: {bot_id} {_rp_qty}x {_rp_held_side.upper()} unhedged — firing supplemental hedge')
                             bot_log('PHANTOM_REPEAT_ORPHAN', bot_id, {
-                                'side': _rp_side, 'qty': _rp_qty, 'ticker': ticker,
+                                'held_side': _rp_held_side, 'qty': _rp_qty, 'ticker': ticker,
                             }, level='WARN')
-                            try:
-                                execute_sell(ticker, _rp_side, _rp_qty, reason=f'phantom_repeat_orphan_{bot_id}')
-                            except Exception as _rpo_err:
-                                print(f'⚠ PHANTOM REPEAT ORPHAN SELL FAILED: {bot_id} {_rpo_err}')
+                            _push_notification('orphan_hedge', f'⚠ Phantom {bot_id}: {_rp_qty}x {_rp_held_side.upper()} orphan on {ticker} — hedging', {
+                                'bot_id': bot_id, 'ticker': ticker, 'side': _rp_held_side, 'qty': _rp_qty,
+                            })
+                            # Re-enter hedge flow: post fav at bid, let bid-follow complete it
+                            bot['_partial_hedge_qty'] = _rp_qty
+                            bot['dog_fill_qty'] = _rp_qty
+                            bot[f'{dog_side}_fill_qty'] = _rp_qty
+                            bot['fav_order_id'] = None
+                            bot['fav_fill_qty'] = 0
+                            bot['_hedge_fired'] = True
+                            bot['_trade_recorded'] = False
+                            bot['status'] = 'dog_filled'
+                            bot['dog_filled_at'] = time.time()
+                            _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
+                            save_state()
+                            return  # hedge first, repeat after it completes
                 except Exception as _rp_err:
                     print(f'⚠ PHANTOM REPEAT ORPHAN CHECK FAILED: {bot_id} {_rp_err}')
             else:

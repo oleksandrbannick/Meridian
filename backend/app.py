@@ -8118,15 +8118,16 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
         ticker = bot.get('ticker', '')
 
         # Determine which side we're long and what the exit side is
+        midpoint = bot.get('midpoint', 50)
         if net_yes > net_no:
             held_side = 'yes'
             exit_side = 'no'
-            avg_held = bot.get('avg_yes_cost', 0)
+            avg_held = bot.get('avg_yes_cost') or midpoint
             net_held = net_yes - net_no
         elif net_no > net_yes:
             held_side = 'no'
             exit_side = 'yes'
-            avg_held = bot.get('avg_no_cost', 0)
+            avg_held = bot.get('avg_no_cost') or (100 - midpoint)
             net_held = net_no - net_yes
         else:
             # Flat — cancel any lingering exit orders to prevent orphan fills
@@ -8159,7 +8160,8 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
                 pass
 
         # Re-read cost basis — concurrent WS fills may have shifted avg since top of function
-        avg_held = bot.get(f'avg_{held_side}_cost', 0)
+        _fallback_cost = midpoint if held_side == 'yes' else (100 - midpoint)
+        avg_held = bot.get(f'avg_{held_side}_cost') or _fallback_cost
         net_held = abs(bot.get('net_yes', 0) - bot.get('net_no', 0))
         if net_held <= 0:
             return  # went flat during processing
@@ -15175,7 +15177,7 @@ def _handle_apex(bot_id, bot, actions):
                     # Upward: Kalshi has more than bot tracks — add missing inventory
                     if _rc_ky > _rc_by:
                         _m = _rc_ky - _rc_by
-                        _ec = bot.get('avg_yes_cost', bot.get('midpoint', 50))
+                        _ec = bot.get('avg_yes_cost') or bot.get('midpoint', 50)
                         bot['net_yes'] = _rc_ky
                         bot['total_yes_cost'] = bot.get('total_yes_cost', 0) + (_ec * _m)
                         bot['avg_yes_cost'] = round(bot['total_yes_cost'] / _rc_ky) if _rc_ky > 0 else 0
@@ -15183,7 +15185,7 @@ def _handle_apex(bot_id, bot, actions):
                         print(f'🔄 RECONCILE ACTIVE: {bot_id} YES {_rc_by}→{_rc_ky} (+{_m} from Kalshi)')
                     if _rc_kn > _rc_bn:
                         _m = _rc_kn - _rc_bn
-                        _ec = bot.get('avg_no_cost', 100 - bot.get('midpoint', 50))
+                        _ec = bot.get('avg_no_cost') or (100 - bot.get('midpoint', 50))
                         bot['net_no'] = _rc_kn
                         bot['total_no_cost'] = bot.get('total_no_cost', 0) + (_ec * _m)
                         bot['avg_no_cost'] = round(bot['total_no_cost'] / _rc_kn) if _rc_kn > 0 else 0

@@ -2545,11 +2545,12 @@ function createMarketRow(market, label) {
     const _nSpr = (_nA > 0 && _nB > 0) ? (_nA - _nB) : 0;
     const _spr = (_ySpr > 0 && _nSpr > 0) ? Math.min(_ySpr, _nSpr) : (_ySpr || _nSpr);
     if (_spr > 0 && _spr < 99) {
-        const _sprCol = _spr <= 2 ? '#00ff88' : _spr <= 5 ? '#00d4ff' : _spr <= 10 ? '#ffaa00' : '#ff4444';
+        // Neutral color — tight vs wide matters differently per bot type
+        // Tight = Phantom territory, Wide = Apex territory
         const sprBadge = document.createElement('span');
-        sprBadge.style.cssText = `color:${_sprCol};font-size:9px;font-weight:700;opacity:0.8;margin-left:2px;`;
-        sprBadge.textContent = `${_spr}¢`;
-        sprBadge.title = `Spread: YES ${_ySpr}¢ / NO ${_nSpr}¢`;
+        sprBadge.style.cssText = `color:#8892a6;font-size:9px;font-weight:600;opacity:0.85;margin-left:2px;letter-spacing:0.3px;`;
+        sprBadge.textContent = `${_spr}¢ spr`;
+        sprBadge.title = `Spread: YES ${_ySpr}¢ / NO ${_nSpr}¢ — Tight = Phantom, Wide = Apex`;
         iconRow.appendChild(sprBadge);
         hasIcons = true;
     }

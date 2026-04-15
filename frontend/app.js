@@ -1181,9 +1181,11 @@ function isKalshiLive(market) {
     if (isTennis) {
         // Milestones are authoritative for tennis — if we have a status, trust it
         if (market.milestone_status) return market.milestone_status === 'live';
-        // No milestone_status means milestones cache doesn't have this event.
-        // Default to NOT live — don't fall through to unreliable expiration check.
-        // The expiration heuristic falsely marks unsettled past-expiration matches as live.
+        // No milestone_status — fall back to Kalshi price activity
+        // If both sides have bids, the market is actively trading = live
+        const _yb = market.yes_bid || market.yesBid || 0;
+        const _nb = market.no_bid || market.noBid || 0;
+        if (_yb > 0 && _nb > 0) return true;
         return false;
     }
 

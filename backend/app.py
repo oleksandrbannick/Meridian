@@ -11803,8 +11803,22 @@ def _handle_phantom(bot_id, bot, actions):
 
     # ── STATE: dog_anchor_posted — waiting for dog to fill ────────
     if status == 'dog_anchor_posted':
-        # Death zone check: game ending, cancel dog and stop (skip if already flagged)
+        # Death zone flagged but bot never transitioned — move to stopped for settlement purge
         if bot.get('_death_zone_stopped'):
+            _cancel_oid = bot.get('dog_order_id')
+            if _cancel_oid:
+                try:
+                    api_rate_limiter.wait()
+                    kalshi_client.cancel_order(_cancel_oid)
+                except Exception:
+                    pass
+            bot['dog_order_id'] = None
+            bot['status'] = 'stopped'
+            bot['stopped_at'] = time.time()
+            bot['_stop_reason'] = bot.get('_death_zone_reason', 'death_zone')
+            bot_log('DEATH_ZONE_STUCK_FIX', bot_id, {'prev_status': 'dog_anchor_posted'})
+            print(f'🛑 DEATH ZONE FIX: {bot_id} was stuck in dog_anchor_posted → stopped')
+            save_state()
             return
         _dz, _dz_reason = _is_phantom_death_zone(ticker, bot)
         if _dz:

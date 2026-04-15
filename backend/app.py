@@ -21179,7 +21179,7 @@ PNL_LOSS_RESULTS = (
     'mm_settlement_no',  # apex MM: market settled NO
 )
 PNL_WIN_RESULTS = (
-    'completed', 'settled_win_yes', 'settled_win_no', 'manual_exit_completed',
+    'completed', 'win', 'settled_win_yes', 'settled_win_no', 'manual_exit_completed',
     'middle_hit', 'arb_win',  # middle bot results
     'take_profit_watch',  # straight bet take-profit hit
     'apex_rung',  # Apex 2.0 per-rung arb completion

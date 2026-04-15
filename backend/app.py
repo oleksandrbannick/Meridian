@@ -6920,7 +6920,7 @@ def _get_game_score_for_ticker(ticker: str) -> dict:
                         'home_team': _c2, 'away_team': _c1,
                         'home_score': p2_sets, 'away_score': p1_sets,
                         'period': cur_set, 'clock': game_score if game_score != '-' else '',
-                        'status_detail': f'Set {cur_set}' if _status_str in ('interrupted', 'break time', '') else (_status_str or f'Set {cur_set}'),
+                        'status_detail': f'set {cur_set}' if _state == 'in' else ('Final' if _state == 'post' else (_status_str or f'set {cur_set}')),
                         'status': _state,
                     }
                 return {}  # pre-match

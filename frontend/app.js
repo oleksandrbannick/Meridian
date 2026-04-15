@@ -783,12 +783,15 @@ function _findGameInLookup(lookup, gameId, sport, strict) {
         }
     }
     // 3. Fallback: both halves found (even if different games) — for sports without espnGameId
-    for (let i = Math.min(6, cleaned.length - 2); i >= 2; i--) {
-        const t1 = cleaned.substring(0, i);
-        const t2 = cleaned.substring(i);
-        const g1 = lookup[`${sport}:${t1}`];
-        if (g1 && lookup[`${sport}:${t2}`] && _gameIdDateMatchesESPN(gameId, g1)) {
-            return g1;
+    // Skip in strict mode (tennis) — 3-letter codes collide across matches
+    if (!strict) {
+        for (let i = Math.min(6, cleaned.length - 2); i >= 2; i--) {
+            const t1 = cleaned.substring(0, i);
+            const t2 = cleaned.substring(i);
+            const g1 = lookup[`${sport}:${t1}`];
+            if (g1 && lookup[`${sport}:${t2}`] && _gameIdDateMatchesESPN(gameId, g1)) {
+                return g1;
+            }
         }
     }
     // 4. Last resort: find either team individually (longest first)

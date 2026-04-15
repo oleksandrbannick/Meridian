@@ -9186,6 +9186,7 @@ def _apex_mm_begin_exit_inner(bot_id, bot, reason):
         bot_log('APEX_MM_NET_OFFSET', bot_id, {
             'netted': _netted, 'pnl': _net_pnl_after_fee, 'remaining_yes': net_yes, 'remaining_no': net_no,
         })
+        save_state()  # CRITICAL: persist realized_pnl + trade in sync to prevent restart duplicates
 
     if net_yes == 0 and net_no == 0:
         # SAFETY: verify against Kalshi before completing — catch late fills during cancel
@@ -9368,6 +9369,11 @@ def _apex_mm_exit_tick(bot_id, bot):
             target = sell_info.get('qty', 0)
 
             if filled >= target:
+                # DEDUP: skip if this exit order was already recorded (restart safety)
+                if sell_info.get('_trade_recorded'):
+                    sell_info['oid'] = None
+                    continue
+
                 # Fully filled — parse actual fill price
                 actual_price = sell_info.get('price', 0) or int(order.get('yes_price', 0) or order.get('no_price', 0))
                 _kalshi_price = int(order.get('yes_price', 0) or order.get('no_price', 0))
@@ -9395,6 +9401,7 @@ def _apex_mm_exit_tick(bot_id, bot):
                     bot[f'total_{held_side}_cost'] = 0
                     sell_info['oid'] = None
                     sell_info['filled'] = True
+                    sell_info['_trade_recorded'] = True
                     _record_trade({
                         'bot_id': bot_id, 'ticker': ticker, 'bot_category': 'ladder_arb',
                         'result': 'mm_arb_complete', 'exit_via': bot.get('_exit_reason', 'exit'),
@@ -9417,6 +9424,7 @@ def _apex_mm_exit_tick(bot_id, bot):
                         'ts': now,
                     })
                     print(f'✅ APEX MM ARB EXIT: {bot_id} bought {side.upper()} {target}x @{actual_price}c + held {held_side.upper()} avg@{held_avg}c → pnl={pnl}c (fee={total_fee}c)')
+                    save_state()  # CRITICAL: persist realized_pnl + trade in sync to prevent restart duplicates
                 else:
                     # Sell held side (original path)
                     opposite_side = 'no' if side == 'yes' else 'yes'
@@ -9438,6 +9446,7 @@ def _apex_mm_exit_tick(bot_id, bot):
                     bot[f'total_{side}_cost'] = 0
                     sell_info['oid'] = None
                     sell_info['filled'] = True
+                    sell_info['_trade_recorded'] = True
                     _record_trade({
                         'bot_id': bot_id, 'ticker': ticker, 'bot_category': 'ladder_arb',
                         'result': 'mm_sellback', 'exit_via': bot.get('_exit_reason', 'exit'),
@@ -9458,6 +9467,7 @@ def _apex_mm_exit_tick(bot_id, bot):
                         'ts': now,
                     })
                     print(f'✅ APEX MM SOLD: {bot_id} {side.upper()} {target}x @{actual_price}c (avg_cost={avg_cost}c, pnl={pnl}c, fee={total_fee}c)')
+                    save_state()  # CRITICAL: persist realized_pnl + trade in sync to prevent restart duplicates
                 all_sold = True  # will recheck
             elif now - sell_info.get('posted_at', now) > 10:
                 # Fallback: WS shadow normally handles price following instantly.
@@ -14609,6 +14619,7 @@ def _handle_apex(bot_id, bot, actions):
                     _dp_ky = max(0, _dp_kalshi_net)
                     _dp_kn = max(0, -_dp_kalshi_net)
                     if _dp_ky != _dp_net_yes or _dp_kn != _dp_net_no:
+                        # UPWARD: Kalshi has more than bot tracks — add missing inventory
                         if _dp_ky > _dp_net_yes:
                             _m = _dp_ky - _dp_net_yes
                             _fl = [f for f in bot.get('_fill_log', []) if f.get('side') == 'yes' and not f.get('is_exit')]
@@ -14623,6 +14634,27 @@ def _handle_apex(bot_id, bot, actions):
                             bot['net_no'] = _dp_kn
                             bot['total_no_cost'] = bot.get('total_no_cost', 0) + (_ec * _m)
                             bot['avg_no_cost'] = round(bot['total_no_cost'] / _dp_kn) if _dp_kn > 0 else 0
+                        # DOWNWARD: bot tracks more than Kalshi — clamp phantom inventory
+                        if _dp_ky < _dp_net_yes:
+                            print(f'🛡️ RECONCILE CLAMP DOWN: {bot_id} YES {_dp_net_yes}→{_dp_ky} (Kalshi authoritative)')
+                            bot['net_yes'] = _dp_ky
+                            if _dp_ky > 0:
+                                bot['total_yes_cost'] = bot.get('avg_yes_cost', 0) * _dp_ky
+                            else:
+                                bot['avg_yes_cost'] = 0
+                                bot['total_yes_cost'] = 0
+                        if _dp_kn < _dp_net_no:
+                            print(f'🛡️ RECONCILE CLAMP DOWN: {bot_id} NO {_dp_net_no}→{_dp_kn} (Kalshi authoritative)')
+                            bot['net_no'] = _dp_kn
+                            if _dp_kn > 0:
+                                bot['total_no_cost'] = bot.get('avg_no_cost', 0) * _dp_kn
+                            else:
+                                bot['avg_no_cost'] = 0
+                                bot['total_no_cost'] = 0
+                        bot_log('APEX_MM_RECONCILE', bot_id, {
+                            'kalshi_yes': _dp_ky, 'kalshi_no': _dp_kn,
+                            'old_yes': _dp_net_yes, 'old_no': _dp_net_no,
+                        })
                         if _dp_ky > 0 or _dp_kn > 0:
                             _held = 'yes' if _dp_ky > _dp_kn else 'no'
                             print(f'🚨 DEPTH_PULLED RECONCILE: {bot_id} found {_dp_ky}Y/{_dp_kn}N on Kalshi — posting exit')
@@ -20869,12 +20901,32 @@ def _sweep_orphaned_orders():
                 if fav_qty > 0 and fav_side:
                     managed_qty[(_hedge_t, fav_side)] = managed_qty.get((_hedge_t, fav_side), 0) + fav_qty
             elif cat == 'ladder_arb':
-                yes_qty = _safe_int_sweep(b.get('filled_yes_qty'))
-                no_qty = _safe_int_sweep(b.get('filled_no_qty'))
-                if yes_qty > 0:
-                    managed_qty[(t, 'yes')] = managed_qty.get((t, 'yes'), 0) + yes_qty
-                if no_qty > 0:
-                    managed_qty[(t, 'no')] = managed_qty.get((t, 'no'), 0) + no_qty
+                if btype == 'apex_mm':
+                    # Apex MM tracks inventory as net_yes/net_no, NOT filled_yes/no_qty.
+                    # Kalshi auto-nets: register the NET side as managed.
+                    _net_y = _safe_int_sweep(b.get('net_yes'))
+                    _net_n = _safe_int_sweep(b.get('net_no'))
+                    _kalshi_net = _net_y - _net_n
+                    if _kalshi_net > 0:
+                        managed_qty[(t, 'yes')] = managed_qty.get((t, 'yes'), 0) + _kalshi_net
+                    elif _kalshi_net < 0:
+                        managed_qty[(t, 'no')] = managed_qty.get((t, 'no'), 0) + abs(_kalshi_net)
+                    # Active MM bots have orders out up to inventory_limit on either side
+                    _bst_sweep = b.get('status', '')
+                    if _bst_sweep in ('market_making_active', 'mm_depth_pulled'):
+                        _inv_lim = _safe_int_sweep(b.get('inventory_limit'))
+                        if _inv_lim > 0:
+                            for _ms in ('yes', 'no'):
+                                _cur = managed_qty.get((t, _ms), 0)
+                                if _cur < _inv_lim:
+                                    managed_qty[(t, _ms)] = _inv_lim
+                else:
+                    yes_qty = _safe_int_sweep(b.get('filled_yes_qty'))
+                    no_qty = _safe_int_sweep(b.get('filled_no_qty'))
+                    if yes_qty > 0:
+                        managed_qty[(t, 'yes')] = managed_qty.get((t, 'yes'), 0) + yes_qty
+                    if no_qty > 0:
+                        managed_qty[(t, 'no')] = managed_qty.get((t, 'no'), 0) + no_qty
             elif btype == 'middle':
                 # Middle bots hold NO positions on two tickers
                 for leg in ('a', 'b'):
@@ -21562,8 +21614,21 @@ def emergency_sell():
                         pass
                     del _pending_maker_sells[_sk]
                     _cancelled += 1
+            _taker_price = info.get('fill_price', 0) if isinstance(info, dict) else 0
+            if success and _taker_price > 0:
+                _record_trade({
+                    'bot_id': f'orphan_{ticker}', 'ticker': ticker,
+                    'bot_category': 'ladder_arb',
+                    'result': 'mm_sellback', 'exit_via': 'emergency_taker_sell',
+                    'is_exit': True, 'exit_type': 'emergency_taker_sell',
+                    'held_side': side, 'held_avg': _taker_price,
+                    'sell_price': _taker_price, 'sell_side': side,
+                    'quantity': count, 'fee_cents': 0,
+                    'profit_cents': 0, 'loss_cents': 0, 'net_pnl': 0,
+                    'timestamp': time.time(), 'fill_source': 'emergency_sell',
+                })
             save_state()
-            return jsonify({'success': success, 'sell_price': info.get('fill_price', 0) if isinstance(info, dict) else 0, 'cancelled_stale_orders': _cancelled})
+            return jsonify({'success': success, 'sell_price': _taker_price, 'cancelled_stale_orders': _cancelled})
         _eo_oid, _eo_price = execute_maker_sell(ticker, side, count, reason='emergency_orphan_sell')
         success = bool(_eo_oid)
         sell_price = _eo_price
@@ -21623,6 +21688,20 @@ def emergency_sell():
                 'ticker': ticker, 'side': side, 'count': count,
                 'sell_price': sell_price, 'reason': 'orphan_sell_button',
                 'cancelled_stale_orders': len(_cancelled_orphan_orders)})
+            # Record as trade so P&L dashboard shows the real loss/gain.
+            # Use sell_price as entry estimate (zero P&L) since we don't know
+            # the original entry price for orphaned contracts.
+            _record_trade({
+                'bot_id': f'orphan_{ticker}', 'ticker': ticker,
+                'bot_category': 'ladder_arb',
+                'result': 'mm_sellback', 'exit_via': 'emergency_orphan_sell',
+                'is_exit': True, 'exit_type': 'emergency_orphan_sell',
+                'held_side': side, 'held_avg': sell_price,
+                'sell_price': sell_price, 'sell_side': side,
+                'quantity': count, 'fee_cents': 0,
+                'profit_cents': 0, 'loss_cents': 0, 'net_pnl': 0,
+                'timestamp': time.time(), 'fill_source': 'emergency_sell',
+            })
             return jsonify({'success': True, 'sell_price': sell_price,
                             'cancelled_stale_orders': len(_cancelled_orphan_orders)})
         else:

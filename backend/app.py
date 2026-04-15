@@ -15027,6 +15027,70 @@ def _handle_apex(bot_id, bot, actions):
             save_state()
             # Fall through to walk_up so exit order follows market
 
+    # 0.9. State-agnostic reconciliation heartbeat — sync bot tracking with Kalshi reality
+    # Runs every 30s regardless of state. Catches cancel-race orphans that compound while active.
+    if now - bot.get('_last_reconcile', 0) >= 30:
+        bot['_last_reconcile'] = now
+        try:
+            if api_read_limiter.try_wait():
+                _rc_pos = kalshi_client.get_positions(ticker=ticker)
+                _rc_pos_list = _rc_pos.get('market_positions', _rc_pos.get('positions', []))
+                _rc_kalshi_net = 0
+                for _rcp in _rc_pos_list:
+                    if _rcp.get('ticker') == ticker:
+                        _rc_kalshi_net = _parse_position_qty(_rcp)
+                        break
+                _rc_ky = max(0, _rc_kalshi_net)   # Kalshi YES
+                _rc_kn = max(0, -_rc_kalshi_net)  # Kalshi NO
+                _rc_by = bot.get('net_yes', 0)    # Bot YES
+                _rc_bn = bot.get('net_no', 0)     # Bot NO
+                if _rc_ky != _rc_by or _rc_kn != _rc_bn:
+                    _rc_changed = False
+                    # Upward: Kalshi has more than bot tracks — add missing inventory
+                    if _rc_ky > _rc_by:
+                        _m = _rc_ky - _rc_by
+                        _ec = bot.get('avg_yes_cost', bot.get('midpoint', 50))
+                        bot['net_yes'] = _rc_ky
+                        bot['total_yes_cost'] = bot.get('total_yes_cost', 0) + (_ec * _m)
+                        bot['avg_yes_cost'] = round(bot['total_yes_cost'] / _rc_ky) if _rc_ky > 0 else 0
+                        _rc_changed = True
+                        print(f'🔄 RECONCILE ACTIVE: {bot_id} YES {_rc_by}→{_rc_ky} (+{_m} from Kalshi)')
+                    if _rc_kn > _rc_bn:
+                        _m = _rc_kn - _rc_bn
+                        _ec = bot.get('avg_no_cost', 100 - bot.get('midpoint', 50))
+                        bot['net_no'] = _rc_kn
+                        bot['total_no_cost'] = bot.get('total_no_cost', 0) + (_ec * _m)
+                        bot['avg_no_cost'] = round(bot['total_no_cost'] / _rc_kn) if _rc_kn > 0 else 0
+                        _rc_changed = True
+                        print(f'🔄 RECONCILE ACTIVE: {bot_id} NO {_rc_bn}→{_rc_kn} (+{_m} from Kalshi)')
+                    # Downward: bot tracks more than Kalshi — clamp to reality
+                    if _rc_ky < _rc_by:
+                        bot['net_yes'] = _rc_ky
+                        bot['total_yes_cost'] = (bot.get('avg_yes_cost', 0) * _rc_ky) if _rc_ky > 0 else 0
+                        if _rc_ky == 0: bot['avg_yes_cost'] = 0
+                        _rc_changed = True
+                        print(f'🔄 RECONCILE CLAMP: {bot_id} YES {_rc_by}→{_rc_ky} (Kalshi authoritative)')
+                    if _rc_kn < _rc_bn:
+                        bot['net_no'] = _rc_kn
+                        bot['total_no_cost'] = (bot.get('avg_no_cost', 0) * _rc_kn) if _rc_kn > 0 else 0
+                        if _rc_kn == 0: bot['avg_no_cost'] = 0
+                        _rc_changed = True
+                        print(f'🔄 RECONCILE CLAMP: {bot_id} NO {_rc_bn}→{_rc_kn} (Kalshi authoritative)')
+                    if _rc_changed:
+                        # Resize exit order to match corrected inventory
+                        _rc_ny = bot.get('net_yes', 0)
+                        _rc_nn = bot.get('net_no', 0)
+                        if _rc_ny > 0 or _rc_nn > 0:
+                            _held = 'yes' if _rc_ny > _rc_nn else 'no'
+                            threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _held), daemon=True).start()
+                        bot_log('APEX_MM_ACTIVE_RECONCILE', bot_id, {
+                            'kalshi_yes': _rc_ky, 'kalshi_no': _rc_kn,
+                            'was_yes': _rc_by, 'was_no': _rc_bn,
+                        }, level='WARN')
+                        save_state()
+        except Exception as _rce:
+            print(f'⚠ ACTIVE RECONCILE FAIL: {bot_id} {_rce}')
+
     # 1. OBI check — pull if hostile (MM uses deeper book view)
     # Skip if refill is in progress — avoid racing with cycle_refill posting new orders
     if bot.get('_refill_in_progress'):

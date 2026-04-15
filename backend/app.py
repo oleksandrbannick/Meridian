@@ -12765,6 +12765,32 @@ def _handle_phantom(bot_id, bot, actions):
                             'dog_fills': _dog_fills, 'fav_fills': _fav_fills,
                         })
                         return
+                    elif _need_hedge < 0:
+                        # Fav overfilled (cancel-race during snap) — sell the excess immediately
+                        _excess = abs(_need_hedge)
+                        _excess_side = fav_side  # overfill is on the fav side
+                        print(f'🚨 PHANTOM VERIFY → SELL EXCESS: {bot_id} fav overfilled by {_excess} {_excess_side.upper()} — taker selling')
+                        bot_log('PHANTOM_VERIFY_SELL_EXCESS', bot_id, {
+                            'excess': _excess, 'side': _excess_side,
+                            'dog_fills': _dog_fills, 'fav_fills': _fav_fills,
+                        })
+                        try:
+                            _sell_ok, _sell_info = execute_sell(ticker, _excess_side, _excess, reason=f'phantom_verify_excess_{bot_id}')
+                            if _sell_ok:
+                                print(f'✅ PHANTOM EXCESS SOLD: {bot_id} {_excess}x {_excess_side.upper()}')
+                                bot_log('PHANTOM_EXCESS_SOLD', bot_id, {
+                                    'qty': _excess, 'side': _excess_side,
+                                    'sell_info': str(_sell_info)[:200],
+                                })
+                            else:
+                                print(f'⚠ PHANTOM EXCESS SELL FAILED: {bot_id} — will retry next cycle')
+                        except Exception as _sell_err:
+                            print(f'⚠ PHANTOM EXCESS SELL ERROR: {bot_id} {_sell_err}')
+                        # Continue to completion with the matched qty (dog_fills)
+                        qty = _dog_fills
+                        bot['quantity'] = _dog_fills
+                        fav_filled = _dog_fills
+                        bot['fav_fill_qty'] = _dog_fills
                 else:
                     print(f'✅ PHANTOM ORDER VERIFY: {bot_id} balanced YES={_ph_yes} NO={_ph_no}')
                 bot_log('PHANTOM_ORDER_VERIFY', bot_id, {
@@ -13177,12 +13203,18 @@ def _handle_phantom(bot_id, bot, actions):
                             # Order gone with 0 fills — re-post hedge
                             print(f'   🔙 PHANTOM FAV GONE (404 recovery): {bot_id} — re-posting hedge')
                             bot['fav_order_id'] = None
+                            bot['fav_fill_qty'] = 0
+                            bot['_hedge_fired'] = False
                             bot['status'] = 'dog_filled'
+                            save_state()
                     except Exception as _check_err:
                         if '404' in str(_check_err):
                             print(f'   🔙 PHANTOM FAV GONE 404 (recovery): {bot_id} — re-posting hedge')
                             bot['fav_order_id'] = None
+                            bot['fav_fill_qty'] = 0
+                            bot['_hedge_fired'] = False
                             bot['status'] = 'dog_filled'
+                            save_state()
         return
 
     # ── STATE: waiting_repeat — wait for spread to reopen, re-anchor ──

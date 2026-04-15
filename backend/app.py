@@ -14647,6 +14647,27 @@ def _handle_apex(bot_id, bot, actions):
             net_no = bot.get('net_no', 0)
             if net_yes > 0 or net_no > 0:
                 _apex_mm_begin_exit(bot_id, bot, f'market_decided (drift {_drift_max}c)')
+                return
+            # Flat + drift guard → check if market settled, transition to awaiting_settlement
+            if now - bot.get('_last_settle_check_global', 0) >= 30:
+                bot['_last_settle_check_global'] = now
+                try:
+                    api_read_limiter.wait()
+                    _dg_mkt = kalshi_client.get_market(ticker)
+                    _dg_mkt_data = _dg_mkt.get('market', _dg_mkt) if isinstance(_dg_mkt, dict) else {}
+                    _dg_mkt_status = _dg_mkt_data.get('status', '').lower()
+                    if _dg_mkt_status in ('settled', 'finalized') or (
+                        _dg_mkt_status == 'closed' and _dg_mkt_data.get('result', '') in ('yes', 'no')
+                    ):
+                        bot['status'] = 'awaiting_settlement'
+                        bot['awaiting_since'] = now
+                        bot['_market_settled_at'] = now
+                        bot['_smart_stop_reason'] = 'final'
+                        print(f'🏁 APEX MM DRIFT→SETTLED: {bot_id} market {_dg_mkt_status} — transitioning to awaiting_settlement')
+                        save_state()
+                        return
+                except Exception:
+                    pass
             return
         elif bot.get('_drift_pulled'):
             # Below 75 — recover

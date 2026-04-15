@@ -6507,9 +6507,9 @@ _PHANTOM_DEATH_ZONE = {
     'KXNFL':    {'period': 4, 'secs': 120, 'name': 'NFL Q4 <2:00'},
     'KXNHL':    {'period': 3, 'secs': 180, 'name': 'NHL P3 <3:00'},
     'KXMLB':    {'period': 9, 'secs': None, 'name': 'MLB 9th inning'},
-    # Tennis: score-based death zone — fires when either player is serving for match
-    'KXATP':    {'tennis': True, 'score_dz': True, 'name': 'ATP Tennis'},
-    'KXWTA':    {'tennis': True, 'score_dz': True, 'name': 'WTA Tennis'},
+    # Tennis: death zone DISABLED — false-triggers on set scores kill fill rate
+    # 'KXATP':    {'tennis': True, 'score_dz': True, 'name': 'ATP Tennis'},
+    # 'KXWTA':    {'tennis': True, 'score_dz': True, 'name': 'WTA Tennis'},
 }
 
 

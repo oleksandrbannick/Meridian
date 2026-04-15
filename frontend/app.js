@@ -2500,6 +2500,7 @@ function createMarketRow(market, label) {
     const _room = (_yB > 0 && _nB > 0) ? (100 - _yB - _nB) : 0;
     if (_room > 0 && _room < 90) {
         const roomBadge = document.createElement('span');
+        roomBadge.className = 'room-badge';
         roomBadge.style.cssText = `color:#8892a6;font-size:9px;font-weight:600;opacity:0.85;margin-left:2px;letter-spacing:0.3px;`;
         roomBadge.textContent = `${_room}¢ room`;
         roomBadge.title = `Room: 100 - ${_yB}(YES) - ${_nB}(NO) = ${_room}¢ — Small = Phantom, Large = Apex MM`;
@@ -7536,11 +7537,21 @@ async function loadBots() {
         };
         function _getBotDotColor(b) {
             const s = b.status || '';
-            // Phantom pulled/parked = purple (status is still dog_anchor_posted)
             if (s === 'dog_anchor_posted' && (b._price_floor_pulled || b._parked_at_ceiling)) return '#aa77ff';
-            // Phantom death zone = magenta
             if ((s === 'completed' || s === 'stopped') && b._death_zone_stopped) return '#ff3366';
             return _stateColorMap[s] || '#556';
+        }
+        const _stateNameMap = {
+            'dog_anchor_posted': 'Anchor', 'fav_hedge_posted': 'Hedging', 'dog_filled': 'Hedging',
+            'ladder_filled_no_fav': 'Hedging', 'waiting_repeat': 'Waiting', 'completed': 'Done',
+            'stopped': 'Stopped', 'awaiting_settlement': 'Settling',
+            'market_making_active': 'Active', 'mm_depth_pulled': 'Pulled', 'mm_exiting': 'Exiting',
+        };
+        function _getBotDotLabel(b) {
+            const s = b.status || '';
+            if (s === 'dog_anchor_posted' && (b._price_floor_pulled || b._parked_at_ceiling)) return 'Pulled';
+            if ((s === 'completed' || s === 'stopped') && b._death_zone_stopped) return 'Death';
+            return _stateNameMap[s] || s;
         }
 
         // Render dog bots list
@@ -7578,6 +7589,28 @@ async function loadBots() {
                         }).join('');
                     dogList.appendChild(_dSportBar);
                 }
+                // ── Global status summary bar ──
+                const _statusSummary = {};
+                dogBotIds.forEach(id => {
+                    const b = bots[id];
+                    const sp = detectSport((b.ticker || '').toUpperCase()) || 'Other';
+                    if (_botsActiveSport !== 'all' && sp !== _botsActiveSport) return;
+                    const col = _getBotDotColor(b);
+                    const label = _getBotDotLabel(b);
+                    const key = col + '|' + label;
+                    _statusSummary[key] = (_statusSummary[key] || 0) + 1;
+                });
+                if (Object.keys(_statusSummary).length > 0) {
+                    const _statusBar = document.createElement('div');
+                    _statusBar.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;padding:4px 12px 6px;margin-bottom:2px;align-items:center;';
+                    _statusBar.innerHTML = Object.entries(_statusSummary)
+                        .sort((a, b) => b[1] - a[1])
+                        .map(([key, n]) => {
+                            const [col, label] = key.split('|');
+                            return `<span style="display:inline-flex;align-items:center;gap:3px;"><span style="color:${col};font-size:14px;text-shadow:0 0 4px ${col}66;">●</span><span style="color:${col};font-size:10px;font-weight:700;">${n}</span><span style="color:#8892a6;font-size:10px;">${label}</span></span>`;
+                        }).join('');
+                    dogList.appendChild(_statusBar);
+                }
                 // Group dog bots by game (same logic as arb bots)
                 const dogGameGroups = {};
                 dogBotIds.forEach(botId => {
@@ -7614,15 +7647,20 @@ async function loadBots() {
                     }, 0);
                     const _mktTickerDog = rawTickerDog.toUpperCase().split('-').slice(0,2).join('-');
                     // State dots for phantom group header
-                    const _dgStateCounts = {};
+                    const _dgStateGroups = {};
                     groupIds.forEach(id => {
                         const col = _getBotDotColor(bots[id]);
-                        _dgStateCounts[col] = (_dgStateCounts[col] || 0) + 1;
+                        const label = _getBotDotLabel(bots[id]);
+                        const key = col + '|' + label;
+                        _dgStateGroups[key] = (_dgStateGroups[key] || 0) + 1;
                     });
-                    const _dgDotHtml = Object.entries(_dgStateCounts)
+                    const _dgDotHtml = Object.entries(_dgStateGroups)
                         .sort((a, b) => b[1] - a[1])
-                        .map(([col, n]) => `<span style="color:${col};font-size:18px;font-weight:700;text-shadow:0 0 6px ${col}88;line-height:1;">●${n > 1 ? '<span style="font-size:11px;color:' + col + ';">' + n + '</span>' : ''}</span>`)
-                        .join('');
+                        .map(([key, n]) => {
+                            const [col, label] = key.split('|');
+                            return `<span style="display:inline-flex;align-items:center;gap:2px;"><span style="color:${col};font-size:18px;font-weight:700;text-shadow:0 0 6px ${col}88;line-height:1;">●</span><span style="color:${col};font-size:9px;font-weight:600;opacity:0.85;">${n > 1 ? n + ' ' : ''}${label}</span></span>`;
+                        })
+                        .join('<span style="color:#334;margin:0 2px;">·</span>');
                     const header = document.createElement('div');
                     header.style.cssText = 'padding:6px 12px;margin-top:12px;margin-bottom:4px;background:#0d1117;border-left:3px solid #ffaa00;border-radius:4px;font-size:12px;';
                     header.innerHTML = `
@@ -7800,16 +7838,21 @@ async function loadBots() {
                 return sum + lifetimePnl;
             }, 0);
 
-            // State dot summary: count bots per state, show colored dots
-            const _stateCounts = {};
+            // State dot summary: count bots per state, show colored dots with labels
+            const _stateGroupsApex = {};
             groupBots.forEach(id => {
                 const col = _getBotDotColor(bots[id]);
-                _stateCounts[col] = (_stateCounts[col] || 0) + 1;
+                const label = _getBotDotLabel(bots[id]);
+                const key = col + '|' + label;
+                _stateGroupsApex[key] = (_stateGroupsApex[key] || 0) + 1;
             });
-            const _dotHtml = Object.entries(_stateCounts)
+            const _dotHtml = Object.entries(_stateGroupsApex)
                 .sort((a, b) => b[1] - a[1])
-                .map(([col, n]) => `<span style="color:${col};font-size:18px;font-weight:700;text-shadow:0 0 6px ${col}88;line-height:1;">●${n > 1 ? '<span style="font-size:11px;color:' + col + ';">' + n + '</span>' : ''}</span>`)
-                .join('');
+                .map(([key, n]) => {
+                    const [col, label] = key.split('|');
+                    return `<span style="display:inline-flex;align-items:center;gap:2px;"><span style="color:${col};font-size:18px;font-weight:700;text-shadow:0 0 6px ${col}88;line-height:1;">●</span><span style="color:${col};font-size:9px;font-weight:600;opacity:0.85;">${n > 1 ? n + ' ' : ''}${label}</span></span>`;
+                })
+                .join('<span style="color:#334;margin:0 2px;">·</span>');
 
             const groupHeader = document.createElement('div');
             groupHeader.style.cssText = 'padding:8px 12px;margin-top:16px;margin-bottom:4px;background:#0d1117;border-left:3px solid #00d4ff;border-radius:4px;font-size:12px;';
@@ -8709,7 +8752,10 @@ function _refreshMarketBotPills() {
             const icon = bt === 'phantom' ? (dim ? '⏹' : '=') : (info.count > 1 ? info.count : '');
             html += `<span style="display:inline-flex;align-items:center;gap:2px;padding:2px 6px;background:${c}${dim ? '11' : '22'};border:1px solid ${c}${dim ? '33' : '55'};border-radius:4px;font-size:9px;font-weight:700;color:${c};${dim ? 'opacity:0.5;' : ''}">${botIconImg(bt, 14)}${bt === 'phantom' ? ` <span style="font-size:8px;">${icon}</span>` : (icon ? icon : '')}</span>`;
         }
-        pillContainer.innerHTML = html;
+        // Preserve room badge if it exists
+        const existingRoom = pillContainer.querySelector('.room-badge');
+        const roomHtml = existingRoom ? existingRoom.outerHTML : '';
+        pillContainer.innerHTML = html + roomHtml;
     }
 }
 

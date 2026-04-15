@@ -7631,6 +7631,7 @@ async function loadBots() {
                             <a href="#" onclick="navigateToMarket('${_mktTickerDog}');return false;" style="color:#ffaa00;font-weight:700;text-decoration:none;" title="View in Meridian">${sportIcon} ${groupName}</a>
                             <span style="display:inline-flex;align-items:center;gap:2px;">${_dgDotHtml}</span>
                             <span style="color:${groupIsLive ? '#ff6666' : '#556'};font-size:10px;font-weight:700;">${groupPhase}</span>
+                            ${scoreBadge}
                         </div>
                         <div style="display:flex;align-items:center;gap:8px;">
                             <span style="color:${groupPnlTotal >= 0 ? '#00ff88' : '#ff4444'};font-size:11px;font-weight:700;">${groupPnlTotal >= 0 ? '+' : ''}${groupPnlTotal}¢</span>
@@ -7828,6 +7829,7 @@ async function loadBots() {
                     <a href="#" onclick="navigateToMarket('${_mktTickerApex}');return false;" style="color:#00d4ff;font-weight:700;text-decoration:none;" title="View in Meridian">${sportIcon} ${groupMatchup}</a>
                     <span style="display:inline-flex;align-items:center;gap:2px;">${_dotHtml}</span>
                     <span style="color:${groupIsLive ? '#ff6666' : '#556'};font-size:10px;font-weight:700;">${groupPhase}</span>
+                    ${groupScoreBadge}
                     ${groupSignalBadge}
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;">

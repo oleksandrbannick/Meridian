@@ -3555,14 +3555,14 @@ function displayOrderbookLadder(orderbook) {
         <div style="padding:5px 8px;background:${verdictCol}11;border:1px solid ${verdictCol}33;border-radius:5px;margin-bottom:6px;">
             <div style="color:${verdictCol};font-size:10px;font-weight:700;">${verdict}</div>
         </div>
-        <div style="display:flex;gap:3px;margin-bottom:6px;font-size:7px;font-weight:600;overflow-x:auto;">
-            <span style="color:#00ff88;background:#00ff8811;padding:1px 4px;border-radius:3px;white-space:nowrap;">85+ WALL 4¢</span>
-            <span style="color:#00ccff;background:#00ccff11;padding:1px 4px;border-radius:3px;white-space:nowrap;">70+ PRIME 5¢</span>
-            <span style="color:#ffaa00;background:#ffaa0011;padding:1px 4px;border-radius:3px;white-space:nowrap;">55+ SNIPER 6¢</span>
-            <span style="color:#ff8800;background:#ff880011;padding:1px 4px;border-radius:3px;white-space:nowrap;">45+ TRAP 7¢</span>
-            <span style="color:#ff6600;background:#ff660011;padding:1px 4px;border-radius:3px;white-space:nowrap;">40+ DEEP 8¢</span>
-            <span style="color:#ff4400;background:#ff440011;padding:1px 4px;border-radius:3px;white-space:nowrap;">30+ FLOOR 9¢</span>
-            <span style="color:#ff4444;background:#ff444411;padding:1px 4px;border-radius:3px;white-space:nowrap;">&lt;30 KILL</span>
+        <div style="display:flex;flex-wrap:wrap;gap:4px 5px;margin-bottom:6px;font-size:9px;font-weight:700;justify-content:center;">
+            <span style="color:#00ff88;background:#00ff8815;padding:2px 6px;border-radius:4px;">85+ WALL 4¢</span>
+            <span style="color:#00ccff;background:#00ccff15;padding:2px 6px;border-radius:4px;">70+ PRIME 5¢</span>
+            <span style="color:#ffaa00;background:#ffaa0015;padding:2px 6px;border-radius:4px;">55+ SNIPER 6¢</span>
+            <span style="color:#ff8800;background:#ff880015;padding:2px 6px;border-radius:4px;">45+ TRAP 7¢</span>
+            <span style="color:#ff6600;background:#ff660015;padding:2px 6px;border-radius:4px;">40+ DEEP 8¢</span>
+            <span style="color:#ff4400;background:#ff440015;padding:2px 6px;border-radius:4px;">35+ FLOOR 9¢</span>
+            <span style="color:#ff4444;background:#ff444415;padding:2px 6px;border-radius:4px;">&lt;35 KILL</span>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <div style="text-align:center;background:${dogCol}08;border:1px solid ${dogCol}22;border-radius:6px;padding:6px;">

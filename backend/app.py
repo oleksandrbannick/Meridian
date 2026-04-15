@@ -14935,6 +14935,47 @@ def _handle_apex(bot_id, bot, actions):
             # Flat: pull everything
             _apex_mm_pull_all(bot_id, bot, pull_reason)
             return
+    else:
+        # 1.5. OBI is OK — repost entry side if pulled while holding inventory
+        net_yes = bot.get('net_yes', 0)
+        net_no = bot.get('net_no', 0)
+        if net_yes > 0 or net_no > 0:
+            entry_side_key = 'no_orders' if net_yes > net_no else 'yes_orders'
+            _entry_side = 'no' if net_yes > net_no else 'yes'
+            _has_entry_oids = any(
+                isinstance(lv, dict) and lv.get('oid')
+                for lv in bot.get(entry_side_key, {}).values()
+            )
+            if not _has_entry_oids and bot.get(entry_side_key):
+                # Entry side was pulled but OBI recovered — repost entry rungs
+                midpoint = _apex_mm_midpoint(ticker)
+                if midpoint:
+                    base_qty = bot.get('base_qty', bot.get('qty_per_level', 1))
+                    yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, scale=bot.get('auto_scale', False), inv_limit=bot.get('inventory_limit', 0))
+                    _entry_levels = yes_levels if _entry_side == 'yes' else no_levels
+                    _reposted = 0
+                    for _ep, _eq in _entry_levels:
+                        try:
+                            api_rate_limiter.wait()
+                            _price_kwarg = {f'{_entry_side}_price': _ep}
+                            _resp = kalshi_client.create_order(
+                                ticker=ticker, side=_entry_side, action='buy',
+                                count=_eq, order_type='limit', **_price_kwarg
+                            )
+                            _ord = _resp.get('order', _resp) if isinstance(_resp, dict) else {}
+                            _oid = _ord.get('order_id', '')
+                            _pk = str(_ep)
+                            bot[entry_side_key][_pk] = {'oid': _oid, 'qty': _eq, 'fill_qty': 0}
+                            if _oid:
+                                bot.setdefault('_all_placed_order_ids', []).append(_oid)
+                            _reposted += 1
+                        except Exception as _re:
+                            print(f'⚠ ENTRY REPOST FAIL: {bot_id} {_entry_side} @{_ep}c: {_re}')
+                    if _reposted > 0:
+                        bot['_last_pull_reason'] = ''
+                        print(f'🔄 APEX MM ENTRY REPOST: {bot_id} {_entry_side.upper()} — {_reposted} rungs reposted (OBI recovered)')
+                        bot_log('APEX_MM_ENTRY_REPOST', bot_id, {'side': _entry_side, 'reposted': _reposted, 'midpoint': midpoint})
+                        save_state()
 
     # 2. Settlement/game-end check (throttled every 30s)
     if now - bot.get('_last_settle_check', 0) >= 30:

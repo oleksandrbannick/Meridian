@@ -6577,15 +6577,13 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const active = !!level.oid;
         const isFull = filled >= qty;
         const fillPct = qty > 0 ? Math.min(100, Math.round(filled / qty * 100)) : 0;
-        // Exit side rungs: shaded/dimmed (orders pulled, showing for context)
-        // Entry side rungs: full color (still live/posted)
-        const shaded = isExitSide && !active && !isFull;
+        // Shaded when not posted (no OID) and not filled — both sides
+        const shaded = !active && !isFull;
         const barCol = shaded ? sideCol + '40' : sideCol;
-        const textCol = shaded ? sideCol + '60' : (isFull ? sideCol : active ? sideCol : '#334');
+        const textCol = shaded ? sideCol + '60' : (isFull ? sideCol : sideCol);
         const statusTag = isFull ? `<span style="color:${sideCol};font-size:7px;font-weight:800;">FILLED</span>`
             : active ? `<span style="color:${sideCol};font-size:7px;font-weight:700;">LIVE</span>`
-            : isExitSide ? `<span style="color:${sideCol}50;font-size:7px;">PULLED</span>`
-            : `<span style="color:#2a3040;font-size:7px;">OFF</span>`;
+            : `<span style="color:${sideCol}50;font-size:7px;">OFF</span>`;
         const rowOpacity = shaded ? 'opacity:0.45;' : '';
         return `<div style="display:grid;grid-template-columns:32px 1fr 30px 36px;align-items:center;gap:3px;padding:2px 0;${rowOpacity}">
             <span style="color:${textCol};font-weight:700;font-size:11px;text-align:right;">${price}c</span>

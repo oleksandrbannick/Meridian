@@ -20919,22 +20919,36 @@ def phantom_edit(bot_id):
     status = bot.get('status', '')
     applied_now = False
 
-    # If dog is posted and unfilled, cancel and let monitor repost with new settings
+    # If dog is posted and unfilled, amend in place with new settings
     if status == 'dog_anchor_posted' and bot.get('dog_fill_qty', 0) == 0:
         dog_oid = bot.get('dog_order_id')
         if dog_oid:
             try:
+                dog_side = bot.get('dog_side', 'no')
+                _amend_qty = bot.get('quantity', 1)
+                _amend_price = bot.get('dog_price', 10)
+                _price_kw = {f'{dog_side}_price': _amend_price}
                 api_rate_limiter.wait()
-                kalshi_client.cancel_order(dog_oid)
-                bot['dog_order_id'] = None
-                bot['_all_dog_order_ids'] = []  # clear so cancel-race doesn't find old run fills
-                bot['dog_fill_qty'] = 0
+                _amend_resp = kalshi_client.amend_order(
+                    dog_oid, ticker=bot.get('ticker', ''), side=dog_side,
+                    count=_amend_qty, action='buy', **_price_kw
+                )
+                # Check for new order ID from amend
+                _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
+                _amend_new_oid = _amend_ord.get('order_id', '')
+                if _amend_new_oid and _amend_new_oid != dog_oid:
+                    bot['dog_order_id'] = _amend_new_oid
+                    bot.setdefault('_all_dog_order_ids', []).append(_amend_new_oid)
+                    if dog_side == 'yes':
+                        bot['yes_order_id'] = _amend_new_oid
+                    else:
+                        bot['no_order_id'] = _amend_new_oid
                 applied_now = True
-                print(f'🔧 PHANTOM EDIT: {bot_id} cancelled dog order for repost with new settings')
+                print(f'🔧 PHANTOM EDIT: {bot_id} amended order with new settings (qty={_amend_qty})')
             except Exception as e:
-                print(f'⚠ PHANTOM EDIT: cancel failed for {bot_id}: {e}')
+                print(f'⚠ PHANTOM EDIT: amend failed for {bot_id}: {e} — will pick up next cycle')
         else:
-            applied_now = True  # no order to cancel, will pick up on next post
+            applied_now = True  # no order, will pick up on next post
 
     # waiting_repeat: next run will use new settings automatically
     elif status == 'waiting_repeat':

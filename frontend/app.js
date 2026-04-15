@@ -2225,14 +2225,18 @@ function displayEventRow(eventData, container) {
         liveBanner.innerHTML = `<span style="color:#ff3333;font-size:10px;font-weight:800;letter-spacing:1px;display:flex;align-items:center;gap:4px;"><span style="animation:pulse 1.5s infinite;">●</span> LIVE</span><span style="color:#8892a6;font-size:12px;">Score unavailable</span>`;
         card.appendChild(liveBanner);
     } else if (!gameScore && eventData.markets && eventData.markets.length > 0) {
-        // No score data at all — show Kalshi open_time as scheduled start
+        // No score data at all — show scheduled start or DELAYED status
         const _sampleMkt = eventData.markets[0];
+        // Prefer milestone start_date (actual match time) over open_time (market open)
+        const _startDate = _sampleMkt.milestone_start_date || '';
         const _openTime = _sampleMkt.open_time || _sampleMkt.expected_expiration_time || '';
-        if (_openTime) {
-            const _d = new Date(_openTime);
+        const _displayTime = _startDate || _openTime;
+        if (_displayTime) {
+            const _d = new Date(_displayTime);
             if (!isNaN(_d.getTime())) {
                 const _timeLabel = _d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZoneName: 'short' });
-                const _isTennis = ((_sampleMkt.event_ticker || _sampleMkt.ticker || '').toUpperCase().match(/KXATP|KXWTA/));
+                const _msStatus = _sampleMkt.milestone_status || '';
+                const _isDelayed = _msStatus === 'not_started' && _d.getTime() < Date.now();
                 const _names = eventData.markets.filter(m => m.title).map(m => {
                     const nm = (m.title || '').match(/^Will\s+(.+?)\s+win\s/i);
                     return nm ? nm[1] : '';
@@ -2241,13 +2245,24 @@ function displayEventRow(eventData, container) {
                 const _p2 = _names[1] || '';
                 if (_p1 || _p2) {
                     const pregameBanner = document.createElement('div');
-                    pregameBanner.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:10px;background:#111825;border:1px solid #2a3447;border-radius:8px;padding:10px 16px;margin-bottom:12px;';
-                    pregameBanner.innerHTML = `
-                        <span style="color:#8892a6;font-size:13px;font-weight:600;">${_p1}</span>
-                        <span style="color:#4a5568;font-size:12px;">vs</span>
-                        <span style="color:#8892a6;font-size:13px;font-weight:600;">${_p2}</span>
-                        <span style="color:#2a3447;margin:0 6px;">│</span>
-                        <span style="color:#6a7488;font-size:12px;">🕐 ${_timeLabel}</span>`;
+                    if (_isDelayed) {
+                        pregameBanner.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:10px;background:#1a1510;border:1px solid #6b4f1a;border-radius:8px;padding:10px 16px;margin-bottom:12px;';
+                        pregameBanner.innerHTML = `
+                            <span style="color:#8892a6;font-size:13px;font-weight:600;">${_p1}</span>
+                            <span style="color:#4a5568;font-size:12px;">vs</span>
+                            <span style="color:#8892a6;font-size:13px;font-weight:600;">${_p2}</span>
+                            <span style="color:#2a3447;margin:0 6px;">│</span>
+                            <span style="color:#f59e0b;font-size:11px;font-weight:700;">DELAYED</span>
+                            <span style="color:#6a7488;font-size:11px;text-decoration:line-through;">${_timeLabel}</span>`;
+                    } else {
+                        pregameBanner.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:10px;background:#111825;border:1px solid #2a3447;border-radius:8px;padding:10px 16px;margin-bottom:12px;';
+                        pregameBanner.innerHTML = `
+                            <span style="color:#8892a6;font-size:13px;font-weight:600;">${_p1}</span>
+                            <span style="color:#4a5568;font-size:12px;">vs</span>
+                            <span style="color:#8892a6;font-size:13px;font-weight:600;">${_p2}</span>
+                            <span style="color:#2a3447;margin:0 6px;">│</span>
+                            <span style="color:#6a7488;font-size:12px;">🕐 ${_timeLabel}</span>`;
+                    }
                     card.appendChild(pregameBanner);
                 }
             }

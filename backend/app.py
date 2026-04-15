@@ -859,7 +859,7 @@ def get_markets():
         # Only capture once — first observation is the closest to true pre-game line
         _capture_opening_lines(unique_markets)
 
-        # Inject milestone_status for tennis markets (cached, no API call)
+        # Inject milestone_status + start_date for tennis markets (cached, no API call)
         _refresh_milestones_cache()
         ms_data = _milestones_cache['data']
         if ms_data:
@@ -867,6 +867,9 @@ def get_markets():
                 et = m.get('event_ticker', '')
                 if et in ms_data:
                     m['milestone_status'] = _get_milestone_status(et)
+                    _sd = ms_data[et].get('start_date', '')
+                    if _sd:
+                        m['milestone_start_date'] = _sd
 
         # Overlay WS cache prices where available (fresher than Kalshi API snapshot)
         ws_overlaid = 0

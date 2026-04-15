@@ -5708,20 +5708,39 @@ def _refresh_milestones_cache():
                 print(f'⚠ Milestones fetch failed for {series}: {e}')
                 break
     _milestones_cache = {'data': event_info, 'ts': time.time()}
-    live_events = [k for k, v in event_info.items() if _is_milestone_live(v)]
+    live_events = [k for k, v in event_info.items() if _is_milestone_live(v, k)]
     if live_events:
         print(f'🎾 Milestones cache: {len(live_events)} live — {", ".join(live_events[:5])}')
 
 
-def _is_milestone_live(info: dict) -> bool:
+def _is_milestone_live(info: dict, event_ticker: str = '') -> bool:
     """Determine if a tennis match is live from milestone data.
-    Uses status field only — 'live' means live, anything else means not live.
-    The start_date fallback was removed because it incorrectly marked
-    unsettled matches as live when start_date was in the past."""
+    Uses status field + date sanity check — milestones can have stale 'live'
+    status for old matches or future matches that haven't started."""
     if not info:
         return False
     status = info.get('status', '')
-    return status == 'live'
+    if status != 'live':
+        return False
+    # Date sanity check: reject 'live' if event date is >36h ago or >6h in future
+    if event_ticker:
+        parts = event_ticker.split('-')
+        if len(parts) >= 2:
+            dm = re.match(r'^(\d{2})([A-Z]{3})(\d{2})', parts[1])
+            if dm:
+                try:
+                    month_num = {'JAN':1,'FEB':2,'MAR':3,'APR':4,'MAY':5,'JUN':6,
+                                 'JUL':7,'AUG':8,'SEP':9,'OCT':10,'NOV':11,'DEC':12}.get(dm.group(2), 0)
+                    if month_num:
+                        ev_date = datetime(2000 + int(dm.group(1)), month_num, int(dm.group(3)), 12, 0, tzinfo=timezone.utc)
+                        now = datetime.now(timezone.utc)
+                        if ev_date < now - timedelta(hours=36):
+                            return False  # match ended days ago
+                        if ev_date > now + timedelta(hours=6):
+                            return False  # match hasn't started yet
+                except (ValueError, KeyError):
+                    pass
+    return True
 
 
 def _get_milestone_status(event_ticker: str):
@@ -5731,7 +5750,7 @@ def _get_milestone_status(event_ticker: str):
     info = _milestones_cache['data'].get(event_ticker)
     if not info:
         return None
-    if _is_milestone_live(info):
+    if _is_milestone_live(info, event_ticker):
         return 'live'
     return info.get('status', 'not_started')
 
@@ -6233,7 +6252,7 @@ def _is_game_over_cached(ticker: str) -> bool:
                 status = info.get('status', '')
                 if status in ('ended', 'settled', 'finalized'):
                     return True
-                if _is_milestone_live(info):
+                if _is_milestone_live(info, event_ticker):
                     return False
                 # not_started → not over
                 return False

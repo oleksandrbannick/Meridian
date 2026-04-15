@@ -4792,7 +4792,24 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     _late_status = _late_ord.get('status', '?')
                 except Exception:
                     pass
-                # Ghost fill check: if Kalshi says 0 fills, this is a stale WS event — IGNORE
+                # Ghost fill check: if Kalshi says 0 fills, retry once after 500ms
+                # (REST can lag behind WS — blocking real fills creates orphans)
+                if _late_verified_fills <= 0:
+                    time.sleep(0.5)
+                    try:
+                        api_read_limiter.wait()
+                        _retry_resp = kalshi_client.get_order(order_id)
+                        _retry_ord = _retry_resp.get('order', _retry_resp) if isinstance(_retry_resp, dict) else {}
+                        _late_verified_fills = _parse_fill_count(_retry_ord)
+                        _late_status = _retry_ord.get('status', _late_status)
+                        if _late_verified_fills > 0:
+                            # REST caught up — real fill, process it
+                            _dollars = _retry_ord.get(f'{side}_price_dollars')
+                            if _dollars:
+                                _late_price = int(round(float(_dollars) * 100))
+                            print(f'🔄 APEX MM GHOST RETRY SUCCESS: {bot_id} {side.upper()} order {order_id[:12]} now has {_late_verified_fills} fills after retry')
+                    except Exception:
+                        pass
                 if _late_verified_fills <= 0:
                     print(f'👻 APEX MM GHOST FILL BLOCKED: {bot_id} {side.upper()} +{count} on old order {order_id[:12]} — Kalshi says {_late_verified_fills} fills (status={_late_status})')
                     bot_log('APEX_MM_GHOST_FILL_BLOCKED', bot_id, {
@@ -14838,9 +14855,11 @@ def _handle_apex(bot_id, bot, actions):
     # 3.9. REST reconciliation heartbeat: every 30s while holding inventory,
     # verify bot's net_yes/net_no against Kalshi's actual positions.
     # Kills orphan compounding — bot can never drift more than 30s from reality.
+    # Also runs every 60s when FLAT to catch orphaned positions the bot doesn't know about.
     net_yes = bot.get('net_yes', 0)
     net_no = bot.get('net_no', 0)
-    if (net_yes > 0 or net_no > 0) and now - bot.get('_last_reconcile', 0) >= 30:
+    _reconcile_interval = 30 if (net_yes > 0 or net_no > 0) else 60
+    if now - bot.get('_last_reconcile', 0) >= _reconcile_interval:
         bot['_last_reconcile'] = now
         try:
             if api_read_limiter.try_wait():
@@ -14931,10 +14950,15 @@ def _handle_apex(bot_id, bot, actions):
                                 for _pk, _lvl in list(bot.get(_side_key, {}).items()):
                                     _lvl['fill_qty'] = 0
                                     _lvl['oid'] = None
+                            # Clear stale exit tracking so it doesn't confuse future cycles
+                            bot['_exit_held_side'] = None
+                            bot['_exit_total_qty'] = 0
+                            bot['_exit_fill_qty'] = 0
+                            bot['_exit_price'] = 0
                             bot['_counted_order_fills'] = {}
                             bot['_velocity_gated'] = False
                             bot['_velocity_fills'] = []
-                            print(f'🛡️ RECONCILE FLAT: {bot_id} — Kalshi says flat, reset ladder + cancelled stale exits')
+                            print(f'🛡️ RECONCILE FLAT: {bot_id} — Kalshi says flat, reset ladder + exits + cancelled stale exits')
         except Exception as _re:
             print(f'⚠ RECONCILE FAIL: {bot_id} {_re}')
         # Re-read net values after potential clamp

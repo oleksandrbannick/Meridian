@@ -6113,7 +6113,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 ${bot.cross_market ? '<span style="background:#00ddff22;color:#00ddff;padding:1px 6px;border-radius:4px;font-size:9px;font-weight:800;">✕ CROSS</span>' : ''}
                 ${!_isCompletedSummary && dogFilled && favPrice > 0 ? '<span style="background:#33445522;color:#8892a6;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;">● snap bid</span>' : ''}
                 ${!_isCompletedSummary && dogFilled ? `<span style="color:#8892a6;font-size:10px;">${fillAgeStr}</span>` : ''}
-                ${bot.smart_mode ? `<span style="background:#00e5ff22;color:${bot._smart_stop_pending || bot._stop_pending ? '#ff8800' : '#00e5ff'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${bot._smart_stopped ? `Smart · ${bot.repeats_done || 0} runs` : (bot._smart_stop_pending || bot._stop_pending) ? `⏸ Stopping · ${bot.repeats_done || 0} runs` : `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L`}</span>` : repeatCount > 0 ? `<span style="background:${bot._stop_pending ? '#ff880022' : '#6366f122'};color:${bot._stop_pending ? '#ff8800' : '#818cf8'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${bot._stop_pending ? `⏸ Stopping · Run ${repeatsDone + 1}` : `Run ${repeatsDone + 1}/${repeatCount + 1}`}</span>` : (bot._stop_pending ? `<span style="background:#ff880022;color:#ff8800;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">⏸ Stopping</span>` : '')}
+                ${bot.smart_mode ? `<span style="background:#00e5ff22;color:${bot._smart_stop_pending || bot._stop_pending ? '#ff8800' : '#00e5ff'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${bot._smart_stopped ? `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L` : (bot._smart_stop_pending || bot._stop_pending) ? `⏸ Stopping after run` : `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L`}</span>` : repeatCount > 0 ? `<span style="background:${bot._stop_pending ? '#ff880022' : '#6366f122'};color:${bot._stop_pending ? '#ff8800' : '#818cf8'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${bot._stop_pending ? `⏸ Stopping after run` : `Run ${repeatsDone + 1}/${repeatCount + 1}`}</span>` : (bot._stop_pending ? `<span style="background:#ff880022;color:#ff8800;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">⏸ Stopping</span>` : '')}
                 ${(() => { const _r = bot.raw_hedge_ms ?? bot._last_raw_hedge_ms; const _l = bot.hedge_latency_ms ?? bot._last_hedge_latency_ms; return _isCompletedSummary ? ((_r != null ? `<span style="color:${_r < 5 ? '#00ffcc' : _r < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;font-size:10px;">⚡${_r.toFixed(1)}ms</span>` : '') + (_l != null ? `<span style="color:#666;font-size:10px;"> rt ${Math.round(_l)}ms</span>` : '')) : ''; })()}
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
@@ -7569,7 +7569,7 @@ async function loadBots() {
         }
         const _stateNameMap = {
             'dog_anchor_posted': 'Anchor', 'fav_hedge_posted': 'Hedging', 'dog_filled': 'Hedging',
-            'ladder_filled_no_fav': 'Hedging', 'waiting_repeat': 'Waiting', 'completed': 'Done',
+            'ladder_filled_no_fav': 'Hedging', 'waiting_repeat': 'Repeating', 'completed': 'Done',
             'stopped': 'Stopped', 'awaiting_settlement': 'Settling',
             'market_making_active': 'Active', 'mm_depth_pulled': 'Pulled', 'mm_exiting': 'Exiting',
         };
@@ -9575,6 +9575,26 @@ async function phantomModify(botId, restartMode = false) {
                 <input id="phantom-edit-depth" type="hidden" value="${curDepth}">
                 <div id="phantom-edit-depth-hint" style="color:#ff66aa;font-size:9px;margin-top:6px;text-align:center;">${autoDepth ? 'PPI auto-adjusts depth each run' : 'Dog posts at bid - ' + curDepth + 'c'}</div>
             </div>
+            <div style="height:1px;background:linear-gradient(90deg,transparent,#1e274066,transparent);margin-bottom:14px;"></div>
+            <div style="margin-bottom:14px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                    <div style="display:flex;align-items:center;gap:6px;">
+                        <div style="width:3px;height:12px;background:linear-gradient(180deg,#00e5ff,#00ff88);border-radius:2px;"></div>
+                        <span style="color:#00e5ff;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em;">Mode</span>
+                    </div>
+                    <div onclick="togglePhantomEditSmart()" id="phantom-edit-smart-toggle" style="display:flex;align-items:center;gap:5px;cursor:pointer;padding:3px 10px;border-radius:50px;border:1px solid ${bot.smart_mode ? '#00e5ff66' : '#1e274066'};background:${bot.smart_mode ? '#00e5ff12' : '#0a0e1a'};transition:all .2s;">
+                        <div style="width:8px;height:8px;border-radius:50%;background:${bot.smart_mode ? '#00e5ff' : '#333'};transition:background 0.15s;box-shadow:${bot.smart_mode ? '0 0 6px #00e5ff60' : 'none'};"></div>
+                        <span style="color:${bot.smart_mode ? '#00e5ff' : '#556'};font-size:10px;font-weight:700;">Smart</span>
+                    </div>
+                </div>
+                <div id="phantom-edit-runs-section" style="${bot.smart_mode ? 'opacity:0.3;pointer-events:none;' : ''}">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <span style="color:#818cf8;font-size:10px;font-weight:700;">Runs</span>
+                        <input id="phantom-edit-runs" type="number" value="${bot.repeat_count || 0}" min="0" max="999" style="width:60px;padding:5px 8px;background:#0a0e1a;border:1px solid #818cf833;border-radius:8px;color:#818cf8;font-size:13px;font-weight:700;text-align:center;outline:none;">
+                        <span style="color:#3a4560;font-size:9px;">${bot.smart_mode ? 'unlimited (smart)' : '0 = single run'}</span>
+                    </div>
+                </div>
+            </div>
             <div style="display:flex;gap:8px;">
                 <button onclick="phantomModifySave('${botId}', ${isRestart})" style="flex:1;background:linear-gradient(135deg,#ffaa00,#ff66aa);color:#000;border:none;border-radius:50px;padding:10px;font-size:12px;font-weight:800;cursor:pointer;letter-spacing:.03em;box-shadow:0 4px 15px #ff66aa25;transition:all .2s;">${isRestart ? '⚡ Restart' : 'Save'}</button>
                 <button onclick="document.getElementById('phantom-modify-modal').remove()" style="flex:1;background:#1a1f2a;color:#556;border:1px solid #1e2740;border-radius:50px;padding:10px;font-size:12px;cursor:pointer;transition:all .2s;">Cancel</button>
@@ -9591,8 +9611,9 @@ async function phantomModify(botId, restartMode = false) {
     modal.innerHTML = html;
     document.body.appendChild(modal);
 
-    // Store auto_depth state on the modal for save
+    // Store auto_depth and smart_mode state on the modal for save
     modal._autoDepth = autoDepth;
+    modal._smartMode = !!bot.smart_mode;
 
     document.getElementById('phantom-edit-depth')?.addEventListener('input', (e) => {
         const v = parseInt(e.target.value) || 0;
@@ -9623,17 +9644,37 @@ function togglePhantomAutoDepth() {
     }
 }
 
+function togglePhantomEditSmart() {
+    const modal = document.getElementById('phantom-modify-modal');
+    if (!modal) return;
+    modal._smartMode = !modal._smartMode;
+    const on = modal._smartMode;
+    const toggle = document.getElementById('phantom-edit-smart-toggle');
+    const runsSection = document.getElementById('phantom-edit-runs-section');
+    if (toggle) {
+        toggle.style.borderColor = on ? '#00e5ff66' : '#1e274066';
+        toggle.style.background = on ? '#00e5ff12' : '#0a0e1a';
+        toggle.innerHTML = `<div style="width:8px;height:8px;border-radius:50%;background:${on ? '#00e5ff' : '#333'};transition:background 0.15s;box-shadow:${on ? '0 0 6px #00e5ff60' : 'none'};"></div><span style="color:${on ? '#00e5ff' : '#556'};font-size:10px;font-weight:700;">Smart</span>`;
+    }
+    if (runsSection) {
+        runsSection.style.opacity = on ? '0.3' : '1';
+        runsSection.style.pointerEvents = on ? 'none' : 'auto';
+    }
+}
+
 async function phantomModifySave(botId, doRestart = false) {
     const modal = document.getElementById('phantom-modify-modal');
     const qty = parseInt(document.getElementById('phantom-edit-qty')?.value) || 1;
     const depth = Math.max(3, parseInt(document.getElementById('phantom-edit-depth')?.value) || 5);
     const autoDepth = modal?._autoDepth || false;
+    const smartMode = modal?._smartMode || false;
+    const runs = parseInt(document.getElementById('phantom-edit-runs')?.value) || 0;
     try {
         // Step 1: Save settings
         const resp = await fetch(`${API_BASE}/bot/phantom/edit/${botId}`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ quantity: qty, anchor_depth: depth, auto_depth: autoDepth })
+            body: JSON.stringify({ quantity: qty, anchor_depth: depth, auto_depth: autoDepth, smart_mode: smartMode, repeat_count: runs })
         });
         const data = await resp.json();
         if (!data.ok) {

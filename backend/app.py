@@ -20991,9 +20991,11 @@ def phantom_edit(bot_id):
     new_qty = payload.get('quantity')
     new_depth = payload.get('anchor_depth')
     new_auto_depth = payload.get('auto_depth')
+    new_smart_mode = payload.get('smart_mode')
+    new_repeat_count = payload.get('repeat_count')
     if new_depth is not None and int(new_depth) < 3:
         return jsonify({'error': 'Depth floor minimum is 3¢'}), 400
-    if new_qty is None and new_depth is None and new_auto_depth is None:
+    if new_qty is None and new_depth is None and new_auto_depth is None and new_smart_mode is None and new_repeat_count is None:
         return jsonify({'error': 'Nothing to change'}), 400
     changes = {}
     if new_qty is not None and new_qty != bot.get('quantity'):
@@ -21012,6 +21014,12 @@ def phantom_edit(bot_id):
         changes['anchor_depth'] = {'old': bot.get('anchor_depth'), 'new': new_depth}
         bot['anchor_depth'] = int(new_depth)
         bot['target_width'] = int(new_depth)  # keep in sync
+    if new_smart_mode is not None and bool(new_smart_mode) != bool(bot.get('smart_mode')):
+        changes['smart_mode'] = {'old': bot.get('smart_mode'), 'new': new_smart_mode}
+        bot['smart_mode'] = bool(new_smart_mode)
+    if new_repeat_count is not None and int(new_repeat_count) != bot.get('repeat_count', 0):
+        changes['repeat_count'] = {'old': bot.get('repeat_count', 0), 'new': int(new_repeat_count)}
+        bot['repeat_count'] = int(new_repeat_count)
     if not changes:
         return jsonify({'ok': True, 'applied_now': False, 'changes': {}})
 

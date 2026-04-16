@@ -13445,12 +13445,18 @@ function renderApexMMStats(trades, pnl) {
         : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
             ${_bub('Lifetime P&L', `${lifetimePnl >= 0 ? '+' : ''}$${(lifetimePnl / 100).toFixed(2)}`, `${lifetimeWins}W / ${lifetimeLosses}L`, lifetimePnlCol)}
             ${hasAnyFilter ? _bub(`${filterLabel} P&L`, `${netPnl >= 0 ? '+' : ''}$${(netPnl / 100).toFixed(2)}`, `${wins}W / ${losses}L`, pnlCol) : _bub('Today P&L', `${(dNet || 0) >= 0 ? '+' : ''}$${((dNet || 0) / 100).toFixed(2)}`, `${dWins}W / ${dLosses}L today`, dCol || '#00d4ff')}
-            ${_bub('Win Rate', `${winRate}%`, `${hasAnyFilter ? filterLabel : 'lifetime'}`, '#00d4ff')}
-            ${_bub('Avg Profit', avgProfit === '—' ? '—' : `${parseFloat(avgProfit) >= 0 ? '+' : ''}${avgProfit}¢`, `${totalTrades} trades`, avgCol)}
-            ${_bub('Trades', totalTrades, `${wins}W / ${losses}L`, '#00d4ff')}
+            ${hasAnyFilter
+                ? _bub('Win Rate', `${winRate}%`, filterLabel, '#00d4ff')
+                : _bub('Win Rate', `${(lifetimeWins + lifetimeLosses) > 0 ? Math.round(lifetimeWins / (lifetimeWins + lifetimeLosses) * 100) : 0}%`, 'lifetime', '#00d4ff')}
+            ${hasAnyFilter
+                ? _bub('Avg Profit', avgProfit === '—' ? '—' : `${parseFloat(avgProfit) >= 0 ? '+' : ''}${avgProfit}¢`, `${totalTrades} trades`, avgCol)
+                : _bub('Avg Profit', (lifetimeWins + lifetimeLosses) > 0 ? `${lifetimePnl >= 0 ? '+' : ''}${(lifetimePnl / (lifetimeWins + lifetimeLosses)).toFixed(1)}¢` : '—', `${lifetimeWins + lifetimeLosses} trades`, lifetimePnlCol)}
+            ${hasAnyFilter
+                ? _bub('Trades', totalTrades, `${wins}W / ${losses}L`, '#00d4ff')
+                : _bub('Trades', lifetimeWins + lifetimeLosses, `${lifetimeWins}W / ${lifetimeLosses}L`, '#00d4ff')}
             ${_bub(`${monthlyLabel}`, monthlyContracts.toLocaleString(), `${monthlyPct}% of 300k goal`, monthlyPct >= 100 ? '#00ff88' : '#ff8800')}
             ${_bub('Lifetime', lifetimeContracts.toLocaleString(), 'contracts', '#ff8800')}
-            ${hasAnyFilter ? _bub(`${filterLabel}`, filteredContracts.toLocaleString(), 'contracts', '#ff8800') : _bub('Contracts', filteredContracts.toLocaleString(), `~${totalTrades > 0 ? Math.round(filteredContracts / totalTrades) : 0} per trade`, '#ff8800')}
+            ${hasAnyFilter ? _bub(`${filterLabel}`, filteredContracts.toLocaleString(), 'contracts', '#ff8800') : _bub('Contracts', lifetimeContracts.toLocaleString(), `~${(lifetimeWins + lifetimeLosses) > 0 ? Math.round(lifetimeContracts / (lifetimeWins + lifetimeLosses)) : 0} per trade`, '#ff8800')}
             ${_bub('Avg Hold', fmtHold(avgHoldS), `${holdTrades.length} round trips`, '#00d4ff')}
             ${_bub('Snap Rate', `${snapRate}%`, `${snappedCount}/${snappableTrades.length} snapped`, snapRate > 50 ? '#ff4444' : snapRate > 25 ? '#ffaa00' : '#00ff88')}
         </div>`;
@@ -14582,12 +14588,18 @@ function renderDogStatsAndDepth(trades, pnl) {
             : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
                 ${_bub('Lifetime P&L', `${lifetimePnl>=0?'+':''}$${(lifetimePnl/100).toFixed(2)}`, `${lifetimeWins}W / ${lifetimeLosses}L`, lifetimePnlCol)}
                 ${hasAnyFilter ? _bub(`${filterLabel} P&L`, `${netPnl>=0?'+':''}$${(netPnl/100).toFixed(2)}`, `${wins}W / ${losses}L`, pnlCol) : _bub('Today P&L', `${(dDNet||0)>=0?'+':''}$${((dDNet||0)/100).toFixed(2)}`, `${dDWins}W / ${dDLosses}L today`, dDCol || '#ffaa00')}
-                ${_bub('Win Rate', `${winRate}%`, `${hasAnyFilter ? filterLabel : 'lifetime'}`, '#ffaa00')}
-                ${_bub('Avg Profit', avgProfit === '—' ? '—' : `${parseFloat(avgProfit)>=0?'+':''}${avgProfit}¢`, `${totalTrades} trades`, avgCol)}
-                ${_bub('Trades', totalTrades, `${wins}W / ${losses}L`, '#ffaa00')}
+                ${hasAnyFilter
+                    ? _bub('Win Rate', `${winRate}%`, filterLabel, '#ffaa00')
+                    : _bub('Win Rate', `${(lifetimeWins + lifetimeLosses) > 0 ? Math.round(lifetimeWins / (lifetimeWins + lifetimeLosses) * 100) : 0}%`, 'lifetime', '#ffaa00')}
+                ${hasAnyFilter
+                    ? _bub('Avg Profit', avgProfit === '—' ? '—' : `${parseFloat(avgProfit)>=0?'+':''}${avgProfit}¢`, `${totalTrades} trades`, avgCol)
+                    : _bub('Avg Profit', (lifetimeWins + lifetimeLosses) > 0 ? `${lifetimePnl >= 0 ? '+' : ''}${(lifetimePnl / (lifetimeWins + lifetimeLosses)).toFixed(1)}¢` : '—', `${lifetimeWins + lifetimeLosses} trades`, lifetimePnlCol)}
+                ${hasAnyFilter
+                    ? _bub('Trades', totalTrades, `${wins}W / ${losses}L`, '#ffaa00')
+                    : _bub('Trades', lifetimeWins + lifetimeLosses, `${lifetimeWins}W / ${lifetimeLosses}L`, '#ffaa00')}
                 ${_bub(`${monthlyLabel}`, monthlyContracts.toLocaleString(), `${monthlyPct}% of 300k goal`, monthlyPct >= 100 ? '#00ff88' : '#ff66aa')}
                 ${_bub('Lifetime', lifetimeContracts.toLocaleString(), 'contracts', '#ff66aa')}
-                ${hasAnyFilter ? _bub(`${filterLabel}`, filteredContracts.toLocaleString(), 'contracts', '#ff66aa') : _bub('Contracts', filteredContracts.toLocaleString(), `~${totalTrades > 0 ? Math.round(filteredContracts / totalTrades) : 0} per trade`, '#ff66aa')}
+                ${hasAnyFilter ? _bub(`${filterLabel}`, filteredContracts.toLocaleString(), 'contracts', '#ff66aa') : _bub('Contracts', lifetimeContracts.toLocaleString(), `~${(lifetimeWins + lifetimeLosses) > 0 ? Math.round(lifetimeContracts / (lifetimeWins + lifetimeLosses)) : 0} per trade`, '#ff66aa')}
                 ${_bub('Hedge Speed', avgHedgeMs === '—' ? '—' : `${avgHedgeMs}ms`, `${hedgeTrades.length} samples`, '#ffaa00')}
                 ${_bub('Hedge Fill', fmtFillTime(avgHedgeFillS), `${hfTrades.length} samples`, '#ff66aa')}
             </div>`;

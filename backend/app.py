@@ -12680,12 +12680,28 @@ def _handle_phantom(bot_id, bot, actions):
                         print(f'⚠ PHANTOM SETTLED LOSS: {bot_id} dog {dog_side}@{dog_price}¢ lost — -{loss}¢')
                     session_pnl['completed_bots'] += 1
                     bot['_trade_recorded'] = True
+                    _settle_fee = 0
+                    _dog_oid = bot.get('dog_order_id')
+                    if _dog_oid:
+                        for _sfa in range(5):
+                            try:
+                                api_read_limiter.wait()
+                                _sfo = kalshi_client.get_order(_dog_oid)
+                                _sfo = _sfo.get('order', _sfo) if isinstance(_sfo, dict) else {}
+                                _settle_fee = int(round((float(_sfo.get('maker_fees_dollars', '0')) + float(_sfo.get('taker_fees_dollars', '0'))) * 100))
+                                break
+                            except Exception as _sfe:
+                                if '429' in str(_sfe) and _sfa < 4:
+                                    time.sleep(1.0)
+                                    continue
+                                break
                     _record_trade({
                         'bot_id': bot_id, 'ticker': ticker,
                         'yes_price': dog_price if dog_side == 'yes' else 0,
                         'no_price': dog_price if dog_side == 'no' else 0,
                         'quantity': qty,
                         'profit_cents': max(0, profit), 'loss_cents': max(0, -profit),
+                        'fee_cents': _settle_fee,
                         'result': f'settled_{"win" if dog_won else "loss"}_{_settle_result}',
                         'exit_via': 'anchor_settlement',
                         'first_leg': dog_side,
@@ -13029,16 +13045,22 @@ def _handle_phantom(bot_id, bot, actions):
             bot['no_price'] = no_p
 
             pnl_cents = (100 - yes_p - no_p) * qty
-            # Always pull actual fees from Kalshi orders
+            # Pull actual fees from Kalshi orders (retry on 429, 1s spacing = fresh rate window)
             fee = 0
             for _fee_oid in list(set(filter(None, [bot.get('dog_order_id'), fav_order_id] + list(bot.get('_all_hedge_order_ids', []))))):
-                try:
-                    api_read_limiter.wait()
-                    _fo = kalshi_client.get_order(_fee_oid)
-                    _fo = _fo.get('order', _fo) if isinstance(_fo, dict) else {}
-                    fee += int(round((float(_fo.get('maker_fees_dollars', '0')) + float(_fo.get('taker_fees_dollars', '0'))) * 100))
-                except Exception:
-                    pass  # fee stays 0 for this order if lookup fails
+                for _fee_attempt in range(5):
+                    try:
+                        api_read_limiter.wait()
+                        _fo = kalshi_client.get_order(_fee_oid)
+                        _fo = _fo.get('order', _fo) if isinstance(_fo, dict) else {}
+                        fee += int(round((float(_fo.get('maker_fees_dollars', '0')) + float(_fo.get('taker_fees_dollars', '0'))) * 100))
+                        break
+                    except Exception as _fee_err:
+                        if '429' in str(_fee_err) and _fee_attempt < 4:
+                            time.sleep(1.0)
+                            continue
+                        print(f'⚠ FEE LOOKUP FAILED: {_fee_oid[:12]} after {_fee_attempt+1} attempts — fee recorded as 0')
+                        break
             net_pnl = pnl_cents - fee
 
             # Compute hedge speed BEFORE recording trade so it's included
@@ -13374,6 +13396,21 @@ def _handle_phantom(bot_id, bot, actions):
                     else:
                         session_pnl['gross_loss_cents'] += abs(profit)
                     bot['_trade_recorded'] = True
+                    _settle_fee2 = 0
+                    _settle_oids2 = list(set(filter(None, [bot.get('dog_order_id'), bot.get('fav_order_id')] + list(bot.get('_all_hedge_order_ids', [])))))
+                    for _sf2_oid in _settle_oids2:
+                        for _sf2a in range(5):
+                            try:
+                                api_read_limiter.wait()
+                                _sf2o = kalshi_client.get_order(_sf2_oid)
+                                _sf2o = _sf2o.get('order', _sf2o) if isinstance(_sf2o, dict) else {}
+                                _settle_fee2 += int(round((float(_sf2o.get('maker_fees_dollars', '0')) + float(_sf2o.get('taker_fees_dollars', '0'))) * 100))
+                                break
+                            except Exception as _sf2e:
+                                if '429' in str(_sf2e) and _sf2a < 4:
+                                    time.sleep(1.0)
+                                    continue
+                                break
                     _record_trade({
                         'bot_id': bot_id, 'ticker': ticker,
                         'yes_price': dog_price if dog_side == 'yes' else 0,
@@ -13381,6 +13418,7 @@ def _handle_phantom(bot_id, bot, actions):
                         'quantity': qty,
                         'profit_cents': profit if profit > 0 else 0,
                         'loss_cents': abs(profit) if profit < 0 else 0,
+                        'fee_cents': _settle_fee2,
                         'result': f'settled_{"win" if dog_won else "loss"}_{_settle_result}',
                         'exit_via': 'phantom_settlement',
                         'timestamp': now, 'placed_at': bot.get('created_at', now),

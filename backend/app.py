@@ -4370,7 +4370,17 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 except Exception:
                     pass
                 _snap_qty = bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1))
-                if _snap_fills >= _snap_qty:
+                # CRITICAL: if bot already completed/waiting_repeat, do NOT reset state.
+                # The 404 is from a STALE fav order from the previous cycle — touching
+                # status here causes infinite hedge loop (dog_filled → hedge → repeat → 404 → dog_filled).
+                _snap_status = bot.get('status', '')
+                if _snap_status in ('completed', 'stopped', 'waiting_repeat'):
+                    bot['fav_order_id'] = None  # just clear the stale ref
+                    print(f'⚠ WS SNAP 404: {bot_id} order dead but bot already {_snap_status} — skipping state reset')
+                    bot_log('PHANTOM_WS_SNAP_404_SKIP', bot_id, {
+                        'fills': _snap_fills, 'status': _snap_status, 'fav_oid': str(_snap_fav_oid)[:12],
+                    })
+                elif _snap_fills >= _snap_qty:
                     # Fav FILLED — let completion run, do NOT clear _hedge_fired
                     bot['fav_fill_qty'] = max(bot.get('fav_fill_qty', 0), _snap_fills)
                     _snap_fav_side = bot.get('fav_side', 'yes')

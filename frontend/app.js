@@ -6503,14 +6503,15 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         // Combined = where your order actually sits (avgCost + posted exit price)
         // liveCombined = what you'd get if filled at current bid (context only)
         const liveCombined = (exitBidLive > 0) ? avgCost + exitBidLive : 999;
-        const targetCombined = avgCost + exitPrice;
-        const combined = exitPrice > 0 ? targetCombined : (liveCombined < 999 ? liveCombined : 0);
+        const origTarget = bot._exit_target_price || exitPrice;
+        const origTargetCombined = avgCost + origTarget;
+        const postedCombined = avgCost + exitPrice;
+        // Show original target combined when at target, actual posted when walked/parked
+        const combined = exitPrice > 0 ? (exitPrice <= origTarget ? origTargetCombined : postedCombined) : (liveCombined < 999 ? liveCombined : 0);
         const profit = 100 - combined;
         const combinedCol = combined > 100 ? '#ff4444' : combined >= 99 ? '#ffaa00' : '#00ff88';
         const slThreshold = _apexStopLossThreshold(width, avgCost);
         const stopLoss = 100 + slThreshold;
-        const origTarget = bot._exit_target_price || exitPrice;
-        const origTargetCombined = avgCost + origTarget;
         const exitPostedAt = bot._exit_posted_at || 0;
         const skewSec = exitPostedAt > 0 ? Math.floor(nowSec - exitPostedAt) : 0;
         const timeStr = skewSec >= 60 ? `${Math.floor(skewSec/60)}m${skewSec%60}s` : `${skewSec}s`;
@@ -6518,7 +6519,20 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const hedgeFp = exitTotalQty > 0 ? Math.min(100, Math.round(exitFillQty / exitTotalQty * 100)) : 0;
         // Walk status badge
         let walkBadge = '';
-        if (exitPrice > 0) {
+        // mm_exiting: show exit type (SELLING vs ARB EXIT)
+        const _sellOids = bot._exit_sell_oids || {};
+        const _activeSell = Object.values(_sellOids).find(s => s && s.oid);
+        if (status === 'mm_exiting' && _activeSell) {
+            const _sellAction = _activeSell.action || 'sell';
+            const _sellPrice = _activeSell.price || 0;
+            if (_sellAction === 'buy') {
+                walkBadge = `<span style="background:#00d4ff22;color:#00d4ff;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">ARB EXIT @${_sellPrice}c</span>`;
+            } else {
+                walkBadge = `<span style="background:#ff704322;color:#ff7043;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">SELLING @${_sellPrice}c</span>`;
+            }
+        } else if (status === 'mm_exiting' && !_activeSell) {
+            walkBadge = `<span style="background:#ff444422;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">EXIT PENDING</span>`;
+        } else if (exitPrice > 0) {
             if (combined >= stopLoss) walkBadge = `<span style="background:#ff444422;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;animation:pulse 1.5s infinite;">STOP LOSS</span>`;
             else if (combined > 100) walkBadge = `<span style="background:#ff444422;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">PARKED</span>`;
             else if (combined === 100) walkBadge = `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">WALL</span>`;

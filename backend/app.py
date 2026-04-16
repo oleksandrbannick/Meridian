@@ -13161,9 +13161,10 @@ def _handle_phantom(bot_id, bot, actions):
                 _label = f'smart({_smart_reason})' if bot.get('smart_mode') else f'cycle {repeats_done_now}/{repeat_total}'
                 print(f'🔄 PHANTOM REPEAT: {bot_id} {_label} pnl={net_pnl}¢')
                 _audit('PHANTOM_REPEAT_ENTER', bot_id, {'ticker': ticker, 'cycle': repeats_done_now, 'total': repeat_total, 'smart': _smart_reason})
-                # Orphan guard: verify Kalshi position is flat before repeating.
-                # Same-market only — cross-market positions are held until settlement.
-                # If non-zero, fire a supplemental hedge to flatten before next run.
+                # Position check: log non-zero positions but NEVER auto-hedge.
+                # Auto-hedging caused a death spiral: each hedge added contracts,
+                # making the next check find an even bigger "orphan" → infinite loop
+                # that bought 200+ contracts. Let Scout or user handle orphans manually.
                 _is_cross_og = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
                 try:
                     if not _is_cross_og and api_read_limiter.try_wait():
@@ -13177,29 +13178,12 @@ def _handle_phantom(bot_id, bot, actions):
                         if _rp_net != 0:
                             _rp_qty = abs(_rp_net)
                             _rp_held_side = 'yes' if _rp_net > 0 else 'no'
-                            print(f'🚨 PHANTOM REPEAT ORPHAN: {bot_id} {_rp_qty}x {_rp_held_side.upper()} unhedged — firing supplemental hedge')
-                            bot_log('PHANTOM_REPEAT_ORPHAN', bot_id, {
+                            print(f'⚠ PHANTOM REPEAT POSITION: {bot_id} {_rp_qty}x {_rp_held_side.upper()} on {ticker} (log only, no auto-hedge)')
+                            bot_log('PHANTOM_REPEAT_POSITION', bot_id, {
                                 'held_side': _rp_held_side, 'qty': _rp_qty, 'ticker': ticker,
                             }, level='WARN')
-                            _push_notification('orphan_hedge', f'⚠ Phantom {bot_id}: {_rp_qty}x {_rp_held_side.upper()} orphan on {ticker} — hedging', {
-                                'bot_id': bot_id, 'ticker': ticker, 'side': _rp_held_side, 'qty': _rp_qty,
-                            })
-                            # Re-enter hedge flow: post fav at bid, let bid-follow complete it
-                            bot['_orphan_hedge'] = True
-                            bot['_partial_hedge_qty'] = _rp_qty
-                            bot['dog_fill_qty'] = _rp_qty
-                            bot[f'{dog_side}_fill_qty'] = _rp_qty
-                            bot['fav_order_id'] = None
-                            bot['fav_fill_qty'] = 0
-                            bot['_hedge_fired'] = True
-                            bot['_trade_recorded'] = False
-                            bot['status'] = 'dog_filled'
-                            bot['dog_filled_at'] = time.time()
-                            _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
-                            save_state()
-                            return  # hedge first, repeat after it completes
                 except Exception as _rp_err:
-                    print(f'⚠ PHANTOM REPEAT ORPHAN CHECK FAILED: {bot_id} {_rp_err}')
+                    print(f'⚠ PHANTOM REPEAT POSITION CHECK FAILED: {bot_id} {_rp_err}')
             else:
                 if _is_cross:
                     bot['status'] = 'awaiting_settlement'
@@ -19704,6 +19688,9 @@ def add_runs(bot_id):
             bot['dog_filled_at'] = None
             bot['dog_order_id'] = None  # clear so startup recovery doesn't find old completed fills
             bot['_all_dog_order_ids'] = []
+            bot['_all_hedge_order_ids'] = []  # clear old hedge orders to prevent cross-cycle contamination
+            bot.pop('_orphan_hedge', None)
+            bot.pop('_counted_dog_fills', None)
         save_state()
         bot_log('SMART_RESTART', bot_id, {
             'prev_status': bot.get('status'),
@@ -19739,6 +19726,9 @@ def add_runs(bot_id):
         bot['dog_filled_at'] = None
         bot['dog_order_id'] = None  # clear so startup recovery doesn't find old completed fills
         bot['_all_dog_order_ids'] = []
+        bot['_all_hedge_order_ids'] = []
+        bot.pop('_orphan_hedge', None)
+        bot.pop('_counted_dog_fills', None)
     save_state()
     bot_log('ADD_RUNS', bot_id, {'added': count, 'new_total': bot['repeat_count'], 'repeats_done': bot.get('repeats_done', 0)})
     return jsonify({'success': True, 'new_repeat_count': bot['repeat_count'], 'repeats_done': bot.get('repeats_done', 0)})

@@ -9701,6 +9701,15 @@ def _apex_mm_exit_tick(bot_id, bot):
         except Exception as e:
             print(f'⚠ APEX MM exit check {side}: {e}')
 
+    # Safety: if holding inventory but no sell orders exist, retry the sell
+    _net_yes_r = bot.get('net_yes', 0)
+    _net_no_r = bot.get('net_no', 0)
+    _has_sell_oids = any(bot.get('_exit_sell_oids', {}).get(s, {}).get('oid') for s in ('yes', 'no'))
+    if (_net_yes_r > 0 or _net_no_r > 0) and not _has_sell_oids:
+        print(f'🔧 APEX MM EXIT RETRY: {bot_id} holding Y={_net_yes_r} N={_net_no_r} but no sell orders — reposting')
+        _apex_mm_begin_exit_inner(bot_id, bot, bot.get('_exit_reason', 'exit_retry'))
+        return
+
     # Check if all sides are done
     yes_done = not bot.get('_exit_sell_oids', {}).get('yes', {}).get('oid')
     no_done = not bot.get('_exit_sell_oids', {}).get('no', {}).get('oid')

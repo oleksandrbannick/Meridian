@@ -14946,6 +14946,22 @@ def _handle_apex(bot_id, bot, actions):
                 bot['_last_pull_reason'] = f'room_guard (room={_rc_room}c < W{_rc_w}+1)'
                 return  # room too tight — stay pulled
             _apex_mm_repost_ladder(bot_id, bot)
+        else:
+            # Update pull reason to show what's actually blocking recovery
+            _lob = _local_orderbooks.get(ticker)
+            if _lob and _lob.last_update_ts > 0 and (time.time() - _lob.last_update_ts) < 10:
+                _yd = _lob.get_total_depth('yes', 3)
+                _nd = _lob.get_total_depth('no', 3)
+                _obi = _lob.get_weighted_obi()
+                _parts = []
+                if _yd < APEX_DEPTH_RECOVER_MIN:
+                    _parts.append(f'thin_yes ({_yd}<{APEX_DEPTH_RECOVER_MIN})')
+                if _nd < APEX_DEPTH_RECOVER_MIN:
+                    _parts.append(f'thin_no ({_nd}<{APEX_DEPTH_RECOVER_MIN})')
+                if abs(_obi) > APEX_MM_RECOVER_OBI:
+                    _parts.append(f'obi ({_obi:.2f}>{APEX_MM_RECOVER_OBI})')
+                if _parts:
+                    bot['_last_pull_reason'] = ' + '.join(_parts) + ' (entry only)'
         return
 
     # ── STATUS: mm_exiting — monitor exit orders ──

@@ -13775,6 +13775,7 @@ def _handle_phantom(bot_id, bot, actions):
                     ob = _fav_ob  # old fav ob is now the dog ob
                     current_dog_bid = _current_fav_bid
                     current_dog_ask = _best_ask(ob, dog_side)
+                    api_read_limiter.wait()
                     _fav_ob = kalshi_client.get_market_orderbook(hedge_ticker)
                     _current_fav_bid = _best_bid(_fav_ob, fav_side)
             else:
@@ -16656,6 +16657,7 @@ def _run_monitor():
                                 else:
                                     cur_dog_bid = 0
                                     try:
+                                        api_read_limiter.wait()
                                         _m2 = kalshi_client.get_market(ticker)
                                         _mk2 = _m2.get('market', _m2)
                                         _d2 = _mk2.get(f'{dog_side_rp}_bid_dollars')
@@ -17959,6 +17961,7 @@ def _run_monitor():
                             except Exception as ce:
                                 # Check if it filled during cancel (race condition)
                                 try:
+                                    api_read_limiter.wait()
                                     resp_race = kalshi_client.get_order(bot[unfilled_order_key])
                                     ord_race = resp_race.get('order', resp_race) if isinstance(resp_race, dict) else {}
                                     if _parse_fill_count(ord_race) >= qty:
@@ -21474,6 +21477,7 @@ def _sweep_orphaned_orders():
                 known_ids.add(_oid2)
 
     try:
+        api_read_limiter.wait()
         resp = kalshi_client.get_orders(status='resting')
         resting = resp.get('orders', [])
     except Exception as e:
@@ -21577,6 +21581,7 @@ def _sweep_orphaned_orders():
                         mq = _safe_int_sweep(b.get('qty', 1))
                         managed_qty[(mt, 'no')] = managed_qty.get((mt, 'no'), 0) + mq
 
+        api_read_limiter.wait()
         pos_resp = kalshi_client.get_positions()
         positions = pos_resp.get('market_positions', pos_resp.get('positions', []))
         for pos in positions:
@@ -21731,6 +21736,7 @@ def scan_arb_opportunities():
             cursor = None
             while True:
                 try:
+                    api_read_limiter.wait()
                     result = kalshi_client.get_markets_by_series(series, status='open', limit=200, cursor=cursor)
                 except Exception:
                     break
@@ -21746,7 +21752,7 @@ def scan_arb_opportunities():
             return series, series_markets
 
         all_markets = []
-        with ThreadPoolExecutor(max_workers=20) as executor:
+        with ThreadPoolExecutor(max_workers=4) as executor:
             for _, series_markets in executor.map(_fetch_arb_series, series_to_fetch):
                 all_markets.extend(series_markets)
         print(f'🔍 scan_arb: {len(all_markets)} markets fetched', flush=True)
@@ -22368,6 +22374,7 @@ def get_latency():
     # Live ping: hit Kalshi API with a lightweight call
     ping_ms = None
     try:
+        api_read_limiter.wait()
         t0 = time.time()
         kalshi_client.get_balance()
         ping_ms = round((time.time() - t0) * 1000, 1)
@@ -22803,6 +22810,7 @@ def get_active_positions():
         if not kalshi_client:
             return jsonify({'error': 'Not authenticated'}), 401
 
+        api_read_limiter.wait()
         positions = kalshi_client.get_positions(limit=200)
         pos_list = positions.get('market_positions', positions.get('positions', []))
 
@@ -23818,6 +23826,7 @@ def get_order_status_endpoint(order_id):
     try:
         if not kalshi_client:
             return jsonify({'error': 'Not authenticated'}), 401
+        api_read_limiter.wait()
         result = kalshi_client.get_order(order_id)
         return jsonify(result)
     except Exception as e:

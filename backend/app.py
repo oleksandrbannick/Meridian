@@ -11789,6 +11789,24 @@ def _handle_phantom(bot_id, bot, actions):
         save_state()
         return
 
+    # Death zone on waiting_repeat → stop the bot (prevents "COMPLETED" stuck state)
+    if bot.get('_death_zone_stopped') and status == 'waiting_repeat':
+        _cancel_oid = bot.get('dog_order_id')
+        if _cancel_oid:
+            try:
+                api_rate_limiter.wait()
+                kalshi_client.cancel_order(_cancel_oid)
+            except Exception:
+                pass
+        bot['dog_order_id'] = None
+        bot['status'] = 'stopped'
+        bot['stopped_at'] = time.time()
+        bot['_stop_reason'] = bot.get('_death_zone_reason', 'death_zone')
+        bot_log('DEATH_ZONE_WAITING_REPEAT_STOP', bot_id, {'reason': bot.get('_death_zone_reason')})
+        print(f'🛑 DEATH ZONE: {bot_id} stuck in waiting_repeat → stopped')
+        save_state()
+        return
+
     # Tennis death zone revert handled by pre-pass in _run_monitor (before active status filter)
 
     # ── Death zone transition for stopped bots — remove restart capability ──
@@ -12244,8 +12262,9 @@ def _handle_phantom(bot_id, bot, actions):
                 if current_dog_bid <= 1 or current_dog_bid < _min_viable_bid:
                     # Pull order and wait — same as price floor system
                     if dog_order_id:
-                        _safe_cancel(dog_order_id, f'phantom dead market {bot_id}')
-                        bot['dog_order_id'] = None
+                        _pull_rc = _safe_cancel(dog_order_id, f'phantom dead market {bot_id}')
+                        if _pull_rc is not False:
+                            bot['dog_order_id'] = None
                     if not bot.get('_price_floor_pulled'):
                         print(f'⏸ PHANTOM DEAD MARKET: {bot_id} bid={current_dog_bid}¢ (need ≥{_min_viable_bid}¢) — pulled, waiting for recovery')
                         bot_log('PHANTOM_DEAD_MARKET', bot_id, {'dog_bid': current_dog_bid, 'min_viable': _min_viable_bid})
@@ -12316,8 +12335,9 @@ def _handle_phantom(bot_id, bot, actions):
                             save_state()
                             return
                     # Cross-market or can't flip → pull and wait for recovery
-                    _safe_cancel(dog_order_id, f'phantom drift pull {bot_id}')
-                    bot['dog_order_id'] = None
+                    _drift_rc = _safe_cancel(dog_order_id, f'phantom drift pull {bot_id}')
+                    if _drift_rc is not False:
+                        bot['dog_order_id'] = None
                     bot['_price_floor_pulled'] = True
                     bot['_price_floor_since'] = now
                     print(f'⏸ PHANTOM DRIFT PULL: {bot_id} dog bid {current_dog_bid}¢ > 50¢ — pulled, waiting')
@@ -12341,8 +12361,9 @@ def _handle_phantom(bot_id, bot, actions):
                             elif _ppi_rec == 0:
                                 print(f'⚠ AUTO DEPTH PULL (init): {bot_id} PPI={_ppi_now} < 30 — pulling dog')
                                 if dog_order_id:
-                                    _safe_cancel(dog_order_id, f'ppi_pull_{bot_id}')
-                                    bot['dog_order_id'] = None
+                                    _ppi_rc = _safe_cancel(dog_order_id, f'ppi_pull_{bot_id}')
+                                    if _ppi_rc is not False:
+                                        bot['dog_order_id'] = None
                                 bot['_price_floor_pulled'] = True
                                 bot['_ppi_pulled'] = True
                                 bot_log('PPI_AUTO_PULL', bot_id, {'ppi': _ppi_now, 'details': _ppi_det})
@@ -12358,8 +12379,9 @@ def _handle_phantom(bot_id, bot, actions):
                                 # PPI < 30 = pull the dog
                                 print(f'⚠ AUTO DEPTH PULL: {bot_id} PPI={_ppi_now} < 30 — pulling dog')
                                 if dog_order_id:
-                                    _safe_cancel(dog_order_id, f'ppi_pull_{bot_id}')
-                                    bot['dog_order_id'] = None
+                                    _ppi_rc2 = _safe_cancel(dog_order_id, f'ppi_pull_{bot_id}')
+                                    if _ppi_rc2 is not False:
+                                        bot['dog_order_id'] = None
                                 bot['_price_floor_pulled'] = True
                                 bot['_ppi_pulled'] = True
                                 bot_log('PPI_AUTO_PULL', bot_id, {'ppi': _ppi_now, 'details': _ppi_det})
@@ -12379,8 +12401,9 @@ def _handle_phantom(bot_id, bot, actions):
                 if new_dog_price < 2:
                     # Cancel the order but keep bot alive — game might swing back
                     if dog_order_id:
-                        _safe_cancel(dog_order_id, f'phantom price floor {bot_id}')
-                        bot['dog_order_id'] = None
+                        _pf_rc = _safe_cancel(dog_order_id, f'phantom price floor {bot_id}')
+                        if _pf_rc is not False:
+                            bot['dog_order_id'] = None
                     if not bot.get('_price_floor_pulled'):
                         print(f'⏸ PHANTOM PRICE FLOOR: {bot_id} bid={current_dog_bid}¢ depth={anchor_depth}¢ → pulled, waiting for recovery')
                         bot_log('PHANTOM_PRICE_FLOOR_PULL', bot_id, {

@@ -5501,7 +5501,7 @@ def _execute_ws_completion(bot_id):
         # Estimate P&L from posted prices for smart mode (actual verified later)
         _est_yes = bot.get('yes_price', 50)
         _est_no = bot.get('no_price', 50)
-        _est_pnl = (100 - _est_yes - _est_no) * qty - kalshi_fee_cents(_est_yes, _est_no, qty, bot.get('dog_ticker', ''))
+        _est_pnl = (100 - _est_yes - _est_no) * qty - kalshi_fee_cents(_est_yes, _est_no, qty, bot.get('dog_ticker', '') or ticker)
         _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, _est_pnl)
         will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
 
@@ -5542,7 +5542,7 @@ def _execute_ws_completion(bot_id):
             actual_no  = get_actual_fill_price(bot['no_order_id'], 'no')
             real_yes = actual_yes if actual_yes else bot['yes_price']
             real_no  = actual_no  if actual_no  else bot['no_price']
-            _pticker = bot.get('dog_ticker', '')
+            _pticker = bot.get('dog_ticker', '') or ticker
             fee = kalshi_fee_cents(real_yes, real_no, qty, _pticker)
             profit_cents = (100 - real_yes - real_no) * qty - fee
 

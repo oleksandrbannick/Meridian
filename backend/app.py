@@ -2854,6 +2854,26 @@ def _migrate_008_fix_sport_labels():
                 updated += 1
     print(f'📊 Migration 008: fixed sport labels on {updated} trades (Challenger → Tennis)')
 
+def _migrate_009_fix_tennis_fees():
+    """Tennis trades were charged premium fees because dog_ticker was empty.
+    Zero out fees on all tennis trades and recalculate P&L."""
+    global trade_history
+    updated = 0
+    for t in trade_history:
+        ticker = t.get('ticker', '')
+        series = ticker.split('-')[0].upper() if ticker else ''
+        is_free = series.startswith('KXATP') or series.startswith('KXWTA') or series.startswith('KXITF')
+        if is_free and t.get('fee_cents', 0):
+            old_fee = int(t['fee_cents'])
+            t['fee_cents'] = 0
+            # Restore P&L: add back the wrongly-subtracted fee
+            if t.get('profit_cents') is not None:
+                t['profit_cents'] = int(t.get('profit_cents', 0)) + old_fee
+            if int(t.get('loss_cents', 0)) > 0:
+                t['loss_cents'] = max(0, int(t['loss_cents']) - old_fee)
+            updated += 1
+    print(f'📊 Migration 009: zeroed fees on {updated} tennis trades')
+
 MIGRATIONS = [
     ('001_recalc_fees', _migrate_001_recalc_fees),
     ('002_remove_mar12', _migrate_002_remove_mar12),
@@ -2863,6 +2883,7 @@ MIGRATIONS = [
     ('006_dedup_rung_trades', _migrate_006_dedup_rung_trades),
     ('007_backfill_anchor_depth', _migrate_007_backfill_anchor_depth),
     ('008_fix_sport_labels', _migrate_008_fix_sport_labels),
+    ('009_fix_tennis_fees', _migrate_009_fix_tennis_fees),
 ]
 
 def run_migrations():

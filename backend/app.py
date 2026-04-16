@@ -4473,7 +4473,7 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
             best_combined = min(buy_opp, sell_held)
 
             width = bot.get('start_gap', 4) * 2
-            stop = 100 + width
+            stop = 100 + max(width, 6)  # floor: 6c above 100 minimum, prevents W2 from insta-SL
 
             if best_combined >= stop and best_combined < 999:
                 hard_stop = stop + APEX_MM_SL_HARD_MARGIN
@@ -15076,7 +15076,7 @@ def _handle_apex(bot_id, bot, actions):
           _sell_held_combined = _held_avg + (100 - _held_ask) if _held_ask > 0 else 999
           _best_combined = min(_buy_opp_combined, _sell_held_combined)
           _width = bot.get('start_gap', 4) * 2
-          _stop = 100 + _width  # symmetric: risk = reward
+          _stop = 100 + max(_width, 6)  # floor: 6c minimum SL buffer
           # Drift stop: dual-threshold matrix (soft breach = timer, hard breach = instant)
           # Use >= to match WS handler — prevents monitor from resetting WS breach timer at exact boundary
           if _best_combined >= _stop and _best_combined < 999:

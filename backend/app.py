@@ -4300,13 +4300,8 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
         if fav_bid <= 0:
             continue
 
-        # Snap to bid; after timer, escalate to bid+1 to jump queue
-        _fav_posted = bot.get('fav_posted_at') or 0
-        _elapsed = (time.time() - _fav_posted) if _fav_posted else 0
-        if _elapsed >= PHANTOM_BID1_TIMER_S:
-            snap_target = min(fav_bid + 1, 99)
-        else:
-            snap_target = fav_bid
+        # Always snap to bid — pure maker, $0 fees
+        snap_target = fav_bid
 
         # Skip if already at target
         if snap_target == fav_price:
@@ -11651,7 +11646,7 @@ def _fire_timeout_amend(bot_id, bot, order_id, amend_side, amend_price, qty, tic
 # ═══════════════════════════════════════════════════════════════════
 HARD_CEILING_CENTS = 98
 # SNAP_CEILING_CENTS removed — fav always snaps to bid, no ceiling cap
-PHANTOM_BID1_TIMER_S = 20  # After 20s unfilled, escalate snap from bid to bid+1
+PHANTOM_BID1_TIMER_S = 20  # UNUSED — bid+1 escalation removed, pure bid-follow now
 
 # ── Game urgency system: adaptive behavior based on game phase ──
 URGENCY_PARAMS = {
@@ -13467,11 +13462,8 @@ def _handle_phantom(bot_id, bot, actions):
         # Fav bid is back — reset no-bid counter
         bot['_no_fav_bid_count'] = 0
 
-        # Snap to bid; after timer, escalate to bid+1 to jump queue
-        if wait_s >= PHANTOM_BID1_TIMER_S:
-            new_fav_price = min(current_fav_bid + 1, 99)
-        else:
-            new_fav_price = current_fav_bid
+        # Always snap to bid — pure maker, $0 fees
+        new_fav_price = current_fav_bid
 
         if new_fav_price <= 0:
             return
@@ -14801,12 +14793,8 @@ def _handle_phantom_ladder(bot_id, bot, actions):
 
         bot['_no_fav_bid_count'] = 0
 
-        # ── Bid-follow: snap to bid, escalate to bid+1 after timer ──
-        _ladder_wait = now - (bot.get('fav_posted_at') or now)
-        if _ladder_wait >= PHANTOM_BID1_TIMER_S:
-            new_fav_price = min(current_fav_bid + 1, 99)
-        else:
-            new_fav_price = current_fav_bid
+        # Always snap to bid — pure maker, $0 fees
+        new_fav_price = current_fav_bid
         if new_fav_price == current_fav_price:
             return
 

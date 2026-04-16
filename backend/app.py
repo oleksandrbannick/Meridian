@@ -1579,9 +1579,9 @@ def get_depth_rec(ticker):
     ppi, rd, ppi_det = _calculate_ppi(ticker, fav_side, dog_side)
     if ppi is None:
         ppi, rd, ppi_det = 0, 0, {}
-    tier = 'WALL' if ppi >= 90 else 'PRIME' if ppi >= 75 else 'SNIPER' if ppi >= 55 else 'TRAP' if ppi >= 45 else 'DEEP' if ppi >= 40 else 'FLOOR' if ppi >= 35 else 'KILL'
+    tier = 'WALL' if ppi >= 85 else 'PRIME' if ppi >= 55 else 'TRAP' if ppi >= 45 else 'DEEP' if ppi >= 40 else 'FLOOR' if ppi >= 35 else 'KILL'
     # Base depth before gap overrides
-    _base_rd = 3 if ppi >= 90 else 4 if ppi >= 75 else 5 if ppi >= 55 else 6 if ppi >= 45 else 7 if ppi >= 40 else 8 if ppi >= 35 else 0
+    _base_rd = 4 if ppi >= 85 else 5 if ppi >= 55 else 6 if ppi >= 45 else 7 if ppi >= 40 else 8 if ppi >= 35 else 0
     _gap_bumped = rd > _base_rd and rd > 0
     reasons = [f'PPI {ppi} {tier}: D={ppi_det.get("d",0)} G=-{ppi_det.get("g",0)} S={ppi_det.get("s",0)} T={ppi_det.get("t",0)}']
     if _gap_bumped:
@@ -6572,11 +6572,9 @@ def _calculate_ppi(ticker, fav_side, dog_side):
     _raw = d_pts - g_pts + s_pts + t_pts
     ppi = max(0, min(100, round(_raw * 100 / 75)))
 
-    # PPI → depth rec (v6 — tighter tiers, no 9c, 3c back for WALL)
-    if ppi >= 90: rec = 3                              # WALL: pristine book only
-    elif ppi >= 85: rec = 4                            # PRIME+: ultra-thick book
-    elif ppi >= 75: rec = 4                            # PRIME: money zone workhorse
-    elif ppi >= 55: rec = 5                            # SNIPER: money zone (standard variance)
+    # PPI → depth rec (v6b — no 3c, 4c gated at 85+, 5c workhorse)
+    if ppi >= 85: rec = 4                              # WALL: pristine book only
+    elif ppi >= 55: rec = 5                            # PRIME/SNIPER: money zone workhorse
     elif ppi >= 45: rec = 6                            # TRAP: caution zone
     elif ppi >= 40: rec = 7                            # DEEP: recovery buffer
     elif ppi >= 35: rec = 8                            # FLOOR: last stop before pull

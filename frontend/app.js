@@ -6134,7 +6134,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
         ${bot._stop_pending ? `<div style="background:#ff880012;border:1px solid #ff880033;border-radius:6px;padding:4px 10px;margin-bottom:6px;">
             <span style="color:#ff8800;font-size:10px;font-weight:700;">⏸ Stopping after current cycle completes</span>
         </div>` : ''}
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+        ${_isCompletedSummary ? '' : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <!-- ANCHOR SIDE -->
             ${(() => {
                 const _isPulled = !!bot._price_floor_pulled;
@@ -6168,9 +6168,10 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     </div>
                 ` : ''}
             </div>
-        </div>
+        </div>`}
         ${(() => {
-            // Running P&L for dog bot
+            // Running P&L for dog bot — skip for completed/stopped (run history shows it)
+            if (_isCompletedSummary) return '';
             if (favFilled && dogFilled) {
                 const profitPer = bot.profit_per || (100 - avgDogPrice - favPrice);
                 const totalQty = isLadder ? (bot.total_dog_fill_qty || hedgeQty) : qty;

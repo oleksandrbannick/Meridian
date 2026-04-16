@@ -517,8 +517,10 @@ _GAME_SERIES = {'KXNBAGAME','KXNHLGAME','KXNFLGAME','KXMLBGAME','KXMLSGAME',
                 'KXNCAAMBGAME','KXNCAAWBGAME','KXNCAAFGAME','KXEPLGAME',
                 'KXUCLGAME','KXATPMATCH','KXWTAMATCH',
                 'KXATPCHALLENGERMATCH','KXWTACHALLENGERMATCH',
+                'KXITFMATCH','KXITFWMATCH',
                 'KXWBCGAME','KXVTBGAME',
-                'KXBSLGAME','KXABAGAME','KXMLBSTGAME'}
+                'KXBSLGAME','KXABAGAME','KXMLBSTGAME',
+                'KXKBOGAME','KXNPBGAME'}
 
 def _capture_opening_lines(markets):
     """Record first-seen YES price for each GAME market — never overwrite once stored."""
@@ -603,6 +605,13 @@ def get_markets():
             'KXWTAMATCH': 'winner',
             'KXATPCHALLENGERMATCH': 'winner',
             'KXWTACHALLENGERMATCH': 'winner',
+            # ITF Tennis
+            'KXITFMATCH': 'winner',      # ITF Men's (M15, M25, etc.)
+            'KXITFWMATCH': 'winner',     # ITF Women's (W15, W35, etc.)
+            # Korea KBO
+            'KXKBOGAME': 'winner',
+            # Japan NPB
+            'KXNPBGAME': 'winner',
             # World Baseball Classic
             'KXWBCGAME': 'winner',
             # International Basketball
@@ -661,12 +670,15 @@ def get_markets():
             'ncaaf': ['KXNCAAFGAME', 'KXNCAAFSPREAD', 'KXNCAAFTOTAL'],
             'epl': ['KXEPLGAME', 'KXEPLSPREAD', 'KXEPLTOTAL', 'KXEPLGOAL', 'KXEPLBTTS'],
             'ucl': ['KXUCLGAME', 'KXUCLSPREAD', 'KXUCLTOTAL', 'KXUCLGOAL', 'KXUCLBTTS'],
-            'tennis': ['KXATPMATCH', 'KXWTAMATCH', 'KXATPCHALLENGERMATCH', 'KXWTACHALLENGERMATCH'],
+            'tennis': ['KXATPMATCH', 'KXWTAMATCH', 'KXATPCHALLENGERMATCH', 'KXWTACHALLENGERMATCH',
+                       'KXITFMATCH', 'KXITFWMATCH'],
             'golf': ['KXPGAH2H', 'KXTGLMATCH', 'KXPGATOP10', 'KXPGAMAKECUT',
                      'KXPGAR1LEAD', 'KXPGAR2LEAD', 'KXPGAR3LEAD', 'KXPGATOP5',
                      'KXLIVH2H', 'KXLIVTOP10', 'KXLIVTOP5', 'KXLIVR1LEAD', 'KXLIVTOUR'],
             'nbl': ['KXNBLGAME'],
             'wbc': ['KXWBCGAME'],
+            'kbo': ['KXKBOGAME'],
+            'npb': ['KXNPBGAME'],
             'intl': ['KXVTBGAME', 'KXBSLGAME', 'KXABAGAME', 'KXNBLGAME',
                      'KXKBLGAME', 'KXCBAGAME', 'KXEUROLEAGUEGAME',
                      'KXBBLGAME', 'KXGBLGAME', 'KXACBGAME',
@@ -688,7 +700,9 @@ def get_markets():
                              'KXJBLEAGUEGAME', 'KXLNBELITEGAME',
                              'KXUFCFIGHT', 'KXF1RACE', 'KXIPL',
                              'KXLALIGAGAME', 'KXLIGAMXGAME', 'KXSERIEAGAME',
-                             'KXBUNDESLIGAGAME', 'KXLIGUE1GAME'}
+                             'KXBUNDESLIGAGAME', 'KXLIGUE1GAME',
+                             'KXITFMATCH', 'KXITFWMATCH',
+                             'KXKBOGAME', 'KXNPBGAME'}
 
         # Determine which series to fetch
         if sport_filter and sport_filter.lower() != 'all':
@@ -2490,7 +2504,7 @@ _KALSHI_FREE_MAKER = 0.0
 _KALSHI_FREE_TAKER = 0.0
 
 # Prefixes that get free maker+taker fees
-_FREE_FEE_PREFIXES = ('KXATP', 'KXWTA', 'KXNHLSPREAD')
+_FREE_FEE_PREFIXES = ('KXATP', 'KXWTA', 'KXITF', 'KXNHLSPREAD')
 
 def _kalshi_fee_rates(ticker: str = '') -> tuple:
     """Return (maker_rate, taker_rate) for a market ticker.
@@ -6025,13 +6039,17 @@ def _detect_sport(ticker: str) -> str:
         return 'nhl'
     if prefix.startswith('KXMLB') or prefix.startswith('KXWBC'):
         return 'mlb'
+    if prefix.startswith('KXKBO'):
+        return 'kbo'
+    if prefix.startswith('KXNPB'):
+        return 'npb'
     if prefix.startswith('KXMLS'):
         return 'mls'
     if prefix.startswith('KXEPL'):
         return 'epl'
     if prefix.startswith('KXUCL'):
         return 'ucl'
-    if prefix.startswith('KXATP') or prefix.startswith('KXWTA'):
+    if prefix.startswith('KXATP') or prefix.startswith('KXWTA') or prefix.startswith('KXITF'):
         return 'tennis'
     if prefix.startswith(('KXVTB', 'KXBSL', 'KXABA')):
         return 'intl_basketball'
@@ -6145,6 +6163,8 @@ def _enrich_trade_record(record: dict, bot: dict = None) -> dict:
         'KXEPLGAME':'EPL','KXEPLSPREAD':'EPL','KXEPLTOTAL':'EPL','KXEPLGOAL':'EPL',
         'KXUCLGAME':'UCL','KXUCLSPREAD':'UCL','KXUCLTOTAL':'UCL','KXUCLGOAL':'UCL',
         'KXATPMATCH':'Tennis','KXATPCHALLENGERMATCH':'Tennis','KXWTAMATCH':'Tennis','KXWTACHALLENGERMATCH':'Tennis',
+        'KXITFMATCH':'Tennis','KXITFWMATCH':'Tennis',
+        'KXKBOGAME':'KBO','KXNPBGAME':'NPB',
         'KXWBCGAME':'WBC','KXVTBGAME':'Volleyball','KXBSLGAME':'Basketball','KXABAGAME':'ABA',
     }
     record['sport'] = _SPORT_MAP.get(series, 'Other')
@@ -6243,7 +6263,7 @@ def _is_game_live(ticker: str) -> bool:
         # No live signal found — fall through to expiration check
 
     # ── OTHER SPORTS: Check ESPN first (authoritative "game in progress") ──
-    is_sports = any(ticker.startswith(p) for p in ('KXNBA', 'KXNCAA', 'KXNHL', 'KXMLB', 'KXMLS', 'KXEPL', 'KXUCL'))
+    is_sports = any(ticker.startswith(p) for p in ('KXNBA', 'KXNCAA', 'KXNHL', 'KXMLB', 'KXMLS', 'KXEPL', 'KXUCL', 'KXKBO', 'KXNPB'))
     if is_sports:
         try:
             _refresh_espn_cache()
@@ -6342,7 +6362,7 @@ def _is_game_over_cached(ticker: str) -> bool:
         # No milestone data — check date (if ticker date is in the past, game is likely over)
 
     # ESPN sports: check cache
-    is_sports = any(ticker.startswith(p) for p in ('KXNBA', 'KXNCAA', 'KXNHL', 'KXMLB', 'KXMLS', 'KXEPL', 'KXUCL'))
+    is_sports = any(ticker.startswith(p) for p in ('KXNBA', 'KXNCAA', 'KXNHL', 'KXMLB', 'KXMLS', 'KXEPL', 'KXUCL', 'KXKBO', 'KXNPB'))
     if is_sports:
         info = _espn_cache.get('data', {})
         if info:
@@ -6527,11 +6547,13 @@ def _calculate_ppi(ticker, fav_side, dog_side):
     if 'KXNBA' in tu or 'KXNCAA' in tu: sport = 'NBA'
     elif 'KXNHL' in tu: sport = 'NHL'
     elif 'KXMLB' in tu: sport = 'MLB'
-    elif 'KXATP' in tu or 'KXWTA' in tu: sport = 'Tennis'
+    elif 'KXKBO' in tu: sport = 'KBO'
+    elif 'KXNPB' in tu: sport = 'NPB'
+    elif 'KXATP' in tu or 'KXWTA' in tu or 'KXITF' in tu: sport = 'Tennis'
     sc = _get_game_score_for_ticker(ticker)
     if sc and sc.get('status') == 'in':
         period = sc.get('period', 0)
-        max_p = {'NBA': 4, 'NHL': 3, 'MLB': 9, 'NCAAB': 2}.get(sport, 4)
+        max_p = {'NBA': 4, 'NHL': 3, 'MLB': 9, 'KBO': 9, 'NPB': 9, 'NCAAB': 2}.get(sport, 4)
         if period >= max_p: t_pts = 0
         elif period >= max_p - 1: t_pts = 5
         elif period >= max_p // 2: t_pts = 10
@@ -6576,9 +6598,12 @@ _PHANTOM_DEATH_ZONE = {
     'KXNFL':    {'period': 4, 'secs': 120, 'name': 'NFL Q4 <2:00'},
     'KXNHL':    {'period': 3, 'secs': 180, 'name': 'NHL P3 <3:00'},
     'KXMLB':    {'period': 9, 'secs': None, 'name': 'MLB 9th inning'},
+    'KXKBO':    {'period': 9, 'secs': None, 'name': 'KBO 9th inning'},
+    'KXNPB':    {'period': 9, 'secs': None, 'name': 'NPB 9th inning'},
     # Tennis: score-based death zone — fires when either player is serving for match
     'KXATP':    {'tennis': True, 'score_dz': True, 'name': 'ATP Tennis'},
     'KXWTA':    {'tennis': True, 'score_dz': True, 'name': 'WTA Tennis'},
+    'KXITF':    {'tennis': True, 'score_dz': True, 'name': 'ITF Tennis'},
 }
 
 
@@ -6766,6 +6791,8 @@ _SPORT_TIMEOUTS: dict = {
     # Baseball
     'KXMLB':    (5.0, 3.5),   # MLB: pitch-by-pitch, fills fast
     'KXWBC':    (5.0, 3.5),   # WBC: same baseball format
+    'KXKBO':    (5.0, 3.5),   # KBO: same baseball format
+    'KXNPB':    (5.0, 3.5),   # NPB: same baseball format
     # Soccer — 90-min games, slow scoring, orderbooks move slowly
     'KXEPL':    (10.0, 7.0),  # EPL
     'KXUCL':    (10.0, 7.0),  # UCL
@@ -6778,6 +6805,7 @@ _SPORT_TIMEOUTS: dict = {
     # Tennis — fast-moving markets, arbs complete quickly; dog drops fast
     'KXATP':    (5.0, 3.5),   # ATP: ~1 serve cycle recovery window
     'KXWTA':    (5.0, 3.5),   # WTA: ~1 serve cycle recovery window
+    'KXITF':    (5.0, 3.5),   # ITF: same as ATP/WTA
     # Golf — multi-hour rounds, very slow/thin orderbooks
     'KXPGA':    (30.0, 20.0), # PGA Golf — 4h+ rounds, thin books
     'KXLIV':    (30.0, 20.0), # LIV Golf — same as PGA
@@ -21593,12 +21621,15 @@ def scan_arb_opportunities():
             'ncaaw': ['KXNCAAWBGAME'],
             'epl': ['KXEPLGAME', 'KXEPLSPREAD', 'KXEPLTOTAL', 'KXEPLGOAL', 'KXEPLBTTS'],
             'ucl': ['KXUCLGAME', 'KXUCLSPREAD', 'KXUCLTOTAL', 'KXUCLGOAL', 'KXUCLBTTS'],
-            'tennis': ['KXATPMATCH', 'KXWTAMATCH', 'KXATPCHALLENGERMATCH', 'KXWTACHALLENGERMATCH'],
+            'tennis': ['KXATPMATCH', 'KXWTAMATCH', 'KXATPCHALLENGERMATCH', 'KXWTACHALLENGERMATCH',
+                       'KXITFMATCH', 'KXITFWMATCH'],
             'golf': ['KXPGAH2H', 'KXTGLMATCH', 'KXPGATOP10', 'KXPGAMAKECUT',
                      'KXPGAR1LEAD', 'KXPGAR2LEAD', 'KXPGAR3LEAD', 'KXPGATOP5',
                      'KXLIVH2H', 'KXLIVTOP10', 'KXLIVTOP5', 'KXLIVR1LEAD', 'KXLIVTOUR'],
             'nbl': ['KXNBLGAME'],
             'wbc': ['KXWBCGAME'],
+            'kbo': ['KXKBOGAME'],
+            'npb': ['KXNPBGAME'],
             'intl': ['KXVTBGAME', 'KXBSLGAME', 'KXABAGAME', 'KXNBLGAME',
                      'KXKBLGAME', 'KXCBAGAME', 'KXEUROLEAGUEGAME',
                      'KXBBLGAME', 'KXGBLGAME', 'KXACBGAME',
@@ -21642,6 +21673,8 @@ def scan_arb_opportunities():
                 'KXUCLGAME','KXUCLSPREAD','KXUCLTOTAL',
                 'KXATPMATCH','KXWTAMATCH',
                 'KXWBCGAME',
+                'KXKBOGAME','KXNPBGAME',
+                'KXITFMATCH','KXITFWMATCH',
             ]
             ALL_PROP_SERIES = [
                 'KXNBAPTS','KXNBAREB','KXNBAAST','KXNBA3PT','KXNBASTL','KXNBABLK','KXNBAMVP',

@@ -650,12 +650,14 @@ function applyFilters() {
                 case 'ncaaw': return et.includes('NCAAWB');
                 case 'mls':   return et.includes('MLS') || et.includes('KXMLS');
                 case 'soccer': return et.includes('EPL') || et.includes('UCL') || et.includes('MLS');
-                case 'tennis': return et.includes('KXATP') || et.includes('KXWTA');
+                case 'tennis': return et.includes('KXATP') || et.includes('KXWTA') || et.includes('KXITF');
                 case 'golf':  return et.includes('KXPGA') || et.includes('KXTGL') || et.includes('KXGOLF') || et.includes('KXLIV');
                 case 'nbl':   return et.includes('KXNBL');
                 case 'wbc':   return et.includes('KXWBC');
+                case 'kbo':   return et.includes('KXKBO');
+                case 'npb':   return et.includes('KXNPB');
                 case 'intl':  return et.includes('KXVTB') || et.includes('KXBSL') || et.includes('KXABA') || et.includes('KXNBL') || et.includes('KXKBL') || et.includes('KXCBA') || et.includes('KXEUROLEAGUE') || et.includes('KXBBL') || et.includes('KXGBL') || et.includes('KXACB') || et.includes('KXJBLEAGUE') || et.includes('KXLNBELITE');
-                case 'other': return !et.includes('NBA') && !et.includes('NFL') && !et.includes('MLB') && !et.includes('NHL') && !et.includes('NCAA') && !et.includes('KXMARMAD') && !et.includes('MLS') && !et.includes('EPL') && !et.includes('UCL') && !et.includes('KXATP') && !et.includes('KXWTA') && !et.includes('KXPGA') && !et.includes('KXTGL') && !et.includes('KXGOLF') && !et.includes('KXLIV') && !et.includes('KXNBL') && !et.includes('KXWBC') && !et.includes('KXVTB') && !et.includes('KXBSL') && !et.includes('KXABA') && !et.includes('KXKBL') && !et.includes('KXCBA') && !et.includes('KXEUROLEAGUE') && !et.includes('KXBBL') && !et.includes('KXGBL') && !et.includes('KXACB') && !et.includes('KXJBLEAGUE') && !et.includes('KXLNBELITE');
+                case 'other': return !et.includes('NBA') && !et.includes('NFL') && !et.includes('MLB') && !et.includes('NHL') && !et.includes('NCAA') && !et.includes('KXMARMAD') && !et.includes('MLS') && !et.includes('EPL') && !et.includes('UCL') && !et.includes('KXATP') && !et.includes('KXWTA') && !et.includes('KXITF') && !et.includes('KXPGA') && !et.includes('KXTGL') && !et.includes('KXGOLF') && !et.includes('KXLIV') && !et.includes('KXNBL') && !et.includes('KXWBC') && !et.includes('KXKBO') && !et.includes('KXNPB') && !et.includes('KXVTB') && !et.includes('KXBSL') && !et.includes('KXABA') && !et.includes('KXKBL') && !et.includes('KXCBA') && !et.includes('KXEUROLEAGUE') && !et.includes('KXBBL') && !et.includes('KXGBL') && !et.includes('KXACB') && !et.includes('KXJBLEAGUE') && !et.includes('KXLNBELITE');
                 default: return true;
             }
         });
@@ -1721,13 +1723,15 @@ function detectSport(eventTicker) {
     if (upper.includes('KXNFL')) return 'NFL';
     if (upper.includes('KXNHL')) return 'NHL';
     if (upper.includes('KXMLB')) return 'MLB';
+    if (upper.includes('KXKBO')) return 'KBO';
+    if (upper.includes('KXNPB')) return 'NPB';
     if (upper.includes('KXNCAAMB') || upper.includes('KXNCAAB') || upper.includes('KXMARMAD')) return 'NCAAB';
     if (upper.includes('KXNCAAWB')) return 'NCAAW';
     if (upper.includes('KXNCAAF')) return 'NCAAF';
     if (upper.includes('KXMLS')) return 'MLS';
     if (upper.includes('KXEPL')) return 'EPL';
     if (upper.includes('KXUCL')) return 'UCL';
-    if (upper.includes('KXATP') || upper.includes('KXWTA')) return 'Tennis';
+    if (upper.includes('KXATP') || upper.includes('KXWTA') || upper.includes('KXITF')) return 'Tennis';
     if (upper.includes('KXPGA') || upper.includes('KXTGL') || upper.includes('KXGOLF') || upper.includes('KXLIV')) return 'Golf';
     if (upper.includes('KXNBL')) return 'NBL';
     if (upper.includes('KXWBC')) return 'WBC';
@@ -1757,7 +1761,7 @@ function detectSport(eventTicker) {
 // Get sport emoji
 function getSportEmoji(sport) {
     const emojis = {
-        'NBA': '🏀', 'NFL': '🏈', 'NHL': '🏒', 'MLB': '⚾', 
+        'NBA': '🏀', 'NFL': '🏈', 'NHL': '🏒', 'MLB': '⚾', 'KBO': '⚾', 'NPB': '⚾',
         'MLS': '⚽', 'NCAAB': '🎓', 'NCAAW': '🎓', 'NCAAF': '🎓',
         'EPL': '⚽', 'UCL': '⚽',
         'Tennis': '🎾', 'Golf': '⛳', 'NBL': '🏀', 'Esports': '🎮',
@@ -7620,7 +7624,7 @@ async function loadBots() {
                     const _dSportBar = document.createElement('div');
                     _dSportBar.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;padding:8px 12px;margin-bottom:4px;align-items:center;';
                     const _dAllActive = _botsActiveSport === 'all';
-                    const _dsi = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'Golf': '⛳' };
+                    const _dsi = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'KBO': '⚾', 'NPB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'Golf': '⛳' };
                     _dSportBar.innerHTML = `<span onclick="window._filterBotsSport('all')" style="background:${_dAllActive ? '#ffaa0022' : '#0f1419'};color:${_dAllActive ? '#ffaa00' : '#556'};border:1px solid ${_dAllActive ? '#ffaa0044' : '#1e2740'};border-radius:6px;padding:3px 8px;font-size:10px;font-weight:700;cursor:pointer;">All <span style="color:${_dTotalCol}">${_dTotalNet >= 0 ? '+' : ''}${(_dTotalNet/100).toFixed(2)}</span></span>` +
                         _dogSportEntries.map(([sp, d]) => {
                             const isActive = _botsActiveSport === sp;
@@ -7749,7 +7753,7 @@ async function loadBots() {
         // ── Sport filter pills (daily P&L from Apex trades only) ──
         const _sportPnlRaw = (window._lastPnlData || {}).arb_sport_pnl || {};
         const _sportPnl = {};
-        const _si = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'Golf': '⛳' };
+        const _si = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'KBO': '⚾', 'NPB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'Golf': '⛳' };
         // Seed from daily P&L (in dollars from sport_pnl)
         Object.entries(_sportPnlRaw).forEach(([sp, netDollars]) => {
             _sportPnl[sp] = { net: Math.round(netDollars * 100), count: 0 };
@@ -13549,7 +13553,7 @@ function renderApexMMSportBreakdown(allTrades) {
     const sportPanel = document.getElementById('apex-mm-sport-panel');
     if (!sportPanel) return;
 
-    const _si = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'NCAAF': '🏈', 'NCAAW': '🏀' };
+    const _si = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'KBO': '⚾', 'NPB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'NCAAF': '🏈', 'NCAAW': '🏀' };
     const sportPnl = {};
     allTrades.forEach(t => {
         const s = t.sport || 'Other';
@@ -13730,7 +13734,7 @@ function filterApexMMLog() {
         return;
     }
 
-    const _si = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'NCAAF': '🏈', 'NCAAW': '🏀' };
+    const _si = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'KBO': '⚾', 'NPB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'NCAAF': '🏈', 'NCAAW': '🏀' };
 
     const cards = filtered.slice(0, 100).map(t => {
         const pnl = t.net_pnl != null ? t.net_pnl : ((t.profit_cents || 0) - (t.loss_cents || 0));
@@ -14647,7 +14651,7 @@ function renderDogSportBreakdown(allTrades) {
     const sportBrkPanel = document.getElementById('dog-sport-breakdown-panel');
     if (!sportBrkPanel) return;
 
-    const _si = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'NCAAF': '🏈', 'NCAAW': '🏀' };
+    const _si = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'KBO': '⚾', 'NPB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'NCAAF': '🏈', 'NCAAW': '🏀' };
     const sportPnl = {};
     allTrades.forEach(t => {
         const s = t.sport || 'Other';
@@ -14721,7 +14725,7 @@ function renderPhantomSportDropdown(sport, allTrades) {
         return;
     }
 
-    const _si = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'NCAAF': '🏈', 'NCAAW': '🏀' };
+    const _si = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'KBO': '⚾', 'NPB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'NCAAF': '🏈', 'NCAAW': '🏀' };
     const icon = _si[sport] || '🎯';
     const labels = SPORT_PERIOD_LABELS[sport] || {};
 
@@ -15059,7 +15063,7 @@ async function loadDogHistory() {
         }
 
         // Sport emoji map
-        const _sportIcon = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'NCAAF': '🏈', 'NCAAW': '🏀' };
+        const _sportIcon = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'KBO': '⚾', 'NPB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'NCAAF': '🏈', 'NCAAW': '🏀' };
 
         // Sport filter
         const sportCounts = {};

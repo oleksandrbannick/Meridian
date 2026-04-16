@@ -2697,7 +2697,8 @@ signal.signal(signal.SIGINT, _graceful_shutdown)
 
 def _migrate_001_recalc_fees():
     """Recalculate fee_cents on all historical trades using correct Kalshi maker formula.
-    Also adjusts profit_cents/loss_cents to include fees."""
+    Also adjusts profit_cents/loss_cents to include fees.
+    Passes ticker so sport-specific free tiers (tennis=free) are respected."""
     global trade_history
     updated = 0
     for t in trade_history:
@@ -2709,7 +2710,8 @@ def _migrate_001_recalc_fees():
         yes_p = int(yes_p)
         no_p = int(no_p)
         qty = int(qty)
-        fee = kalshi_fee_cents(yes_p, no_p, qty)
+        _ticker = t.get('ticker', '')
+        fee = kalshi_fee_cents(yes_p, no_p, qty, _ticker)
         old_fee = t.get('fee_cents', 0) or 0
         if old_fee == fee:
             continue  # already correct

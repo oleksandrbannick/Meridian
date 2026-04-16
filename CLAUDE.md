@@ -51,7 +51,9 @@ WS fill event -> _hedge_worker_queue (pre-warmed thread) -> ws_manager.get_price
 5. Measured fill-to-hedge latency: **sub-5ms**
 
 ## Bid-Follow System (Fav Hedge Walk)
-**No walk intervals. No +1c crawl. No ceiling cap on snap. Just snap to bid.**
+**No ceiling cap on snap. Two phases:**
+- **Phase 1 (0-20s):** Snap to bid every cycle (maker, $0 fees)
+- **Phase 2 (20s+):** Snap to bid+1 every cycle (jump queue, still maker)
 
 Every monitor cycle (~2s):
 - Snap fav to current bid — up or down, no cap

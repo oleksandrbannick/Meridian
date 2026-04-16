@@ -4300,8 +4300,13 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
         if fav_bid <= 0:
             continue
 
-        # Always snap to bid — pure maker, no bid+1 escalation
-        snap_target = fav_bid
+        # Snap to bid; after timer, escalate to bid+1 to jump queue
+        _fav_posted = bot.get('fav_posted_at') or 0
+        _elapsed = (time.time() - _fav_posted) if _fav_posted else 0
+        if _elapsed >= PHANTOM_BID1_TIMER_S:
+            snap_target = min(fav_bid + 1, 99)
+        else:
+            snap_target = fav_bid
 
         # Skip if already at target
         if snap_target == fav_price:
@@ -4343,10 +4348,12 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
             _snap_dog_price = bot.get('dog_price', 0)
             combined = _snap_dog_price + snap_target
             _snap_dir = '↑' if snap_target > fav_price else '↓'
-            print(f'⚡ WS PHANTOM SNAP {_snap_dir}: {bot_id} fav {fav_price}→{snap_target}¢ (bid={fav_bid}¢ combined={combined}¢)')
+            _bid1_tag = ' BID+1' if snap_target > fav_bid else ''
+            print(f'⚡ WS PHANTOM SNAP {_snap_dir}: {bot_id} fav {fav_price}→{snap_target}¢ (bid={fav_bid}¢ combined={combined}¢{_bid1_tag})')
             bot_log('PHANTOM_WS_INSTANT_SNAP', bot_id, {
                 'old_price': fav_price, 'new_price': snap_target,
                 'fav_bid': fav_bid, 'dog_price': _snap_dog_price,
+                'bid_plus_1': snap_target > fav_bid,
                 'combined': combined,
             })
             save_state()
@@ -11636,6 +11643,7 @@ def _fire_timeout_amend(bot_id, bot, order_id, amend_side, amend_price, qty, tic
 # ═══════════════════════════════════════════════════════════════════
 HARD_CEILING_CENTS = 98
 # SNAP_CEILING_CENTS removed — fav always snaps to bid, no ceiling cap
+PHANTOM_BID1_TIMER_S = 20  # After 20s unfilled, escalate snap from bid to bid+1
 
 # ── Game urgency system: adaptive behavior based on game phase ──
 URGENCY_PARAMS = {
@@ -13451,8 +13459,11 @@ def _handle_phantom(bot_id, bot, actions):
         # Fav bid is back — reset no-bid counter
         bot['_no_fav_bid_count'] = 0
 
-        # Always snap to bid — pure maker, $0 fees
-        new_fav_price = current_fav_bid
+        # Snap to bid; after timer, escalate to bid+1 to jump queue
+        if wait_s >= PHANTOM_BID1_TIMER_S:
+            new_fav_price = min(current_fav_bid + 1, 99)
+        else:
+            new_fav_price = current_fav_bid
 
         if new_fav_price <= 0:
             return
@@ -13496,14 +13507,16 @@ def _handle_phantom(bot_id, bot, actions):
                 _phantom_drop_lock.release()
             walk_count = bot.get('fav_walk_count', 0) + 1
             direction = '↓' if new_fav_price < current_fav_price else '↑'
+            _bid1_tag = ' BID+1' if new_fav_price > current_fav_bid else ''
             print(f'📈 PHANTOM {walk_type.upper()}: {bot_id} fav {current_fav_price}¢{direction}{new_fav_price}¢ '
-                  f'(bid={current_fav_bid}¢ combined={combined}¢ step #{walk_count})')
+                  f'(bid={current_fav_bid}¢ combined={combined}¢ step #{walk_count}{_bid1_tag})')
             bot_log('PHANTOM_WALK_SUCCESS', bot_id, {
                 'walk_type': walk_type, 'old_price': current_fav_price,
                 'new_price': new_fav_price, 'fav_bid': current_fav_bid,
                 'fav_ask': current_fav_ask,
                 'dog_price': dog_price, 'combined': combined,
                 'walk_count': walk_count, 'wait_s': round(wait_s, 1),
+                'bid_plus_1': new_fav_price > current_fav_bid,
             })
             bot['fav_price'] = new_fav_price
             bot['fav_walk_count'] = walk_count
@@ -14780,8 +14793,12 @@ def _handle_phantom_ladder(bot_id, bot, actions):
 
         bot['_no_fav_bid_count'] = 0
 
-        # ── Bid-follow: snap to bid every cycle, no cap ──
-        new_fav_price = current_fav_bid
+        # ── Bid-follow: snap to bid, escalate to bid+1 after timer ──
+        _ladder_wait = now - (bot.get('fav_posted_at') or now)
+        if _ladder_wait >= PHANTOM_BID1_TIMER_S:
+            new_fav_price = min(current_fav_bid + 1, 99)
+        else:
+            new_fav_price = current_fav_bid
         if new_fav_price == current_fav_price:
             return
 

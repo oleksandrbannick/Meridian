@@ -23318,17 +23318,13 @@ def _run_startup():
                 if _bot.get('status') != 'dog_anchor_posted':
                     continue
 
-                # Collect all dog order IDs to check (current + old cancel-race orders)
-                _check_oids = set()
+                # Only check the CURRENT dog order — old orders in _all_dog_order_ids
+                # are from completed runs whose fills were already hedged.
+                # Checking them causes duplicate hedges on every restart.
                 _cur_oid = _bot.get('dog_order_id')
-                if _cur_oid:
-                    _check_oids.add(_cur_oid)
-                for _old_oid in (_bot.get('_all_dog_order_ids') or []):
-                    if _old_oid:
-                        _check_oids.add(_old_oid)
-
-                if not _check_oids:
+                if not _cur_oid:
                     continue
+                _check_oids = {_cur_oid}
 
                 # Sum actual fills across all dog orders from Kalshi
                 _total_actual = 0

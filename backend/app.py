@@ -2481,11 +2481,11 @@ _save_lock = threading.Lock()
 applied_migrations: list = []  # tracks which migrations have run
 
 # ─── Kalshi Fee Calculation ──────────────────────────────────────────────────
-# Maker fee = ceil(0.0175 * C * P * (1-P) * 100) cents per side
-# Taker fee = ceil(0.07   * C * P * (1-P) * 100) cents per side
+# Maker fee = 0 (free for all tiers as of 2026-04)
+# Taker fee = ceil(0.0164 * C * P * (1-P) * 100) cents per side
 # Arb bots use resting limit orders → maker fee on both legs.
 KALSHI_MAKER_RATE = 0.0
-KALSHI_TAKER_RATE = 0.07
+KALSHI_TAKER_RATE = 0.0164
 
 def _kalshi_side_fee_cents(price_cents: int, qty: int) -> int:
     """Maker fee for one side in cents (rounded up)."""

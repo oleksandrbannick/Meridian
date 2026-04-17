@@ -3646,14 +3646,13 @@ function displayOrderbookLadder(orderbook) {
     const roomCol = hedgeRoom >= 4 ? '#00ff88' : hedgeRoom >= 2 ? '#ffaa00' : '#ff4444';
     const roomLabel = hedgeRoom >= 4 ? 'wide spread' : hedgeRoom >= 2 ? 'ok spread' : 'tight — fav mirrors dog';
     let verdict = '', verdictCol = '';
-    // ── Depth rec driven by PPI score — no sport penalties ──
+    // ── Depth rec driven by PPI score — aligned with backend _calculate_ppi ──
     let _recDepth;
-    if (catchScore >= 85) _recDepth = 4;                                    // WALL — ultra-exclusive, pristine book
-    else if (catchScore >= 70) _recDepth = 5;                              // PRIME — money zone workhorse
-    else if (catchScore >= 55) _recDepth = 6;                              // SNIPER — money zone (standard variance)
-    else if (catchScore >= 45) _recDepth = 7;                              // TRAP — caution zone
-    else if (catchScore >= 40) _recDepth = 8;                              // DEEP — recovery buffer
-    else if (catchScore >= 30) _recDepth = 9;                              // FLOOR — last stop before pull
+    if (catchScore >= 85) _recDepth = 4;                                    // WALL
+    else if (catchScore >= 55) _recDepth = 5;                              // PRIME
+    else if (catchScore >= 45) _recDepth = 6;                              // TRAP
+    else if (catchScore >= 40) _recDepth = 7;                              // DEEP
+    else if (catchScore >= 35) _recDepth = 8;                              // FLOOR
     else _recDepth = 0;                                                    // KILL — pull
     const _baseDepth = _recDepth;  // before gap overrides
     // Fav gaps override (only when not KILL — gaps don't save a toxic book)
@@ -4582,14 +4581,8 @@ function updateAnchorPreview() {
                     else reasons.push(`sweep ${Math.round(sweepAtRec/1000)}k > fav ${Math.round(favTop3/1000)}k`);
                 }
                 if (dd < 100) reasons.push('thin dog — fast fill');
-                const _userQty = parseInt(document.getElementById('scan-anchor-qty')?.value) || 1;
-                if (_userQty > maxQty && maxQty > 0) {
-                    const _qtyBump = _userQty > maxQty * 3 ? 2 : 1;
-                    recDepth = Math.max(recDepth, recDepth + _qtyBump);
-                    reasons.push(`qty ${_userQty} > safe ${maxQty}`);
-                }
                 recDepth = Math.max(recDepth, 4);
-                recDepth = Math.min(recDepth, 12);
+                recDepth = Math.min(recDepth, 8);
             }
             const recNote = reasons.join(' · ');
             const recCol = anchorDepth >= recDepth && anchorDepth <= recDepth + 3 ? '#00ff88'

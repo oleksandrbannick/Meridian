@@ -7726,9 +7726,16 @@ async function loadBots() {
             'dog_filled': '#ff66aa', 'ladder_filled_no_fav': '#ff66aa', 'waiting_repeat': '#ffaa00',
             'completed': '#00ff88', 'stopped': '#ff4444', 'awaiting_settlement': '#ffd740',
         };
+        function _isBotPulled(b) {
+            const s = b.status || '';
+            if (s !== 'dog_anchor_posted' && s !== 'waiting_repeat') return false;
+            if (b._price_floor_pulled || b._parked_at_ceiling || b._ppi_pulled) return true;
+            const _p = b._live_ppi != null ? b._live_ppi : b._last_ppi;
+            return (_p != null && _p < 35);
+        }
         function _getBotDotColor(b) {
             const s = b.status || '';
-            if (s === 'dog_anchor_posted' && (b._price_floor_pulled || b._parked_at_ceiling)) return '#aa77ff';
+            if (_isBotPulled(b)) return '#aa77ff';
             if ((s === 'completed' || s === 'stopped') && b._death_zone_stopped) return '#ff3366';
             return _stateColorMap[s] || '#556';
         }
@@ -7740,7 +7747,7 @@ async function loadBots() {
         };
         function _getBotDotLabel(b) {
             const s = b.status || '';
-            if (s === 'dog_anchor_posted' && (b._price_floor_pulled || b._parked_at_ceiling)) return 'Pulled';
+            if (_isBotPulled(b)) return 'Pulled';
             if ((s === 'completed' || s === 'stopped') && b._death_zone_stopped) return 'Death';
             return _stateNameMap[s] || s;
         }

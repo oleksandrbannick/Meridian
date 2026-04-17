@@ -2194,6 +2194,13 @@ def get_scoreboard(sport):
         'ucl': 'soccer/uefa.champions',
         'atp': 'tennis/atp',
         'wta': 'tennis/wta',
+        # ESPN coverage verified 2026-04-17 via /scoreboard probe
+        'nbl':        'basketball/nbl',
+        'laliga':     'soccer/esp.1',
+        'bundesliga': 'soccer/ger.1',
+        'ligue1':     'soccer/fra.1',
+        'seriea':     'soccer/ita.1',
+        'ligamx':     'soccer/mex.1',
     }
     sport_path = sport_map.get(sport.lower())
     if not sport_path:
@@ -6298,7 +6305,7 @@ def _is_game_live(ticker: str) -> bool:
         # No live signal found — fall through to expiration check
 
     # ── OTHER SPORTS: Check ESPN first (authoritative "game in progress") ──
-    is_sports = any(ticker.startswith(p) for p in ('KXNBA', 'KXNCAA', 'KXNHL', 'KXMLB', 'KXMLS', 'KXEPL', 'KXUCL', 'KXKBO', 'KXNPB'))
+    is_sports = any(ticker.startswith(p) for p in ('KXNBA', 'KXNCAA', 'KXNHL', 'KXMLB', 'KXMLS', 'KXEPL', 'KXUCL', 'KXKBO', 'KXNPB', 'KXNBL', 'KXLALIGA', 'KXBUNDESLIGA', 'KXLIGUE1', 'KXSERIEA', 'KXLIGAMX'))
     if is_sports:
         try:
             _refresh_espn_cache()
@@ -6397,7 +6404,7 @@ def _is_game_over_cached(ticker: str) -> bool:
         # No milestone data — check date (if ticker date is in the past, game is likely over)
 
     # ESPN sports: check cache
-    is_sports = any(ticker.startswith(p) for p in ('KXNBA', 'KXNCAA', 'KXNHL', 'KXMLB', 'KXMLS', 'KXEPL', 'KXUCL', 'KXKBO', 'KXNPB'))
+    is_sports = any(ticker.startswith(p) for p in ('KXNBA', 'KXNCAA', 'KXNHL', 'KXMLB', 'KXMLS', 'KXEPL', 'KXUCL', 'KXKBO', 'KXNPB', 'KXNBL', 'KXLALIGA', 'KXBUNDESLIGA', 'KXLIGUE1', 'KXSERIEA', 'KXLIGAMX'))
     if is_sports:
         info = _espn_cache.get('data', {})
         if info:

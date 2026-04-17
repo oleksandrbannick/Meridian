@@ -108,6 +108,7 @@ let liveScoresInterval = null;
 let selectedMarket = null;
 let selectedSide = null;
 let currentSportFilter = 'all';
+let currentSubFilter = null;    // sub-filter within intl/soccer (e.g. 'kbl', 'laliga')
 let currentLiveFilter = false;  // true = show only live games within sport
 let liveGames = {}; // keyed by team abbreviation pairs for quick lookup
 let allGameData = {}; // ALL games (pre/in/post) for score display on every card
@@ -248,6 +249,7 @@ function getPrice(market, field) {
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
+    renderSportPills();
     setupSearch();
     autoLogin();
     loadLiveScores();
@@ -321,10 +323,9 @@ function switchTab(tab) {
 async function navigateToMarket(eventTickerPrefix) {
     // 1. Reset any active filters so the target card is guaranteed to be in the DOM
     currentSportFilter = 'all';
+    currentSubFilter = null;
     currentLiveFilter = false;
-    document.querySelectorAll('.sport-pill').forEach(p => {
-        p.classList.toggle('active', p.dataset.sport === 'all');
-    });
+    renderSportPills();
 
     // 2. Switch tab
     switchTab('markets');
@@ -394,39 +395,40 @@ function navigateToBot(ticker, botType) {
 
 async function loadLiveScores() {
     try {
-        // Fetch ALL sports in parallel (including women's college basketball + tennis)
-        const [nbaRes, nflRes, nhlRes, mlbRes, ncaabRes, ncaawRes, mlsRes, eplRes, uclRes, atpRes, wtaRes] = await Promise.allSettled([
-            fetch(`${API_BASE}/scoreboard/nba`).then(r => r.json()),
-            fetch(`${API_BASE}/scoreboard/nfl`).then(r => r.json()),
-            fetch(`${API_BASE}/scoreboard/nhl`).then(r => r.json()),
-            fetch(`${API_BASE}/scoreboard/mlb`).then(r => r.json()),
-            fetch(`${API_BASE}/scoreboard/ncaab`).then(r => r.json()),
-            fetch(`${API_BASE}/scoreboard/ncaaw`).then(r => r.json()),
-            fetch(`${API_BASE}/scoreboard/mls`).then(r => r.json()),
-            fetch(`${API_BASE}/scoreboard/epl`).then(r => r.json()),
-            fetch(`${API_BASE}/scoreboard/ucl`).then(r => r.json()),
-            fetch(`${API_BASE}/scoreboard/atp`).then(r => r.json()),
-            fetch(`${API_BASE}/scoreboard/wta`).then(r => r.json()),
-        ]);
+        // Scoreboards keyed by the sport label detectSport() returns.
+        // Any entry here must have a matching key in the backend sport_map.
+        const scoreboardFetches = [
+            { key: 'nba',        sport: 'NBA' },
+            { key: 'nfl',        sport: 'NFL' },
+            { key: 'nhl',        sport: 'NHL' },
+            { key: 'mlb',        sport: 'MLB' },
+            { key: 'ncaab',      sport: 'NCAAB' },
+            { key: 'ncaaw',      sport: 'NCAAW' },
+            { key: 'ncaaf',      sport: 'NCAAF' },
+            { key: 'mls',        sport: 'MLS' },
+            { key: 'epl',        sport: 'EPL' },
+            { key: 'ucl',        sport: 'UCL' },
+            { key: 'atp',        sport: 'Tennis' },
+            { key: 'wta',        sport: 'Tennis' },
+            { key: 'nbl',        sport: 'NBL' },
+            { key: 'laliga',     sport: 'LaLiga' },
+            { key: 'bundesliga', sport: 'Bundesliga' },
+            { key: 'ligue1',     sport: 'Ligue1' },
+            { key: 'seriea',     sport: 'SerieA' },
+            { key: 'ligamx',     sport: 'LigaMX' },
+        ];
+
+        const results = await Promise.allSettled(
+            scoreboardFetches.map(s => fetch(`${API_BASE}/scoreboard/${s.key}`).then(r => r.json()))
+        );
 
         const games = [];
-        const addGames = (res, sport) => {
+        results.forEach((res, i) => {
             if (res.status === 'fulfilled' && res.value.events) {
+                const sport = scoreboardFetches[i].sport;
                 games.push(...res.value.events.map(e => parseESPNGame(e, sport)));
             }
-        };
-        addGames(nbaRes, 'NBA');
-        addGames(nflRes, 'NFL');
-        addGames(nhlRes, 'NHL');
-        addGames(mlbRes, 'MLB');
-        addGames(ncaabRes, 'NCAAB');
-        addGames(ncaawRes, 'NCAAW');
-        addGames(mlsRes, 'MLS');
-        addGames(eplRes, 'EPL');
-        addGames(uclRes, 'UCL');
-        // Tennis: both ATP and WTA use sport='Tennis' to match detectSport()
-        addGames(atpRes, 'Tennis');
-        addGames(wtaRes, 'Tennis');
+        });
 
         // Build lookup tables — keyed by sport:abbreviation to avoid cross-sport collisions
         // (e.g. HOU = Rockets NBA, Texans NFL, Astros MLB)
@@ -517,8 +519,8 @@ function parseESPNGame(event, sport) {
     let periodLabel = '';
     const state = statusType.state || 'pre';
     if (state === 'in' || state === 'post') {
-        if (sport === 'NBA') {
-            // NBA: quarters (or OT)
+        if (sport === 'NBA' || sport === 'NBL') {
+            // NBA / NBL (Australia): quarters (or OT)
             if (period <= 4) periodLabel = `Q${period}`;
             else periodLabel = period === 5 ? 'OT' : `${period - 4}OT`;
         } else if (sport === 'NCAAB' || sport === 'NCAAW') {
@@ -530,8 +532,8 @@ function parseESPNGame(event, sport) {
             if (period <= 3) periodLabel = `P${period}`;
             else if (period === 4) periodLabel = 'OT';
             else periodLabel = `${period - 3}OT`;
-        } else if (sport === 'NFL') {
-            // Football: quarters (or OT)
+        } else if (sport === 'NFL' || sport === 'NCAAF') {
+            // Football (pro / college): quarters (or OT)
             if (period <= 4) periodLabel = `Q${period}`;
             else periodLabel = 'OT';
         } else if (sport === 'MLB') {
@@ -601,23 +603,155 @@ function parseESPNGame(event, sport) {
 
 // ─── SPORT FILTER ─────────────────────────────────────────────────────────────
 
+// Single source of truth for sport filter pills. Order = top-row render order.
+// `prefixes`   - ticker prefixes that belong to this sport (used by matchesSport)
+// `excludePrefixes` - prefixes to REJECT even if `prefixes` matches (NCAAB vs NCAAW)
+// `subFilters` - optional second-tier pills (drill into a specific league)
+// `unknownOnly`- true = this pill shows only markets detectSport() calls 'Sports'
+const SPORT_FILTER_CONFIG = {
+    all:    { label: 'All' },
+    live:   { label: '🔴 LIVE' },
+    nba:    { label: '🏀 NBA',    prefixes: ['KXNBA'] },
+    nfl:    { label: '🏈 NFL',    prefixes: ['KXNFL'] },
+    mlb:    { label: '⚾ MLB',    prefixes: ['KXMLB'] },
+    nhl:    { label: '🏒 NHL',    prefixes: ['KXNHL'] },
+    ncaab:  { label: '🎓 NCAAB',  prefixes: ['KXNCAAMB','KXMARMAD'], excludePrefixes: ['KXNCAAWB'] },
+    ncaaw:  { label: '🎓 NCAAW',  prefixes: ['KXNCAAWB'] },
+    ncaaf:  { label: '🎓 NCAAF',  prefixes: ['KXNCAAF'] },
+    soccer: {
+        label: '⚽ Soccer',
+        prefixes: ['KXEPL','KXUCL','KXMLS','KXLALIGA','KXLIGAMX','KXSERIEA','KXBUNDESLIGA','KXLIGUE1'],
+        subFilters: [
+            { key: 'epl',        label: '🏴 EPL',         prefixes: ['KXEPL'] },
+            { key: 'ucl',        label: '🏆 UCL',         prefixes: ['KXUCL'] },
+            { key: 'mls',        label: '🇺🇸 MLS',         prefixes: ['KXMLS'] },
+            { key: 'laliga',     label: '🇪🇸 LaLiga',      prefixes: ['KXLALIGA'] },
+            { key: 'bundesliga', label: '🇩🇪 Bundesliga',  prefixes: ['KXBUNDESLIGA'] },
+            { key: 'seriea',     label: '🇮🇹 Serie A',     prefixes: ['KXSERIEA'] },
+            { key: 'ligue1',     label: '🇫🇷 Ligue 1',     prefixes: ['KXLIGUE1'] },
+            { key: 'ligamx',     label: '🇲🇽 Liga MX',     prefixes: ['KXLIGAMX'] },
+        ],
+    },
+    tennis: { label: '🎾 Tennis', prefixes: ['KXATP','KXWTA','KXITF'] },
+    golf:   { label: '⛳ Golf',   prefixes: ['KXPGA','KXTGL','KXGOLF','KXLIV'] },
+    kbo:    { label: '⚾ KBO',    prefixes: ['KXKBO'] },
+    npb:    { label: '⚾ NPB',    prefixes: ['KXNPB'] },
+    wbc:    { label: '⚾ WBC',    prefixes: ['KXWBC'] },
+    ufc:    { label: '🥊 UFC',    prefixes: ['KXUFC'] },
+    f1:     { label: '🏎️ F1',    prefixes: ['KXF1'] },
+    cricket:{ label: '🏏 Cricket',prefixes: ['KXIPL'] },
+    intl: {
+        label: "🌍 Int'l",
+        prefixes: ['KXNBL','KXKBL','KXCBA','KXEUROLEAGUE','KXBBL','KXGBL','KXACB','KXJBLEAGUE','KXLNBELITE','KXVTB','KXBSL','KXABA'],
+        subFilters: [
+            { key: 'euroleague', label: '🇪🇺 EuroLeague',  prefixes: ['KXEUROLEAGUE'] },
+            { key: 'nbl',        label: '🇦🇺 NBL',          prefixes: ['KXNBL'] },
+            { key: 'kbl',        label: '🇰🇷 KBL',          prefixes: ['KXKBL'] },
+            { key: 'cba',        label: '🇨🇳 CBA',          prefixes: ['KXCBA'] },
+            { key: 'jbleague',   label: '🇯🇵 B League',     prefixes: ['KXJBLEAGUE'] },
+            { key: 'acb',        label: '🇪🇸 ACB',          prefixes: ['KXACB'] },
+            { key: 'lnbelite',   label: '🇫🇷 LNB Elite',    prefixes: ['KXLNBELITE'] },
+            { key: 'bbl',        label: '🇩🇪 BBL',          prefixes: ['KXBBL'] },
+            { key: 'gbl',        label: '🇬🇷 GBL',          prefixes: ['KXGBL'] },
+            { key: 'vtb',        label: '🇷🇺 VTB',          prefixes: ['KXVTB'] },
+            { key: 'bsl',        label: '🇹🇷 BSL',          prefixes: ['KXBSL'] },
+            { key: 'aba',        label: '🇭🇷 ABA',          prefixes: ['KXABA'] },
+        ],
+    },
+    other:  { label: 'Other', unknownOnly: true },
+};
+
+// Sports that lack any public live-score provider — UI shows "Kalshi-reported" instead
+// of "Score unavailable" so users know it's a data-source gap, not a bug.
+const NO_SCORE_SPORTS = new Set(['KBO','NPB','WBC','KBL','CBA','EuroLeague','BBL','GBL','ACB','JBLeague','LNBElite','VTB','BSL','ABA','UFC','F1','Cricket']);
+
+// Rank order for cross-sport grid sort (smaller = earlier)
+const _SPORT_RANK = (() => {
+    const rank = {};
+    Object.keys(SPORT_FILTER_CONFIG).forEach((k, i) => { rank[k] = i; });
+    return rank;
+})();
+
+function _sportRankForTicker(ticker) {
+    const detected = (typeof detectSport === 'function') ? detectSport(ticker) : '';
+    const et = (ticker || '').toUpperCase();
+    for (const [key, cfg] of Object.entries(SPORT_FILTER_CONFIG)) {
+        if (!cfg.prefixes) continue;
+        if (cfg.excludePrefixes?.some(p => et.includes(p))) continue;
+        if (cfg.prefixes.some(p => et.includes(p))) return _SPORT_RANK[key];
+    }
+    return 9999; // unknown → sort last
+}
+
+// True if `ticker` belongs to the sport identified by `key` (optionally a sub-filter).
+function matchesSport(ticker, key, subKey) {
+    const cfg = SPORT_FILTER_CONFIG[key];
+    if (!cfg) return true;
+    if (cfg.unknownOnly) return detectSport(ticker) === 'Sports';
+    if (!cfg.prefixes) return true;
+    const et = (ticker || '').toUpperCase();
+    let pool = cfg.prefixes;
+    if (subKey && cfg.subFilters) {
+        const sub = cfg.subFilters.find(s => s.key === subKey);
+        if (sub) pool = sub.prefixes;
+    }
+    if (!pool.some(p => et.includes(p))) return false;
+    if (cfg.excludePrefixes?.some(p => et.includes(p))) return false;
+    return true;
+}
+
+// Render the top-row sport pills into #sport-pills from SPORT_FILTER_CONFIG.
+function renderSportPills() {
+    const host = document.getElementById('sport-pills');
+    if (!host) return;
+    const parts = [];
+    for (const [key, cfg] of Object.entries(SPORT_FILTER_CONFIG)) {
+        const active = key === currentSportFilter || (key === 'live' && currentLiveFilter);
+        parts.push(`<button class="sport-pill${active ? ' active' : ''}" data-sport="${key}" onclick="filterBySport('${key}')">${cfg.label}</button>`);
+    }
+    host.innerHTML = parts.join('');
+    renderSubPills();
+}
+
+// Render the sub-filter row for the currently-selected sport (if it has subFilters).
+function renderSubPills() {
+    const host = document.getElementById('sport-subpills');
+    if (!host) return;
+    const cfg = SPORT_FILTER_CONFIG[currentSportFilter];
+    if (!cfg || !cfg.subFilters) {
+        host.innerHTML = '';
+        host.classList.add('hidden');
+        return;
+    }
+    const allActive = !currentSubFilter;
+    const parts = [`<button class="sport-pill sport-pill-sub${allActive ? ' active' : ''}" data-sub="" onclick="filterBySubSport(null)">All ${cfg.label.replace(/^[^A-Za-z]+/, '')}</button>`];
+    for (const sub of cfg.subFilters) {
+        const active = currentSubFilter === sub.key;
+        parts.push(`<button class="sport-pill sport-pill-sub${active ? ' active' : ''}" data-sub="${sub.key}" onclick="filterBySubSport('${sub.key}')">${sub.label}</button>`);
+    }
+    host.innerHTML = parts.join('');
+    host.classList.remove('hidden');
+}
+
+function filterBySubSport(subKey) {
+    currentSubFilter = subKey;
+    renderSubPills();
+    applyFilters();
+}
+
 function filterBySport(sport) {
     // Toggle live sub-filter
     if (sport === 'live') {
         currentLiveFilter = !currentLiveFilter;
         // Keep current sport filter — live is client-side only, no reload needed
     } else {
+        // Changing top-level sport resets any sub-filter selection
+        if (sport !== currentSportFilter) currentSubFilter = null;
         currentSportFilter = sport;
     }
 
-    // Update pill active states
-    document.querySelectorAll('.sport-pill').forEach(p => {
-        if (p.dataset.sport === 'live') {
-            p.classList.toggle('active', currentLiveFilter);
-        } else {
-            p.classList.toggle('active', p.dataset.sport === currentSportFilter);
-        }
-    });
+    // Re-render pill rows so active states + sub-row visibility stay in sync
+    renderSportPills();
 
     // If we picked a sport (not toggling live), fetch fresh data
     if (sport !== 'live') {
@@ -637,29 +771,11 @@ function applyFilters() {
     const query = (document.getElementById('search-box')?.value || '').toLowerCase();
     let filtered = allMarkets;
 
-    // Sport filter first (client-side since we now fetch all)
+    // Sport filter — delegates to SPORT_FILTER_CONFIG via matchesSport()
     if (currentSportFilter !== 'all') {
         filtered = filtered.filter(m => {
-            const et = ((m.event_ticker || '') + (m.series_ticker || '') + (m.ticker || '')).toUpperCase();
-            switch (currentSportFilter) {
-                case 'nba':   return et.includes('NBA');
-                case 'nfl':   return et.includes('NFL') || et.includes('NFLG');
-                case 'mlb':   return et.includes('MLB') || et.includes('KXMLB');
-                case 'nhl':   return et.includes('NHL') || et.includes('KXNHL');
-                case 'ncaab': return (et.includes('NCAAMB') || et.includes('KXMARMAD')) && !et.includes('NCAAWB');
-                case 'ncaaw': return et.includes('NCAAWB');
-                case 'mls':   return et.includes('MLS') || et.includes('KXMLS');
-                case 'soccer': return et.includes('EPL') || et.includes('UCL') || et.includes('MLS');
-                case 'tennis': return et.includes('KXATP') || et.includes('KXWTA') || et.includes('KXITF');
-                case 'golf':  return et.includes('KXPGA') || et.includes('KXTGL') || et.includes('KXGOLF') || et.includes('KXLIV');
-                case 'nbl':   return et.includes('KXNBL');
-                case 'wbc':   return et.includes('KXWBC');
-                case 'kbo':   return et.includes('KXKBO');
-                case 'npb':   return et.includes('KXNPB');
-                case 'intl':  return et.includes('KXVTB') || et.includes('KXBSL') || et.includes('KXABA') || et.includes('KXNBL') || et.includes('KXKBL') || et.includes('KXCBA') || et.includes('KXEUROLEAGUE') || et.includes('KXBBL') || et.includes('KXGBL') || et.includes('KXACB') || et.includes('KXJBLEAGUE') || et.includes('KXLNBELITE');
-                case 'other': return !et.includes('NBA') && !et.includes('NFL') && !et.includes('MLB') && !et.includes('NHL') && !et.includes('NCAA') && !et.includes('KXMARMAD') && !et.includes('MLS') && !et.includes('EPL') && !et.includes('UCL') && !et.includes('KXATP') && !et.includes('KXWTA') && !et.includes('KXITF') && !et.includes('KXPGA') && !et.includes('KXTGL') && !et.includes('KXGOLF') && !et.includes('KXLIV') && !et.includes('KXNBL') && !et.includes('KXWBC') && !et.includes('KXKBO') && !et.includes('KXNPB') && !et.includes('KXVTB') && !et.includes('KXBSL') && !et.includes('KXABA') && !et.includes('KXKBL') && !et.includes('KXCBA') && !et.includes('KXEUROLEAGUE') && !et.includes('KXBBL') && !et.includes('KXGBL') && !et.includes('KXACB') && !et.includes('KXJBLEAGUE') && !et.includes('KXLNBELITE');
-                default: return true;
-            }
+            const et = (m.event_ticker || '') + (m.series_ticker || '') + (m.ticker || '');
+            return matchesSport(et, currentSportFilter, currentSubFilter);
         });
     }
 
@@ -1604,8 +1720,20 @@ function displayMarkets(markets) {
     grid.innerHTML = '';
     grid.style.gridTemplateColumns = '1fr'; // Single column for compact display
     
+    // Sort: primary = sport rank (from SPORT_FILTER_CONFIG order), secondary = earliest market start time
+    const sortedEvents = Object.values(events).sort((a, b) => {
+        const tickerA = (a.markets && a.markets[0] && (a.markets[0].event_ticker || a.markets[0].ticker)) || '';
+        const tickerB = (b.markets && b.markets[0] && (b.markets[0].event_ticker || b.markets[0].ticker)) || '';
+        const rankA = _sportRankForTicker(tickerA);
+        const rankB = _sportRankForTicker(tickerB);
+        if (rankA !== rankB) return rankA - rankB;
+        const tA = a.markets?.[0]?.expected_expiration_time || a.markets?.[0]?.close_time || '';
+        const tB = b.markets?.[0]?.expected_expiration_time || b.markets?.[0]?.close_time || '';
+        return tA.localeCompare(tB);
+    });
+
     // Display each event with all its markets in one compact row
-    Object.values(events).forEach(eventData => {
+    sortedEvents.forEach(eventData => {
         displayEventRow(eventData, grid);
     });
 }
@@ -2223,10 +2351,13 @@ function displayEventRow(eventData, container) {
         const scoreboard = buildScoreboard(gameScore);
         if (scoreboard) card.appendChild(scoreboard);
     } else if (kalshiLive) {
-        // No ESPN data (or ESPN still says pregame) but Kalshi says it's live
+        // No ESPN data (or ESPN still says pregame) but Kalshi says it's live.
+        // Distinguish sports with no known score provider ("Kalshi-reported")
+        // from sports where a provider exists but returned nothing ("Score unavailable").
         const liveBanner = document.createElement('div');
         liveBanner.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:8px;background:linear-gradient(135deg,#0a1a0a,#0f1f12);border:1px solid #00ff88;border-radius:8px;padding:10px 16px;margin-bottom:12px;';
-        liveBanner.innerHTML = `<span style="color:#ff3333;font-size:10px;font-weight:800;letter-spacing:1px;display:flex;align-items:center;gap:4px;"><span style="animation:pulse 1.5s infinite;">●</span> LIVE</span><span style="color:#8892a6;font-size:12px;">Score unavailable</span>`;
+        const bannerNote = NO_SCORE_SPORTS.has(sport) ? 'Kalshi-reported (no score feed)' : 'Score unavailable';
+        liveBanner.innerHTML = `<span style="color:#ff3333;font-size:10px;font-weight:800;letter-spacing:1px;display:flex;align-items:center;gap:4px;"><span style="animation:pulse 1.5s infinite;">●</span> LIVE</span><span style="color:#8892a6;font-size:12px;">${bannerNote}</span>`;
         card.appendChild(liveBanner);
     } else if (!gameScore && eventData.markets && eventData.markets.length > 0) {
         // No score data at all — show scheduled start or DELAYED status

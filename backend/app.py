@@ -1997,17 +1997,17 @@ def _fetch_api_tennis_scoreboard(tour_filter):
             print(f'⚠️ API Tennis fetch failed: {e}')
             all_matches = []
 
-    # Filter by tour: ATP/WTA Singles + Challengers (no doubles, no ITF)
-    # Kalshi has ATP, WTA, ATP Challenger, and WTA Challenger markets
+    # Filter by tour: ATP/WTA Singles + Challengers + ITF (no doubles)
+    # Kalshi has ATP, WTA, ATP Challenger, WTA Challenger, ITF (M15/M25, W15/W25/W35/W60/W75/W100) markets
     tour_lower = tour_filter.lower()
     def _tennis_match_filter(m):
         t = (m.get('event_type_type') or '').lower()
         if 'doubles' in t:
             return False
         if tour_lower == 'atp':
-            return 'atp' in t or 'challenger men' in t
+            return 'atp' in t or 'challenger men' in t or 'itf men' in t
         else:  # wta
-            return 'wta' in t or 'challenger women' in t
+            return 'wta' in t or 'challenger women' in t or 'itf women' in t
     filtered = [m for m in all_matches if _tennis_match_filter(m)]
 
     # Exclude pre-match games from tomorrow — only include live/finished matches from the extra day
@@ -15206,11 +15206,11 @@ def _handle_apex(bot_id, bot, actions):
                 _obi = _lob.get_weighted_obi()
                 _parts = []
                 if _yd < APEX_DEPTH_RECOVER_MIN:
-                    _parts.append(f'thin_yes ({_yd}<{APEX_DEPTH_RECOVER_MIN})')
+                    _parts.append(f'thin_yes ({_yd:.0f}<{APEX_DEPTH_RECOVER_MIN})')
                 if _nd < APEX_DEPTH_RECOVER_MIN:
-                    _parts.append(f'thin_no ({_nd}<{APEX_DEPTH_RECOVER_MIN})')
+                    _parts.append(f'thin_no ({_nd:.0f}<{APEX_DEPTH_RECOVER_MIN})')
                 if abs(_obi) > APEX_MM_RECOVER_OBI:
-                    _parts.append(f'obi ({_obi:.2f}>{APEX_MM_RECOVER_OBI})')
+                    _parts.append(f'obi ({_obi:.2f}>{APEX_MM_RECOVER_OBI:.2f})')
                 if _parts:
                     bot['_last_pull_reason'] = ' + '.join(_parts) + ' (entry only)'
         return

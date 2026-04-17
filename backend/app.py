@@ -2194,6 +2194,13 @@ def get_scoreboard(sport):
         'ucl': 'soccer/uefa.champions',
         'atp': 'tennis/atp',
         'wta': 'tennis/wta',
+        # ESPN coverage verified 2026-04-17 via /scoreboard probe
+        'nbl':        'basketball/nbl',
+        'laliga':     'soccer/esp.1',
+        'bundesliga': 'soccer/ger.1',
+        'ligue1':     'soccer/fra.1',
+        'seriea':     'soccer/ita.1',
+        'ligamx':     'soccer/mex.1',
     }
     sport_path = sport_map.get(sport.lower())
     if not sport_path:
@@ -6316,7 +6323,7 @@ def _is_game_live(ticker: str) -> bool:
         # No live signal found — fall through to expiration check
 
     # ── OTHER SPORTS: Check ESPN first (authoritative "game in progress") ──
-    is_sports = any(ticker.startswith(p) for p in ('KXNBA', 'KXNCAA', 'KXNHL', 'KXMLB', 'KXMLS', 'KXEPL', 'KXUCL', 'KXKBO', 'KXNPB'))
+    is_sports = any(ticker.startswith(p) for p in ('KXNBA', 'KXNCAA', 'KXNHL', 'KXMLB', 'KXMLS', 'KXEPL', 'KXUCL', 'KXKBO', 'KXNPB', 'KXNBL', 'KXLALIGA', 'KXBUNDESLIGA', 'KXLIGUE1', 'KXSERIEA', 'KXLIGAMX'))
     if is_sports:
         try:
             _refresh_espn_cache()
@@ -6415,7 +6422,7 @@ def _is_game_over_cached(ticker: str) -> bool:
         # No milestone data — check date (if ticker date is in the past, game is likely over)
 
     # ESPN sports: check cache
-    is_sports = any(ticker.startswith(p) for p in ('KXNBA', 'KXNCAA', 'KXNHL', 'KXMLB', 'KXMLS', 'KXEPL', 'KXUCL', 'KXKBO', 'KXNPB'))
+    is_sports = any(ticker.startswith(p) for p in ('KXNBA', 'KXNCAA', 'KXNHL', 'KXMLB', 'KXMLS', 'KXEPL', 'KXUCL', 'KXKBO', 'KXNPB', 'KXNBL', 'KXLALIGA', 'KXBUNDESLIGA', 'KXLIGUE1', 'KXSERIEA', 'KXLIGAMX'))
     if is_sports:
         info = _espn_cache.get('data', {})
         if info:
@@ -9660,6 +9667,7 @@ def _apex_mm_exit_tick(bot_id, bot):
                 if _kalshi_price > 0:
                     actual_price = _kalshi_price
 
+                _rung_ticker = bot.get('ticker', '')
                 if _action == 'buy':
                     # Buy-opposite: arb completion (YES + NO = 100c payout)
                     held_side = sell_info.get('held_side', 'yes' if side == 'no' else 'no')
@@ -9670,7 +9678,6 @@ def _apex_mm_exit_tick(bot_id, bot):
                         print(f'🛡️ APEX MM ARB EXIT ZERO-COST GUARD: {bot_id} held_avg was 0 → using {held_avg}c (zero P&L)')
                     gross_pnl_per = 100 - held_avg - actual_price
                     gross_pnl = gross_pnl_per * target
-                    _rung_ticker = bot.get('ticker', '')
                     fee_held = _kalshi_side_fee_cents(held_avg, target, _rung_ticker)
                     fee_exit = _kalshi_side_fee_cents(actual_price, target, _rung_ticker)
                     total_fee = fee_held + fee_exit
@@ -12279,6 +12286,14 @@ def _handle_phantom(bot_id, bot, actions):
                 bot_log('PPI_AUTO_PULL', bot_id, {'ppi': _kill_ppi, 'details': _kill_det, 'trigger': 'continuous'})
                 save_state()
                 return
+        # ── Stale _ppi_pulled recovery ──
+        # If a bot has _ppi_pulled=True but already has an active dog order (slipped
+        # through the old broken recovery gate), re-enable PPI protection so the
+        # continuous KILL check can fire again on future toxic books.
+        if bot.get('_ppi_pulled') and dog_order_id and dog_filled == 0:
+            bot['_ppi_pulled'] = False
+            bot.pop('_ppi_recovery_ts', None)
+            print(f'🔧 PPI FLAG CLEAR: {bot_id} had stale _ppi_pulled with live dog order — re-enabled PPI protection')
 
         # Game ending: cancel to free capital
         if bot.get('game_phase') == 'live' and _is_game_ending(ticker):
@@ -13886,6 +13901,10 @@ def _handle_phantom(bot_id, bot, actions):
                             # PPI dipped back below 40 — reset stability timer
                             if bot.get('_ppi_recovery_ts'):
                                 bot.pop('_ppi_recovery_ts', None)
+                        # Gate: still pulled = don't repost until recovery completes
+                        if bot.get('_ppi_pulled'):
+                            save_state()
+                            return
             new_dog_price = max(1, current_dog_bid - anchor_depth)
 
             # Drift guard: stop if dog is dead, price too low, or price too high

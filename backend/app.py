@@ -12263,6 +12263,23 @@ def _handle_phantom(bot_id, bot, actions):
         # Dog not filled yet — check for stale/drift cancel + repost
         age_min = (now - bot.get('posted_at', now)) / 60.0
 
+        # ── Continuous PPI KILL check ──
+        # Run EVERY monitor cycle (not only on repost triggers) so PPI<35 always
+        # pulls the dog immediately. No hysteresis on KILL — it's an emergency.
+        if bot.get('auto_depth') and dog_filled == 0 and dog_order_id and not bot.get('_ppi_pulled'):
+            _kill_ppi, _kill_rec, _kill_det = _calculate_ppi(ticker, bot.get('fav_side', 'no'), bot.get('dog_side', 'yes'))
+            if _kill_ppi is not None and _kill_rec == 0:
+                print(f'⚠ PPI KILL PULL: {bot_id} PPI={_kill_ppi} < 35 — pulling dog')
+                _kill_rc = _safe_cancel(dog_order_id, f'ppi_kill_pull_{bot_id}')
+                if _kill_rc is not False:
+                    bot['dog_order_id'] = None
+                bot['_price_floor_pulled'] = True
+                bot['_ppi_pulled'] = True
+                bot['_last_ppi'] = _kill_ppi
+                bot_log('PPI_AUTO_PULL', bot_id, {'ppi': _kill_ppi, 'details': _kill_det, 'trigger': 'continuous'})
+                save_state()
+                return
+
         # Game ending: cancel to free capital
         if bot.get('game_phase') == 'live' and _is_game_ending(ticker):
             print(f'🏁 PHANTOM ENDING: {bot_id} game ending, dog unfilled — cancelling')
@@ -12431,43 +12448,33 @@ def _handle_phantom(bot_id, bot, actions):
                 if bot.get('auto_depth'):
                     _ppi_now, _ppi_rec, _ppi_det = _calculate_ppi(ticker, bot.get('fav_side', 'no'), bot.get('dog_side', 'yes'))
                     if _ppi_now is not None:
+                        # KILL check FIRST — bypass hysteresis, always pull on toxic book
+                        if _ppi_rec == 0:
+                            print(f'⚠ AUTO DEPTH PULL: {bot_id} PPI={_ppi_now} < 35 — pulling dog')
+                            if dog_order_id:
+                                _ppi_rc = _safe_cancel(dog_order_id, f'ppi_pull_{bot_id}')
+                                if _ppi_rc is not False:
+                                    bot['dog_order_id'] = None
+                            bot['_last_ppi'] = _ppi_now
+                            bot['_price_floor_pulled'] = True
+                            bot['_ppi_pulled'] = True
+                            bot_log('PPI_AUTO_PULL', bot_id, {'ppi': _ppi_now, 'details': _ppi_det, 'trigger': 'repost'})
+                            save_state()
+                            return
                         _last_ppi = bot.get('_last_ppi')
                         if _last_ppi is None:
                             # First check (or after restart) — initialize and apply immediately
                             bot['_last_ppi'] = _ppi_now
-                            if _ppi_rec and _ppi_rec > 0 and _ppi_rec != anchor_depth:
+                            if _ppi_rec > 0 and _ppi_rec != anchor_depth:
                                 print(f'📊 AUTO DEPTH INIT: {bot_id} PPI={_ppi_now} depth {anchor_depth}→{_ppi_rec}¢')
                                 bot['anchor_depth'] = _ppi_rec
                                 anchor_depth = _ppi_rec
-                            elif _ppi_rec == 0:
-                                print(f'⚠ AUTO DEPTH PULL (init): {bot_id} PPI={_ppi_now} < 35 — pulling dog')
-                                if dog_order_id:
-                                    _ppi_rc = _safe_cancel(dog_order_id, f'ppi_pull_{bot_id}')
-                                    if _ppi_rc is not False:
-                                        bot['dog_order_id'] = None
-                                bot['_price_floor_pulled'] = True
-                                bot['_ppi_pulled'] = True
-                                bot_log('PPI_AUTO_PULL', bot_id, {'ppi': _ppi_now, 'details': _ppi_det})
-                                save_state()
-                                return
-                        elif abs(_ppi_now - _last_ppi) >= 5:  # hysteresis
+                        elif abs(_ppi_now - _last_ppi) >= 5:  # hysteresis (depth only)
                             bot['_last_ppi'] = _ppi_now
-                            if _ppi_rec and _ppi_rec > 0 and _ppi_rec != anchor_depth:
+                            if _ppi_rec > 0 and _ppi_rec != anchor_depth:
                                 print(f'📊 AUTO DEPTH ADJUST: {bot_id} PPI {_last_ppi}→{_ppi_now} depth {anchor_depth}→{_ppi_rec}¢')
                                 bot['anchor_depth'] = _ppi_rec
                                 anchor_depth = _ppi_rec
-                            elif _ppi_rec == 0:
-                                # PPI < 35 = pull the dog
-                                print(f'⚠ AUTO DEPTH PULL: {bot_id} PPI={_ppi_now} < 35 — pulling dog')
-                                if dog_order_id:
-                                    _ppi_rc2 = _safe_cancel(dog_order_id, f'ppi_pull_{bot_id}')
-                                    if _ppi_rc2 is not False:
-                                        bot['dog_order_id'] = None
-                                bot['_price_floor_pulled'] = True
-                                bot['_ppi_pulled'] = True
-                                bot_log('PPI_AUTO_PULL', bot_id, {'ppi': _ppi_now, 'details': _ppi_det})
-                                save_state()
-                                return
                 # Smart reprice: always anchor_depth below bid — strict depth floor
                 new_dog_price = max(1, current_dog_bid - anchor_depth)
 
@@ -13842,25 +13849,27 @@ def _handle_phantom(bot_id, bot, actions):
             if bot.get('auto_depth'):
                 _ppi_now, _ppi_rec, _ppi_det = _calculate_ppi(ticker, bot.get('fav_side', 'no'), bot.get('dog_side', 'yes'))
                 if _ppi_now is not None:
+                    # KILL check FIRST — bypass hysteresis, always pull on toxic book
+                    if _ppi_rec == 0:
+                        print(f'⚠ AUTO DEPTH PULL (repeat): {bot_id} PPI={_ppi_now} < 35 — waiting')
+                        bot['_last_ppi'] = _ppi_now
+                        bot['_ppi_pulled'] = True
+                        bot_log('PPI_AUTO_PULL', bot_id, {'ppi': _ppi_now, 'details': _ppi_det, 'trigger': 'repeat'})
+                        save_state()
+                        return
                     _last_ppi = bot.get('_last_ppi')
                     if _last_ppi is None:
                         bot['_last_ppi'] = _ppi_now
-                        if _ppi_rec and _ppi_rec > 0 and _ppi_rec != anchor_depth:
+                        if _ppi_rec > 0 and _ppi_rec != anchor_depth:
                             print(f'📊 AUTO DEPTH INIT (repeat): {bot_id} PPI={_ppi_now} depth {anchor_depth}→{_ppi_rec}¢')
                             bot['anchor_depth'] = _ppi_rec
                             anchor_depth = _ppi_rec
                     elif abs(_ppi_now - _last_ppi) >= 5:
                         bot['_last_ppi'] = _ppi_now
-                        if _ppi_rec and _ppi_rec > 0 and _ppi_rec != anchor_depth:
+                        if _ppi_rec > 0 and _ppi_rec != anchor_depth:
                             print(f'📊 AUTO DEPTH ADJUST (repeat): {bot_id} PPI {_last_ppi}→{_ppi_now} depth {anchor_depth}→{_ppi_rec}¢')
                             bot['anchor_depth'] = _ppi_rec
                             anchor_depth = _ppi_rec
-                        elif _ppi_rec == 0:
-                            print(f'⚠ AUTO DEPTH PULL (repeat): {bot_id} PPI={_ppi_now} < 35 — waiting')
-                            bot['_ppi_pulled'] = True
-                            bot_log('PPI_AUTO_PULL', bot_id, {'ppi': _ppi_now, 'details': _ppi_det})
-                            save_state()
-                            return
                     # Recovery: PPI must hit 40 AND hold for 30s before re-arming
                     if bot.get('_ppi_pulled'):
                         if _ppi_now >= 40:

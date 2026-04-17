@@ -4089,9 +4089,10 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
         if drop_target <= 0 or drop_target >= fav_price:
             continue
 
-        # Acquire lock — only one amend at a time (prevents race with monitor walk)
+        # Acquire lock — only one amend at a time (prevents race with monitor walk).
+        # If contended, skip this bot and try the next — don't bail on all bots.
         if not _phantom_drop_lock.acquire(blocking=False):
-            return  # another drop or walk in progress
+            continue
 
         try:
             # Re-read fav_order_id AFTER acquiring lock (monitor may have updated it)
@@ -4135,7 +4136,7 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 print(f'⚠ WS PHANTOM DROP FAIL: {bot_id}: {e}')
         finally:
             _phantom_drop_lock.release()
-        return  # one drop per tick max
+        # NO throttle — every phantom bot drops on every tick if needed.
 
 
     # Ceiling exit system removed — fav snaps to bid with no cap, fills complete arb at any combined price
@@ -4330,9 +4331,10 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
         if snap_target == fav_price:
             continue
 
-        # Acquire lock — prevents race with monitor walk and instant drop
+        # Acquire lock — prevents race with monitor walk and instant drop.
+        # If contended, skip THIS bot and try the next one (don't bail on all bots).
         if not _phantom_drop_lock.acquire(blocking=False):
-            return
+            continue
 
         try:
             fav_oid = bot.get('fav_order_id')
@@ -4432,7 +4434,8 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 print(f'⚠ WS PHANTOM SNAP FAIL: {bot_id}: {e}')
         finally:
             _phantom_drop_lock.release()
-        return  # one snap per tick max
+        # NO throttle — keep iterating so every phantom bot snaps on every tick.
+        # Bid can change 20+ times/sec; we must follow it every time, no cap.
 
 
 def _execute_ws_flip(bot_id, filled_side, entry_price, trigger_bid, flip_thresh, filled_qty, floor=None):
@@ -5521,11 +5524,26 @@ def _execute_ws_completion(bot_id):
         repeats_done_now = bot.get('repeats_done', 0) + 1
         bot['repeats_done'] = repeats_done_now
         repeat_total = bot.get('repeat_count', 0)
-        # Estimate P&L from posted prices for smart mode (actual verified later)
-        _est_yes = bot.get('yes_price', 50)
-        _est_no = bot.get('no_price', 50)
-        _est_pnl = (100 - _est_yes - _est_no) * qty - kalshi_fee_cents(_est_yes, _est_no, qty, bot.get('dog_ticker', '') or ticker)
-        _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, _est_pnl)
+        # Compute ACTUAL P&L from fill prices (not estimates) so smart-mode loss
+        # counter reflects reality. Estimates from bot['yes_price']/bot['no_price']
+        # can be stale or zero, masking real losses and preventing the 2L kill switch.
+        _actual_yes = None
+        _actual_no = None
+        try:
+            _actual_yes = get_actual_fill_price(bot.get('yes_order_id'), 'yes') if bot.get('yes_order_id') else None
+            _actual_no = get_actual_fill_price(bot.get('no_order_id'), 'no') if bot.get('no_order_id') else None
+        except Exception:
+            pass
+        _real_yes = _actual_yes if _actual_yes else (bot.get('yes_price') or 0)
+        _real_no = _actual_no if _actual_no else (bot.get('no_price') or 0)
+        _pticker = bot.get('dog_ticker', '') or ticker
+        if _real_yes > 0 and _real_no > 0:
+            _cycle_pnl = (100 - _real_yes - _real_no) * qty - kalshi_fee_cents(_real_yes, _real_no, qty, _pticker)
+        else:
+            # Fill prices unknown — treat as a loss to be safe so the kill switch
+            # still fires; far safer than silently masking losses as wins.
+            _cycle_pnl = -1
+        _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, _cycle_pnl)
         will_repeat = _smart_repeat if _smart_repeat is not None else (repeats_done_now <= repeat_total)
 
         bot['completed_at'] = now

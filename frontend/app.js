@@ -6051,7 +6051,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const dogFillCol = dogFilled ? '#00ff88' : dogFillQty > 0 ? '#ffaa00' : '#333';
 
     // Fav fill bar
-    const favFillPct = hedgeQty > 0 ? Math.round((favFillQty / hedgeQty) * 100) : 0;
+    const favFillPct = hedgeQty > 0 ? Math.min(100, Math.round((favFillQty / hedgeQty) * 100)) : 0;
     const favFillCol = favFilled ? '#00ff88' : favFillQty > 0 ? '#ffaa00' : '#333';
 
     // Fav status text
@@ -6167,7 +6167,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                         <div style="flex:1;height:6px;background:#1a2540;border-radius:3px;overflow:hidden;">
                             <div style="width:${favFillPct}%;height:100%;background:${favFillCol};border-radius:3px;"></div>
                         </div>
-                        <span style="color:${favFillCol};font-size:10px;font-weight:700;">${favFillQty}/${hedgeQty}</span>
+                        <span style="color:${favFillCol};font-size:10px;font-weight:700;">${Math.min(favFillQty, hedgeQty)}/${hedgeQty}</span>
                     </div>
                 ` : ''}
             </div>

@@ -1615,7 +1615,9 @@ async function refreshVisiblePrices() {
             const yesBtn = document.querySelector(`button[data-ticker="${ticker}"][data-side="yes"]`);
             if (yesBtn) {
                 const yesPrice = (p.yes_ask >= 99 && (p.no_bid || 0) <= 1) ? (p.yes_bid || 0) : (p.yes_ask > 0 ? p.yes_ask : 0);
-                const yesDisplay = yesPrice > 0 ? `${yesPrice}¢` : '—';
+                const _yB = p.yes_bid || 0;
+                const _yBidSub = (yesPrice !== _yB && _yB > 0) ? `<div style="font-size:9px;font-weight:500;opacity:0.6;margin-top:3px;line-height:1;">bid ${_yB}</div>` : '';
+                const yesDisplay = yesPrice > 0 ? `<div style="line-height:1;">${yesPrice}¢</div>${_yBidSub}` : '—';
                 const newStyle = yesPrice > 0 ? getPriceButtonStyle(yesPrice, 'yes', lTier) : 'background: #1a1f2e; color: #555;';
                 yesBtn.style.cssText = `padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: 700; transition: all 0.2s; ${newStyle}`;
                 yesBtn.innerHTML = yesDisplay;
@@ -1626,7 +1628,9 @@ async function refreshVisiblePrices() {
             const noBtn = document.querySelector(`button[data-ticker="${ticker}"][data-side="no"]`);
             if (noBtn) {
                 const noPrice = (p.no_ask >= 99 && (p.yes_bid || 0) <= 1) ? (p.no_bid || 0) : (p.no_ask > 0 ? p.no_ask : 0);
-                const noDisplay = noPrice > 0 ? `${noPrice}¢` : '—';
+                const _nB = p.no_bid || 0;
+                const _nBidSub = (noPrice !== _nB && _nB > 0) ? `<div style="font-size:9px;font-weight:500;opacity:0.6;margin-top:3px;line-height:1;">bid ${_nB}</div>` : '';
+                const noDisplay = noPrice > 0 ? `<div style="line-height:1;">${noPrice}¢</div>${_nBidSub}` : '—';
                 const newStyle = noPrice > 0 ? getPriceButtonStyle(noPrice, 'no', lTier) : 'background: #1a1f2e; color: #555;';
                 noBtn.style.cssText = `padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: 700; transition: all 0.2s; ${newStyle}`;
                 noBtn.innerHTML = noDisplay;
@@ -2720,7 +2724,8 @@ function createMarketRow(market, label) {
 
     yesBtn.setAttribute('data-ticker', market.ticker);
     yesBtn.setAttribute('data-side', 'yes');
-    yesBtn.innerHTML = yesPrice > 0 ? yesPrice + '¢' : '—';
+    const _yesBidSub = (yesPrice !== yesBid && yesBid > 0) ? `<div style="font-size:9px;font-weight:500;opacity:0.6;margin-top:3px;line-height:1;">bid ${yesBid}</div>` : '';
+    yesBtn.innerHTML = yesPrice > 0 ? `<div style="line-height:1;">${yesPrice}¢</div>${_yesBidSub}` : '—';
     yesBtn.onclick = () => openBotModal(market, 'yes', yesAsk);
     yesBtn.onmouseenter = () => yesBtn.style.transform = 'scale(1.05)';
     yesBtn.onmouseleave = () => yesBtn.style.transform = 'scale(1)';
@@ -2732,7 +2737,8 @@ function createMarketRow(market, label) {
     noBtn.style.cssText = `padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: 700; transition: all 0.2s; ${noStyle}`;
     noBtn.setAttribute('data-ticker', market.ticker);
     noBtn.setAttribute('data-side', 'no');
-    noBtn.innerHTML = noPrice > 0 ? noPrice + '¢' : '—';
+    const _noBidSub = (noPrice !== noBid && noBid > 0) ? `<div style="font-size:9px;font-weight:500;opacity:0.6;margin-top:3px;line-height:1;">bid ${noBid}</div>` : '';
+    noBtn.innerHTML = noPrice > 0 ? `<div style="line-height:1;">${noPrice}¢</div>${_noBidSub}` : '—';
     noBtn.onclick = () => handleManualMiddleNoClick(market);
     noBtn.onmouseenter = () => noBtn.style.transform = 'scale(1.05)';
     noBtn.onmouseleave = () => noBtn.style.transform = 'scale(1)';

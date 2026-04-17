@@ -5858,13 +5858,17 @@ let _mmSelectedLevels = 7;
 function selectMMWidth(w) {
     _mmSelectedWidth = w;
     document.getElementById('mm-start-gap').value = Math.round(w / 2);
+    let matchedPreset = false;
     document.querySelectorAll('.mm-width-btn').forEach(btn => {
         const bw = parseInt(btn.dataset.width);
         const sel = bw === w;
+        if (sel) matchedPreset = true;
         btn.style.borderColor = sel ? '#00d4ff' : '#1e2740';
         btn.style.color = sel ? '#00d4ff' : '#556';
         btn.style.background = sel ? '#00d4ff18' : 'transparent';
     });
+    const customEl = document.getElementById('mm-width-custom');
+    if (customEl && matchedPreset && document.activeElement !== customEl) customEl.value = '';
     const label = document.getElementById('mm-width-label');
     if (label) label.textContent = w + '¢';
     // Room vs width recommendation
@@ -5887,6 +5891,11 @@ function selectMMWidth(w) {
         }
     }
     updateMMPreview();
+}
+
+function selectMMWidthCustom(w) {
+    if (!Number.isFinite(w) || w < 2 || w > 80) return;
+    selectMMWidth(w);
 }
 
 function selectMMLevels(n) {

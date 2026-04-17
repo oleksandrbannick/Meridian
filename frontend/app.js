@@ -9948,7 +9948,7 @@ async function apexMmModify(botId) {
         : status === 'mm_depth_pulled'
         ? '<div style="color:#00e5ff;font-size:10px;margin-bottom:8px;">Pulled — changes apply on next repost</div>'
         : '<div style="color:#ff8800;font-size:10px;margin-bottom:8px;">Holding inventory — changes queued for next cycle</div>';
-    const _widths = [2, 4, 6, 8, 10, 12, 14, 16];
+    const _widths = [2, 4, 6, 8, 10, 15, 20, 30];
     const _rungs = [3, 5, 7, 10];
     const _wBtnStyle = (active) => `width:36px;height:36px;border-radius:50%;background:${active ? '#00d4ff18' : 'transparent'};border:1px solid ${active ? '#00d4ff' : '#1e2740'};color:${active ? '#00d4ff' : '#556'};cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;`;
     const _rBtnStyle = (active) => `width:36px;height:36px;border-radius:50%;background:${active ? '#ff704318' : 'transparent'};border:1px solid ${active ? '#ff7043' : '#1e2740'};color:${active ? '#ff7043' : '#556'};cursor:pointer;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;`;
@@ -9964,7 +9964,15 @@ async function apexMmModify(botId) {
             <div style="margin-bottom:12px;">
                 <label style="color:#00d4ff;font-size:10px;font-weight:700;letter-spacing:.05em;display:block;margin-bottom:6px;">WIDTH</label>
                 <div style="display:flex;justify-content:space-between;gap:4px;">
-                    ${_widths.map(w => `<button onclick="document.getElementById('apex-edit-width').value=${w};document.querySelectorAll('.ae-w-btn').forEach(b=>b.style.cssText='${_wBtnStyle(false)}');this.style.cssText='${_wBtnStyle(true)}'" class="ae-w-btn" style="${_wBtnStyle(w === curWidth)}">${w}</button>`).join('')}
+                    ${_widths.map(w => `<button onclick="document.getElementById('apex-edit-width').value=${w};document.getElementById('apex-edit-width-custom').value='';document.querySelectorAll('.ae-w-btn').forEach(b=>b.style.cssText='${_wBtnStyle(false)}');this.style.cssText='${_wBtnStyle(true)}'" class="ae-w-btn" style="${_wBtnStyle(w === curWidth)}">${w}</button>`).join('')}
+                </div>
+                <div style="display:flex;align-items:center;gap:6px;margin-top:6px;justify-content:center;">
+                    <span style="color:#555;font-size:9px;">Custom:</span>
+                    <input id="apex-edit-width-custom" type="number" min="2" max="80" placeholder="¢"
+                        oninput="var v=parseInt(this.value)||0;if(v>=2&&v<=80){document.getElementById('apex-edit-width').value=v;document.querySelectorAll('.ae-w-btn').forEach(b=>b.style.cssText='${_wBtnStyle(false)}');}"
+                        value="${_widths.includes(curWidth) ? '' : curWidth}"
+                        style="width:72px;padding:5px 8px;background:#0a0e1a;border:1px solid #00d4ff33;border-radius:6px;color:#00d4ff;font-size:11px;font-weight:600;text-align:center;outline:none;box-sizing:border-box;">
+                    <span style="color:#555;font-size:9px;">2–80¢</span>
                 </div>
                 <input id="apex-edit-width" type="hidden" value="${curWidth}">
                 ${(() => {
@@ -10023,7 +10031,7 @@ async function apexMmModify(botId) {
 }
 
 async function apexMmModifySave(botId) {
-    const width = Math.max(2, Math.min(40, parseInt(document.getElementById('apex-edit-width')?.value) || 8));
+    const width = Math.max(2, Math.min(80, parseInt(document.getElementById('apex-edit-width')?.value) || 8));
     const gap = Math.floor(width / 2);
     const levels = Math.max(1, Math.min(15, parseInt(document.getElementById('apex-edit-levels')?.value) || 7));
     const qty = Math.max(1, Math.min(100, parseInt(document.getElementById('apex-edit-qty')?.value) || 10));
@@ -13508,8 +13516,10 @@ async function loadTradeHistoryList() {
 }
 
 async function loadTradeHistory() {
+    if (historyViewMode === 'arb')     { loadApexMMHistory();   return; }
     if (historyViewMode === 'bets')    { loadBetsHistory();     return; }
     if (historyViewMode === 'middle')  { loadMiddleHistory();   return; }
+    if (historyViewMode === 'dog' && typeof loadDogHistory === 'function') { loadDogHistory(); return; }
     loadHistoryStats();
     loadPnLCalendar();
     loadTradeHistoryList();
@@ -13678,7 +13688,7 @@ function renderApexMMWidthBreakdown(allTrades) {
 
     const widthMap = {};
     allTrades.forEach(t => {
-        const w = t.rung_width || (t.combined_price ? 100 - t.combined_price : 0);
+        const w = t.target_width || t.rung_width || (t.combined_price ? 100 - t.combined_price : 0);
         if (w <= 0) return;
         if (!widthMap[w]) widthMap[w] = { width: w, wins: 0, losses: 0, net: 0, count: 0, holdTotal: 0, holdCount: 0 };
         const net = (t.profit_cents || 0) - (t.loss_cents || 0);
@@ -13854,7 +13864,7 @@ function renderApexMMSportDropdown(sport, allTrades) {
         return (gc.period || 0) === _apexMMActivePeriod;
     }) : sportTrades;
     scopedTrades.forEach(t => {
-        const w = t.rung_width || (t.combined_price ? 100 - t.combined_price : 0);
+        const w = t.target_width || t.rung_width || (t.combined_price ? 100 - t.combined_price : 0);
         if (w <= 0) return;
         if (!widthMap[w]) widthMap[w] = { width: w, wins: 0, losses: 0, net: 0, count: 0 };
         const n = (t.profit_cents || 0) - (t.loss_cents || 0);
@@ -13929,7 +13939,7 @@ function renderApexMMSportDropdown(sport, allTrades) {
 function _applyApexMMFilters(trades) {
     let f = trades;
     if (_apexMMActiveSport !== 'all') f = f.filter(t => (t.sport || 'Other') === _apexMMActiveSport);
-    if (_apexMMActiveWidth !== 'all') f = f.filter(t => (t.rung_width || (t.combined_price ? 100 - t.combined_price : 0)) === _apexMMActiveWidth);
+    if (_apexMMActiveWidth !== 'all') f = f.filter(t => (t.target_width || t.rung_width || (t.combined_price ? 100 - t.combined_price : 0)) === _apexMMActiveWidth);
     if (_apexMMActiveLadder !== 'all') f = f.filter(t => (t.levels || 7) === _apexMMActiveLadder);
     return f;
 }
@@ -13959,7 +13969,7 @@ function filterApexMMLog() {
         const qty = t.quantity || 1;
         const sport = t.sport || 'Other';
         const sportEmoji = _si[sport] || '';
-        const width = t.rung_width || (t.combined_price ? 100 - t.combined_price : 0);
+        const width = t.target_width || t.rung_width || (t.combined_price ? 100 - t.combined_price : 0);
 
         // Hold time
         let holdStr = '';
@@ -14124,7 +14134,7 @@ function selectApexMMSport(sport) {
 
     renderApexMMStats(filtered, window._apexMMPnl || {});
     // Sport pills scoped by width filter
-    const widthScoped = _apexMMActiveWidth !== 'all' ? allTrades.filter(t => (t.rung_width || (t.combined_price ? 100 - t.combined_price : 0)) === _apexMMActiveWidth) : allTrades;
+    const widthScoped = _apexMMActiveWidth !== 'all' ? allTrades.filter(t => (t.target_width || t.rung_width || (t.combined_price ? 100 - t.combined_price : 0)) === _apexMMActiveWidth) : allTrades;
     renderApexMMSportBreakdown(widthScoped);
     renderApexMMSportDropdown(_apexMMActiveSport, allTrades);
     filterApexMMLog();
@@ -14149,7 +14159,7 @@ function selectApexMMWidth(width) {
 
     renderApexMMStats(filtered, window._apexMMPnl || {});
     // Sport pills scoped by width filter
-    const widthScoped = _apexMMActiveWidth !== 'all' ? allTrades.filter(t => (t.rung_width || (t.combined_price ? 100 - t.combined_price : 0)) === _apexMMActiveWidth) : allTrades;
+    const widthScoped = _apexMMActiveWidth !== 'all' ? allTrades.filter(t => (t.target_width || t.rung_width || (t.combined_price ? 100 - t.combined_price : 0)) === _apexMMActiveWidth) : allTrades;
     renderApexMMSportBreakdown(widthScoped);
     renderApexMMSportDropdown(_apexMMActiveSport, allTrades);
     filterApexMMLog();

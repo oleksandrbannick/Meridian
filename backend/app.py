@@ -698,10 +698,7 @@ def get_markets():
                              'KXKBLGAME', 'KXCBAGAME', 'KXEUROLEAGUEGAME',
                              'KXBBLGAME', 'KXGBLGAME', 'KXACBGAME',
                              'KXJBLEAGUEGAME', 'KXLNBELITEGAME',
-                             'KXUFCFIGHT', 'KXF1RACE', 'KXIPL',
-                             'KXLALIGAGAME', 'KXLIGAMXGAME', 'KXSERIEAGAME',
-                             'KXBUNDESLIGAGAME', 'KXLIGUE1GAME',
-                             'KXITFMATCH', 'KXITFWMATCH',
+                             'KXUFCFIGHT', 'KXF1RACE',
                              'KXKBOGAME', 'KXNPBGAME'}
 
         # Determine which series to fetch
@@ -6277,6 +6274,23 @@ def _record_trade(record: dict, bot: dict = None):
         record.setdefault('fav_order_id', bot.get('fav_order_id'))
         record.setdefault('hedge_order_id', bot.get('hedge_order_id'))
         record.setdefault('anchor_depth', bot.get('anchor_depth'))
+        # PPI launch-time snapshot (phantom only — None for other bot types)
+        record.setdefault('ppi_launch_score', bot.get('_ppi_launch_score'))
+        record.setdefault('ppi_launch_d', bot.get('_ppi_launch_d'))
+        record.setdefault('ppi_launch_g', bot.get('_ppi_launch_g'))
+        record.setdefault('ppi_launch_s', bot.get('_ppi_launch_s'))
+        record.setdefault('ppi_launch_t', bot.get('_ppi_launch_t'))
+        record.setdefault('ppi_launch_fpl', bot.get('_ppi_launch_fpl'))
+        record.setdefault('ppi_launch_fg', bot.get('_ppi_launch_fg'))
+        record.setdefault('ppi_launch_spread', bot.get('_ppi_launch_spread'))
+        record.setdefault('ppi_launch_rec_depth', bot.get('_ppi_launch_rec_depth'))
+        record.setdefault('dog_bid_at_launch', bot.get('_dog_bid_at_launch'))
+        record.setdefault('fav_bid_at_launch', bot.get('_fav_bid_at_launch'))
+        # Derived: fav-runaway in cents (positive = fav climbed against us)
+        _fbl = bot.get('_fav_bid_at_launch')
+        _fhp = record.get('fav_price')
+        if _fbl is not None and _fhp is not None:
+            record.setdefault('fav_bid_runaway', _fhp - _fbl)
     trade_history.insert(0, record)
     # Crash-safe append — survives server crashes between save_state() calls
     try:
@@ -10504,9 +10518,9 @@ def create_anchor_bot():
         # depth_floor IS the anchor_depth — post exactly that many cents from the market
         auto_depth = data.get('auto_depth', False)
         anchor_depth = int(data.get('anchor_depth', 0))  # 0 = use target_width as depth
+        # Always compute PPI for analytics (cheap orderbook read), use it if auto_depth on
+        _ppi, _ppi_rec, _ppi_d = _calculate_ppi(ticker, fav_side, dog_side)
         if auto_depth:
-            # PPI-driven: calculate optimal depth from live book
-            _ppi, _ppi_rec, _ppi_d = _calculate_ppi(ticker, fav_side, dog_side)
             if _ppi is not None and _ppi_rec and _ppi_rec > 0:
                 anchor_depth = _ppi_rec
                 print(f'📊 AUTO DEPTH: PPI={_ppi} → depth={anchor_depth}¢ (D={_ppi_d.get("d")} G=-{_ppi_d.get("g")} S={_ppi_d.get("s")} T={_ppi_d.get("t")})')
@@ -10630,6 +10644,18 @@ def create_anchor_bot():
             '_all_dog_order_ids':  [dog_order_id] if dog_order_id else [],
             '_fav_depth':          _fav_depth_init,
             '_price_floor_pulled': _start_pulled,
+            # PPI launch-time snapshot for post-hoc analysis (no hot-path cost)
+            '_ppi_launch_score':   _ppi,
+            '_ppi_launch_d':       (_ppi_d or {}).get('d'),
+            '_ppi_launch_g':       (_ppi_d or {}).get('g'),
+            '_ppi_launch_s':       (_ppi_d or {}).get('s'),
+            '_ppi_launch_t':       (_ppi_d or {}).get('t'),
+            '_ppi_launch_fpl':     (_ppi_d or {}).get('fpl'),
+            '_ppi_launch_fg':      (_ppi_d or {}).get('fg'),
+            '_ppi_launch_spread':  (_ppi_d or {}).get('spread'),
+            '_ppi_launch_rec_depth': _ppi_rec,
+            '_dog_bid_at_launch':  live_dog_bid if live_dog_bid > 0 else None,
+            '_fav_bid_at_launch':  _fav_bid_init if _fav_bid_init else None,
         }
         save_state()
         bot_log('ANCHOR_DOG_CREATED', bot_id, {

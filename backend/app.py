@@ -12154,6 +12154,13 @@ def _handle_phantom(bot_id, bot, actions):
             # Check if bid recovered enough to repost (NOT if death zone — stay pulled)
             if bot.get('_death_zone_stopped'):
                 return
+            # Don't repost while PPI is still KILL — otherwise we flap between pull and repost
+            if bot.get('auto_depth'):
+                _rc_ppi, _rc_rec, _ = _calculate_ppi(ticker, bot.get('fav_side', 'yes'), bot.get('dog_side', 'no'))
+                if _rc_ppi is not None:
+                    bot['_last_ppi'] = _rc_ppi
+                    if _rc_rec == 0:
+                        return
             _pf_ws_bid = bot.get(f'live_{dog_side}_bid', 0)
             _pf_depth = bot.get('anchor_depth', 5)
             _pf_new_price = max(1, _pf_ws_bid - _pf_depth) if _pf_ws_bid > 0 else 0

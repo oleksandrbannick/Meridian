@@ -6115,11 +6115,14 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     // Phantom phase colors: amber=dog waiting, pink=hedge active, green=done, red=error, purple=pulled, magenta=death zone
     const _phAmber = '#ffaa00', _phPink = '#ff66aa', _phGreen = '#00ff88', _phRed = '#ff4444', _phPurple = '#aa77ff', _phDeath = '#ff3366';
     const _isParked = status === 'dog_anchor_posted' && bot._parked_at_ceiling;
-    const _isPulledFloor = status === 'dog_anchor_posted' && bot._price_floor_pulled;
+    const _livePpi = bot._live_ppi != null ? bot._live_ppi : bot._last_ppi;
+    const _isPpiKill = bot._ppi_pulled || (_livePpi != null && _livePpi < 35);
+    const _isPulledFloor = (status === 'dog_anchor_posted' || status === 'waiting_repeat') && (bot._price_floor_pulled || _isPpiKill);
+    const _pullLabel = _isPpiKill ? '🚨 PPI KILL' : '⏸ PULLED';
     const statusMap = {
-        'dog_anchor_posted': _isPulledFloor ? '⏸ PULLED' : _isParked ? '🅿️ PARKED' : '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
+        'dog_anchor_posted': _isPulledFloor ? _pullLabel : _isParked ? '🅿️ PARKED' : '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
         'dog_filled': bot._orphan_hedge ? '🚨 ORPHAN — HEDGING' : '👻 FILLED — HEDGING', 'ladder_filled_no_fav': '👻 FILLED — HEDGING',
-        'fav_hedge_posted': bot._game_over_holding ? '⏳ HOLDING — SETTLEMENT' : '⭐ HEDGE POSTED', 'waiting_repeat': bot._just_completed ? '✅ COMPLETED' : bot._flip_pending ? '⚡ FLIPPING' : '🔄 REPEATING',
+        'fav_hedge_posted': bot._game_over_holding ? '⏳ HOLDING — SETTLEMENT' : '⭐ HEDGE POSTED', 'waiting_repeat': _isPulledFloor ? _pullLabel : bot._just_completed ? '✅ COMPLETED' : bot._flip_pending ? '⚡ FLIPPING' : '🔄 REPEATING',
         'completed': _isSettled ? '🏁 SETTLED' : _isAwaitingSettlement ? '⏳ AWAITING SETTLEMENT' : _isDeathZone ? '💀 DEATH ZONE' : _isSmartStopped ? '⏹ SMART STOP' : _isCompletedRuns ? '✅ COMPLETED RUNS' : '✅ COMPLETE',
         'stopped': bot._stop_reason === 'scout_orphan_cleanup' ? '🛑 STOPPED — Scout managing' : _isDeathZone ? '💀 DEATH ZONE' : _isSmartStopped ? '⏹ SMART STOP' : (bot._pending_sells?.length ? '📤 SELLING' : '🛑 STOPPED'),
         'paused_by_scout': '⏸️ PAUSED — Scout active',
@@ -6128,7 +6131,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const borderMap = {
         'dog_anchor_posted': _isPulledFloor ? _phPurple : _isParked ? _phPurple : _phAmber, 'ladder_posted': _phAmber,
         'dog_filled': _phPink, 'ladder_filled_no_fav': _phPink,
-        'fav_hedge_posted': bot._game_over_holding ? _phAmber : _phPink, 'waiting_repeat': bot._just_completed ? _phGreen : _phAmber,
+        'fav_hedge_posted': bot._game_over_holding ? _phAmber : _phPink, 'waiting_repeat': _isPulledFloor ? _phPurple : bot._just_completed ? _phGreen : _phAmber,
         'completed': _isSettled ? _phGreen : _isAwaitingSettlement ? _phAmber : _isDeathZone ? _phDeath : _isSmartStopped ? _phRed : _phGreen,
         'stopped': _isDeathZone ? _phDeath : bot._pending_sells?.length ? _phAmber : _phRed,
         'awaiting_settlement': _phAmber,
@@ -6284,9 +6287,10 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
         ${_isCompletedSummary ? '' : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <!-- ANCHOR SIDE -->
             ${(() => {
-                const _isPulled = !!bot._price_floor_pulled;
+                const _isPulled = !!bot._price_floor_pulled || _isPpiKill;
                 const _borderCol = _isPulled ? '#ff444433' : '#ffaa0033';
-                const _headerLabel = _isPulled ? `⏸ PULLED · ${dogSide.toUpperCase()} · WAITING` : `👻 ANCHOR · ${dogSide.toUpperCase()}${dogFilled ? ' · FILLED ✓' : ''}`;
+                const _pullReason = _isPpiKill ? 'PPI KILL' : 'PULLED';
+                const _headerLabel = _isPulled ? `⏸ ${_pullReason} · ${dogSide.toUpperCase()} · WAITING` : `👻 ANCHOR · ${dogSide.toUpperCase()}${dogFilled ? ' · FILLED ✓' : ''}`;
                 const _headerCol = _isPulled ? '#ff4444' : '#ffaa00';
                 const _priceLabel = isLadder && dogFillQty > 0 && bot.avg_fill_price > 0 ? `Avg ${avgDogPrice}¢` : isLadder && rungs.length > 0 ? `${rungs[rungs.length-1].price}¢–${rungs[0].price}¢` : `${dogPrice}¢`;
                 const _barPct = dogFillPct;

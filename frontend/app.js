@@ -6052,6 +6052,11 @@ window._filterBotsSport = function(sport) {
     _botsActiveSport = (_botsActiveSport === sport && sport !== 'all') ? 'all' : sport;
     if (typeof loadBots === 'function') loadBots();
 };
+let _botsActiveState = null;  // State-label filter (null = all). Click a top badge to toggle.
+window._filterBotsState = function(label) {
+    _botsActiveState = (_botsActiveState === label) ? null : label;
+    if (typeof loadBots === 'function') loadBots();
+};
 function _renderDogBotCard(bot, botId, container, gameScores) {
     const nowSec = Date.now() / 1000;
     const ageMin = bot.created_at ? Math.floor((nowSec - bot.created_at) / 60) : 0;
@@ -7720,6 +7725,48 @@ async function loadBots() {
             if ((s === 'completed' || s === 'stopped') && b._death_zone_stopped) return 'Death';
             return _stateNameMap[s] || s;
         }
+        // Within-group sort priority: lower = more urgent (floats to top)
+        // Tier 1: hedge-in-flight. Tier 2: live posting. Tier 3: paused. Tier 4: terminal.
+        function _getStatePriority(b) {
+            const l = _getBotDotLabel(b);
+            if (l === 'Hedging' || l === 'Exiting') return 1;
+            if (l === 'Anchor'  || l === 'Active')  return 2;
+            if (l === 'Repeating' || l === 'Pulled' || l === 'Settling') return 3;
+            if (l === 'Death' || l === 'Done' || l === 'Stopped') return 4;
+            return 5;
+        }
+        // Fixed badge order for the top status bars (dimmed-at-0, click to filter).
+        const _PHANTOM_BADGE_ORDER = [
+            { label: 'Hedging',   color: '#ff66aa' },
+            { label: 'Anchor',    color: '#ffaa00' },
+            { label: 'Repeating', color: '#ffaa00' },
+            { label: 'Pulled',    color: '#aa77ff' },
+            { label: 'Death',     color: '#ff3366' },
+            { label: 'Done',      color: '#00ff88' },
+            { label: 'Stopped',   color: '#ff4444' },
+        ];
+        const _APEX_BADGE_ORDER = [
+            { label: 'Exiting',  color: '#ff7043' },
+            { label: 'Active',   color: '#00d4ff' },
+            { label: 'Pulled',   color: '#aa77ff' },
+            { label: 'Settling', color: '#ffd740' },
+            { label: 'Done',     color: '#00ff88' },
+            { label: 'Stopped',  color: '#ff4444' },
+        ];
+        function _renderStatusBadgeBar(counts, order) {
+            const bar = document.createElement('div');
+            bar.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;padding:4px 12px 6px;margin-bottom:2px;align-items:center;';
+            bar.innerHTML = order.map(({ label, color }) => {
+                const n = counts[label] || 0;
+                const active = _botsActiveState === label;
+                const live = n > 0;
+                const opacity = live ? 1 : 0.28;
+                const bg = active ? color + '33' : color + '11';
+                const border = active ? color + '99' : color + '33';
+                return `<span onclick="window._filterBotsState('${label}')" title="Click to filter by ${label}" style="display:inline-flex;align-items:center;gap:3px;background:${bg};border:1px solid ${border};border-radius:6px;padding:2px 8px;cursor:pointer;opacity:${opacity};transition:opacity 0.15s;"><span style="color:${color};font-size:12px;text-shadow:0 0 4px ${color}66;">●</span><span style="color:${color};font-size:10px;font-weight:700;">${n}</span><span style="color:#8892a6;font-size:10px;">${label}</span></span>`;
+            }).join('');
+            return bar;
+        }
 
         // Render dog bots list
         if (dogList) {
@@ -7756,28 +7803,16 @@ async function loadBots() {
                         }).join('');
                     dogList.appendChild(_dSportBar);
                 }
-                // ── Global status summary bar ──
-                const _statusSummary = {};
+                // ── Global status summary bar (fixed order, dim-at-0, click to filter) ──
+                const _phantomCounts = {};
                 dogBotIds.forEach(id => {
                     const b = bots[id];
                     const sp = detectSport((b.ticker || '').toUpperCase()) || 'Other';
                     if (_botsActiveSport !== 'all' && sp !== _botsActiveSport) return;
-                    const col = _getBotDotColor(b);
                     const label = _getBotDotLabel(b);
-                    const key = col + '|' + label;
-                    _statusSummary[key] = (_statusSummary[key] || 0) + 1;
+                    _phantomCounts[label] = (_phantomCounts[label] || 0) + 1;
                 });
-                if (Object.keys(_statusSummary).length > 0) {
-                    const _statusBar = document.createElement('div');
-                    _statusBar.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;padding:4px 12px 6px;margin-bottom:2px;align-items:center;';
-                    _statusBar.innerHTML = Object.entries(_statusSummary)
-                        .sort((a, b) => b[1] - a[1])
-                        .map(([key, n]) => {
-                            const [col, label] = key.split('|');
-                            return `<span style="display:inline-flex;align-items:center;gap:3px;background:${col}11;border:1px solid ${col}33;border-radius:6px;padding:2px 8px;"><span style="color:${col};font-size:12px;text-shadow:0 0 4px ${col}66;">●</span><span style="color:${col};font-size:10px;font-weight:700;">${n}</span><span style="color:#8892a6;font-size:10px;">${label}</span></span>`;
-                        }).join('');
-                    dogList.appendChild(_statusBar);
-                }
+                dogList.appendChild(_renderStatusBadgeBar(_phantomCounts, _PHANTOM_BADGE_ORDER));
                 // Group dog bots by game (same logic as arb bots)
                 const dogGameGroups = {};
                 dogBotIds.forEach(botId => {
@@ -7788,17 +7823,27 @@ async function loadBots() {
                     if (!dogGameGroups[gk]) dogGameGroups[gk] = [];
                     dogGameGroups[gk].push(botId);
                 });
-                Object.values(dogGameGroups).forEach(ids => ids.sort((a, b) => (bots[b].created_at || 0) - (bots[a].created_at || 0)));
+                Object.values(dogGameGroups).forEach(ids => ids.sort((a, b) => {
+                    const pa = _getStatePriority(bots[a]);
+                    const pb = _getStatePriority(bots[b]);
+                    if (pa !== pb) return pa - pb;
+                    return (bots[b].created_at || 0) - (bots[a].created_at || 0);
+                }));
                 const sortedDogGameKeys = Object.keys(dogGameGroups).sort((a, b) => {
                     const firstA = Math.min(...dogGameGroups[a].map(id => bots[id].created_at || 0));
                     const firstB = Math.min(...dogGameGroups[b].map(id => bots[id].created_at || 0));
                     return firstB - firstA;
                 });
                 sortedDogGameKeys.forEach(gk => {
-                    const groupIds = dogGameGroups[gk];
+                    const _rawIds = dogGameGroups[gk];
+                    const _dgSportSample = detectSport((bots[_rawIds[0]].ticker || '').toUpperCase()) || 'Other';
+                    if (_botsActiveSport !== 'all' && _dgSportSample !== _botsActiveSport) return;
+                    const groupIds = _botsActiveState
+                        ? _rawIds.filter(id => _getBotDotLabel(bots[id]) === _botsActiveState)
+                        : _rawIds;
+                    if (groupIds.length === 0) return;
                     const sampleBot = bots[groupIds[0]];
-                    const _dgSport = detectSport((sampleBot.ticker || '').toUpperCase()) || 'Other';
-                    if (_botsActiveSport !== 'all' && _dgSport !== _botsActiveSport) return;
+                    const _dgSport = _dgSportSample;
                     const groupName = formatBotDisplayName(sampleBot.ticker, '', sampleBot.market_title || '').split('·')[0].split('—')[0].trim();
                     const rawTickerDog = sampleBot.ticker || '';
                     const sampleTicker = rawTickerDog.toUpperCase();
@@ -7903,6 +7948,17 @@ async function loadBots() {
             botsList.appendChild(sportBar);
         }
 
+        // ── Global status summary bar for Apex (fixed order, dim-at-0, click to filter) ──
+        const _apexCounts = {};
+        arbBotIds.forEach(id => {
+            const b = bots[id];
+            const sp = detectSport((b.ticker || '').toUpperCase()) || 'Other';
+            if (_botsActiveSport !== 'all' && sp !== _botsActiveSport) return;
+            const label = _getBotDotLabel(b);
+            _apexCounts[label] = (_apexCounts[label] || 0) + 1;
+        });
+        botsList.appendChild(_renderStatusBadgeBar(_apexCounts, _APEX_BADGE_ORDER));
+
         let activeBotCount = 0;
         let filledLegs = 0;
         let anchoredCount = 0;  // one leg filled, waiting for second
@@ -7931,9 +7987,14 @@ async function loadBots() {
             gameGroups[gk].push(botId);
         });
 
-        // Sort bots within each group: newest first (by created_at desc)
+        // Sort bots within each group: urgency tier first (hedging > active > paused > terminal), newest first within a tier.
         Object.values(gameGroups).forEach(ids => {
-            ids.sort((a, b) => (bots[b].created_at || 0) - (bots[a].created_at || 0));
+            ids.sort((a, b) => {
+                const pa = _getStatePriority(bots[a]);
+                const pb = _getStatePriority(bots[b]);
+                if (pa !== pb) return pa - pb;
+                return (bots[b].created_at || 0) - (bots[a].created_at || 0);
+            });
         });
 
         // Sort game groups: FIRST bot placed in the group determines group order
@@ -7944,13 +8005,17 @@ async function loadBots() {
             return firstB - firstA;  // newest game first, but stable within a game
         });
 
-        // Render grouped bots (filtered by sport if active)
+        // Render grouped bots (filtered by sport and state if active)
         sortedGameKeys.forEach(gameKey => {
             const _filterTicker = (bots[gameGroups[gameKey][0]]?.ticker || '').toUpperCase();
             const _filterSport = detectSport(_filterTicker) || 'Other';
             if (_botsActiveSport !== 'all' && _filterSport !== _botsActiveSport) return;
             // ── Game group header ──
-            const groupBots = gameGroups[gameKey];
+            const _rawGroupBots = gameGroups[gameKey];
+            const groupBots = _botsActiveState
+                ? _rawGroupBots.filter(id => _getBotDotLabel(bots[id]) === _botsActiveState)
+                : _rawGroupBots;
+            if (groupBots.length === 0) return;
             const sampleBot = bots[groupBots[0]];
             const groupMatchup = formatBotDisplayName(sampleBot.ticker, '', sampleBot.market_title || '').split('·')[0].split('—')[0].trim();
             // Live detection: use game_scores from backend OR Kalshi-native live detection

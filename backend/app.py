@@ -13053,8 +13053,9 @@ def _handle_phantom(bot_id, bot, actions):
                         })
                         bot['_dog_reconciled'] = True  # gap closed — don't reconcile again
                     elif fav_filled < _partial_q:
-                        # Live order needs qty bump to cover the gap — amend up
-                        _new_count = _live_fav_fills + _hedge_gap if _live_fav_fills else _recon_total
+                        # Live order needs qty bump to cover the gap — expand the existing
+                        # order's count by the gap. current_count + gap covers new total dog.
+                        _new_count = (_live_fav_count or _partial_q) + _hedge_gap
                         if fav_order_id:
                             try:
                                 _amend_kwargs = {'yes_price': bot.get('fav_price')} if fav_side == 'yes' else {'no_price': bot.get('fav_price')}

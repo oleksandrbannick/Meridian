@@ -13008,20 +13008,34 @@ def _handle_phantom(bot_id, bot, actions):
                         pass
                 if _recon_total > _partial_q:
                     _extra = _recon_total - _partial_q
-                    # Query the live fav order to see how much unfilled qty already covers us
+                    # Query ALL fav orders (original + supplementals) for true aggregate fills.
+                    # fav_fill_qty only tracks the current fav_order_id — after a supp is posted,
+                    # the original order's fills become invisible and reconcile over-hedges.
                     _live_fav_count = 0
                     _live_fav_fills = 0
                     _live_fav_status = ''
+                    _all_fav_oids = set()
                     if fav_order_id:
+                        _all_fav_oids.add(fav_order_id)
+                    for _fid in (bot.get('_all_hedge_order_ids') or []):
+                        if _fid:
+                            _all_fav_oids.add(_fid)
+                    _fav_fills_total = 0
+                    for _fid in _all_fav_oids:
                         try:
                             api_read_limiter.wait()
-                            _live_resp = kalshi_client.get_order(fav_order_id)
-                            _live_ord = _live_resp.get('order', _live_resp) if isinstance(_live_resp, dict) else {}
-                            _live_fav_count = int(_live_ord.get('count_fp', _live_ord.get('count', 0)) or 0)
-                            _live_fav_fills = _parse_fill_count(_live_ord)
-                            _live_fav_status = (_live_ord.get('status') or '').lower()
+                            _fr = kalshi_client.get_order(_fid)
+                            _fo = _fr.get('order', _fr) if isinstance(_fr, dict) else {}
+                            _fav_fills_total += _parse_fill_count(_fo)
+                            if _fid == fav_order_id:
+                                _live_fav_count = int(_fo.get('count_fp', _fo.get('count', 0)) or 0)
+                                _live_fav_fills = _parse_fill_count(_fo)
+                                _live_fav_status = (_fo.get('status') or '').lower()
                         except Exception:
                             pass
+                    if _fav_fills_total > fav_filled:
+                        fav_filled = _fav_fills_total
+                        bot['fav_fill_qty'] = fav_filled
                     _live_fav_unfilled = max(0, _live_fav_count - _live_fav_fills) if _live_fav_status in ('resting', 'partially_filled') else 0
                     # True hedge gap = dog fills − (all historical fav fills + whatever the live order still has room to fill)
                     _hedge_gap = _recon_total - fav_filled - _live_fav_unfilled

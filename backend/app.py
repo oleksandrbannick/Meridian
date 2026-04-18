@@ -13053,10 +13053,19 @@ def _handle_phantom(bot_id, bot, actions):
                         })
                         bot['_dog_reconciled'] = True  # gap closed — don't reconcile again
                     elif fav_filled < _partial_q:
-                        # Live order needs qty bump to cover the gap — expand the existing
-                        # order's count by the gap. current_count + gap covers new total dog.
-                        _new_count = (_live_fav_count or _partial_q) + _hedge_gap
-                        if fav_order_id:
+                        # Target absolute count = total dog fills (Kalshi count is intent-total,
+                        # filled fills count toward it). Never shrink. Avoids double-counting
+                        # when _live_fav_unfilled is misread as 0 due to transient amend status.
+                        _base_count = _live_fav_count or _partial_q
+                        _new_count = max(_base_count, _recon_total)
+                        if _new_count <= _base_count:
+                            bot['_dog_reconciled'] = True
+                            print(f'✅ PHANTOM RECONCILE COVERED (count≥dog): {bot_id} live={_base_count} dog={_recon_total}')
+                            bot_log('PHANTOM_RECONCILE_COVERED', bot_id, {
+                                'recon_total': _recon_total, 'live_count': _base_count,
+                                'reason': 'count_already_covers',
+                            })
+                        elif fav_order_id:
                             try:
                                 _amend_kwargs = {'yes_price': bot.get('fav_price')} if fav_side == 'yes' else {'no_price': bot.get('fav_price')}
                                 api_rate_limiter.wait()

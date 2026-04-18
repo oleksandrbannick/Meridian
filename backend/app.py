@@ -2509,7 +2509,7 @@ _KALSHI_FREE_MAKER = 0.0
 _KALSHI_FREE_TAKER = 0.0
 
 # Prefixes that get free maker+taker fees
-_FREE_FEE_PREFIXES = ('KXATP', 'KXWTA', 'KXNHLSPREAD')
+_FREE_FEE_PREFIXES = ('KXATP', 'KXWTA', 'KXITF', 'KXNHLSPREAD')  # KXITF covers ITFMATCH + ITFWMATCH
 
 def _kalshi_fee_rates(ticker: str = '') -> tuple:
     """Return (maker_rate, taker_rate) for a market ticker.

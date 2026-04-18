@@ -97,7 +97,12 @@ function scrollToMarket(ticker) {
 }
 
 /** Kalshi maker fee in cents: ceil(0.0175 × count × P × (1-P) × 100) */
-function kalshiFeeCents(yesPrice, noPrice, count) {
+// Free-fee series (Kalshi 2026): tennis ATP/WTA/ITF, NHL spreads.
+// NBA/MLB/NHL games charge 1.75% maker. Unknown defaults to premium (conservative).
+const _FREE_FEE_PREFIXES = ['KXATP', 'KXWTA', 'KXITF', 'KXNHLSPREAD'];
+function kalshiFeeCents(yesPrice, noPrice, count, ticker) {
+    const series = (ticker || '').split('-')[0].toUpperCase();
+    if (_FREE_FEE_PREFIXES.some(p => series.startsWith(p))) return 0;
     const p = yesPrice / 100;
     return Math.ceil(0.0175 * count * p * (1 - p) * 100);
 }
@@ -6326,7 +6331,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             if (favFilled && dogFilled) {
                 const profitPer = bot.profit_per || (100 - avgDogPrice - favPrice);
                 const totalQty = isLadder ? (bot.total_dog_fill_qty || hedgeQty) : qty;
-                const estFee = typeof kalshiFeeCents === 'function' ? kalshiFeeCents(dogSide === 'yes' ? avgDogPrice : favPrice, dogSide === 'yes' ? favPrice : avgDogPrice, totalQty) : 0;
+                const estFee = typeof kalshiFeeCents === 'function' ? kalshiFeeCents(dogSide === 'yes' ? avgDogPrice : favPrice, dogSide === 'yes' ? favPrice : avgDogPrice, totalQty, bot.ticker) : 0;
                 const netProfit = profitPer * totalQty - estFee;
                 const pnlCol = netProfit > 0 ? '#00ff88' : netProfit < 0 ? '#ff4444' : '#ffaa00';
                 return `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding:6px 10px;background:#060a14;border:1px solid ${pnlCol}33;border-radius:6px;font-size:11px;">
@@ -6336,7 +6341,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             } else if (dogFilled && favPrice > 0) {
                 const estProfitPer = 100 - avgDogPrice - favPrice;
                 const totalQty = isLadder ? (bot.total_dog_fill_qty || hedgeQty) : qty;
-                const estFee = typeof kalshiFeeCents === 'function' ? kalshiFeeCents(dogSide === 'yes' ? avgDogPrice : favPrice, dogSide === 'yes' ? favPrice : avgDogPrice, totalQty) : 0;
+                const estFee = typeof kalshiFeeCents === 'function' ? kalshiFeeCents(dogSide === 'yes' ? avgDogPrice : favPrice, dogSide === 'yes' ? favPrice : avgDogPrice, totalQty, bot.ticker) : 0;
                 const estNet = estProfitPer * totalQty - estFee;
                 const pnlCol = estNet > 0 ? '#00ff88' : estNet < 0 ? '#ff4444' : '#ffaa00';
                 return `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding:6px 10px;background:#060a14;border:1px solid ${pnlCol}33;border-radius:6px;font-size:11px;">
@@ -6347,7 +6352,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 const estFavPrice = favBid;
                 const estProfitPer = 100 - avgDogPrice - estFavPrice;
                 const totalQty = isLadder ? (bot.total_dog_fill_qty || qty) : qty;
-                const estFee = typeof kalshiFeeCents === 'function' ? kalshiFeeCents(dogSide === 'yes' ? avgDogPrice : estFavPrice, dogSide === 'yes' ? estFavPrice : avgDogPrice, totalQty) : 0;
+                const estFee = typeof kalshiFeeCents === 'function' ? kalshiFeeCents(dogSide === 'yes' ? avgDogPrice : estFavPrice, dogSide === 'yes' ? estFavPrice : avgDogPrice, totalQty, bot.ticker) : 0;
                 const estNet = estProfitPer * totalQty - estFee;
                 const pnlCol = estNet > 0 ? '#00ff88' : estNet < 0 ? '#ff4444' : '#ffaa00';
                 return `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding:6px 10px;background:#060a14;border:1px solid ${pnlCol}33;border-radius:6px;font-size:11px;">
@@ -8074,7 +8079,7 @@ async function loadBots() {
                         if (curFav > 0) {
                             const q = b.hedge_qty || b.quantity || 1;
                             const spread = 100 - anchorPrice - curFav;
-                            const fee = typeof kalshiFeeCents === 'function' ? kalshiFeeCents(anchorPrice, curFav, q) : 0;
+                            const fee = typeof kalshiFeeCents === 'function' ? kalshiFeeCents(anchorPrice, curFav, q, b.ticker) : 0;
                             estPnl += spread * q - fee;
                         }
                     }
@@ -8089,7 +8094,7 @@ async function loadBots() {
                     // Both filled on current run — count theoretical as locked
                     const yp = b.yes_price || 0, np = b.no_price || 0;
                     const rawProfit = (100 - yp - np) * bQty;
-                    const fee = (yp > 0 && np > 0) ? kalshiFeeCents(yp, np, bQty) : 0;
+                    const fee = (yp > 0 && np > 0) ? kalshiFeeCents(yp, np, bQty, b.ticker) : 0;
                     return sum + lifetimePnl + rawProfit - fee;
                 }
                 // Not fully filled — only count completed runs' P&L

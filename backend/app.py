@@ -562,6 +562,9 @@ def get_markets():
     try:
         if not kalshi_client:
             return jsonify({'error': 'Not authenticated. Please login first.'}), 401
+        # Mark scanner-active so intl basketball score cache stays warm while user browses
+        global _basketball_browse_ts
+        _basketball_browse_ts = time.time()
             
         status = request.args.get('status', 'open')
         limit = int(request.args.get('limit', 5000))
@@ -2182,6 +2185,193 @@ def _fetch_api_tennis_scoreboard(tour_filter):
         })
 
     return {'events': events}
+
+
+# ─── api-sports.io basketball integration (intl leagues ESPN doesn't cover) ──
+# Free tier: 100 requests/day. One ?live=all call returns every live game globally.
+# Strategy: cache aggressively, gate by "any active intl bot OR recent scanner ping".
+_BASKETBALL_API_KEY = os.environ.get('BASKETBALL_API_KEY', 'b7d73ee21537b6de04e1933a3ef99df4')
+_basketball_api_cache = {'data': {}, 'ts': 0, 'raw_games': []}
+_BASKETBALL_API_TTL_NORMAL = 300  # 5 min when no bot in hot state
+_BASKETBALL_API_TTL_HOT = 60      # 1 min when a covered-league bot is hedging
+_basketball_browse_ts = 0          # last time someone hit /api/markets — refresh while active
+
+# Kalshi series prefix → api-sports.io basketball league ID
+_INTL_BASKETBALL_LEAGUES = {
+    'KXACBGAME':       117,  # Spain ACB
+    'KXBBLGAME':        40,  # Germany BBL
+    'KXGBLGAME':        45,  # Greece Basket League
+    'KXCBAGAME':        31,  # China CBA
+    'KXVTBGAME':        82,  # Russia VTB United League (Promo-Cup season name)
+    'KXABAGAME':       198,  # Adriatic ABA League
+    'KXJBLEAGUEGAME':   56,  # Japan B League
+    'KXLNBELITEGAME':    2,  # France LNB Elite
+    'KXBSLGAME':       104,  # Turkey Süper Ligi (BSL)
+    'KXKBLGAME':        91,  # South Korea KBL
+    'KXEUROLEAGUEGAME':120,  # EuroLeague
+    'KXNBLGAME':       194,  # Australia NBL — best guess (verify)
+}
+_INTL_BASKETBALL_PREFIXES = set(_INTL_BASKETBALL_LEAGUES.keys())
+_LEAGUE_ID_TO_PREFIX = {v: k for k, v in _INTL_BASKETBALL_LEAGUES.items()}
+
+
+def _basketball_team_codes(name: str) -> set:
+    """Generate plausible 3-letter Kalshi codes from a full team name.
+
+    Examples:
+        'Bàsquet Manresa'              → {'BAS', 'MAN', 'BASMAN', 'BM'}
+        'Türk Telekom'                 → {'TUR', 'TEL', 'TURTEL', 'TT', 'TTS' (no)}
+        'Merkezefendi Belediyesi …'    → {'MER', 'BEL', 'DEN', 'BAS', 'MBDB'}
+
+    Returns a set of uppercase codes (3-6 chars) for fuzzy matching.
+    """
+    if not name:
+        return set()
+    import unicodedata
+    nfkd = unicodedata.normalize('NFKD', name)
+    clean = ''.join(c for c in nfkd if not unicodedata.combining(c)).upper()
+    words = [w for w in re.split(r"[\s\-/.,'’]+", clean) if w and any(ch.isalpha() for ch in w)]
+    codes = set()
+    for w in words:
+        wa = ''.join(ch for ch in w if ch.isalpha())
+        if len(wa) >= 3:
+            codes.add(wa[:3])
+            codes.add(wa[:4])
+        if len(wa) >= 5:
+            codes.add(wa[:5])
+    initials = ''.join(w[0] for w in words if w and w[0].isalpha())
+    if 2 <= len(initials) <= 6:
+        codes.add(initials)
+        if len(initials) >= 3:
+            codes.add(initials[:3])
+    if words:
+        joined = ''.join(words)
+        if len(joined) >= 3:
+            codes.add(joined[:3])
+    return {c for c in codes if 2 <= len(c) <= 6}
+
+
+def _intl_basketball_should_refresh():
+    """Decide whether to actually hit the API.
+    Returns (should_refresh, hot_mode). hot_mode=True → use 60s TTL, else 5min."""
+    has_active_bot = False
+    in_hot_state = False
+    try:
+        _bots_snapshot = list(bots.values()) if 'bots' in globals() else []
+    except Exception:
+        _bots_snapshot = []
+    _terminal = {'completed', 'cancelled', 'killed', 'stopped', 'expired', 'awaiting_settlement'}
+    _hot = {'fav_hedge_posted', 'dog_filled', 'ladder_filled_no_fav', 'hedging'}
+    for b in _bots_snapshot:
+        ticker = (b.get('ticker') or '').upper()
+        prefix = ticker.split('-')[0] if ticker else ''
+        if prefix not in _INTL_BASKETBALL_PREFIXES:
+            continue
+        status = (b.get('status') or '').lower()
+        if status in _terminal:
+            continue
+        has_active_bot = True
+        if status in _hot:
+            in_hot_state = True
+            break
+    browse_recent = (time.time() - _basketball_browse_ts) < 300
+    return (has_active_bot or browse_recent), in_hot_state
+
+
+def _fetch_intl_basketball_scoreboard():
+    """Fetch live intl basketball games and return team-keyed cache dict.
+    Returns the cache dict (possibly stale if not refreshed this call)."""
+    if not _BASKETBALL_API_KEY:
+        return {}
+    should_refresh, hot_mode = _intl_basketball_should_refresh()
+    ttl = _BASKETBALL_API_TTL_HOT if hot_mode else _BASKETBALL_API_TTL_NORMAL
+    age = time.time() - _basketball_api_cache['ts']
+    if not should_refresh or age < ttl:
+        return _basketball_api_cache.get('data', {})
+    try:
+        url = 'https://v1.basketball.api-sports.io/games?live=all'
+        resp = requests.get(url, headers={'x-apisports-key': _BASKETBALL_API_KEY}, timeout=8)
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception as e:
+        print(f'⚠️ Intl basketball API fetch failed: {e}')
+        return _basketball_api_cache.get('data', {})
+
+    games = payload.get('response', []) or []
+    wanted_ids = set(_INTL_BASKETBALL_LEAGUES.values())
+    team_info = {}
+    matched = 0
+    for g in games:
+        league = g.get('league') or {}
+        league_id = league.get('id')
+        if league_id not in wanted_ids:
+            continue
+        kalshi_prefix = _LEAGUE_ID_TO_PREFIX.get(league_id, '')
+        sport_key = kalshi_prefix.replace('KXAGAME', '').replace('KX', '').replace('GAME', '').lower() or 'intl'
+        home = (g.get('teams') or {}).get('home') or {}
+        away = (g.get('teams') or {}).get('away') or {}
+        home_name = home.get('name') or ''
+        away_name = away.get('name') or ''
+        scores = g.get('scores') or {}
+        try:
+            home_total = int((scores.get('home') or {}).get('total') or 0)
+        except (ValueError, TypeError):
+            home_total = 0
+        try:
+            away_total = int((scores.get('away') or {}).get('total') or 0)
+        except (ValueError, TypeError):
+            away_total = 0
+        status_obj = g.get('status') or {}
+        short = (status_obj.get('short') or '').upper()
+        timer = status_obj.get('timer') or ''
+        # api-sports basketball status codes:
+        # NS=not_started, Q1/Q2/Q3/Q4=quarter, OT=overtime, BT=break, HT=halftime,
+        # FT=finished, AOT=after_overtime, POST=postponed, CANC=cancelled, AWD=awarded
+        live_codes = {'Q1','Q2','Q3','Q4','OT','BT','HT'}
+        finished_codes = {'FT','AOT'}
+        if short in live_codes:
+            state = 'in'
+        elif short in finished_codes:
+            state = 'post'
+        else:
+            state = 'pre'
+        period_map = {'Q1':1,'Q2':2,'Q3':3,'Q4':4,'OT':5,'HT':2,'BT':2,'FT':4,'AOT':5}
+        period = period_map.get(short, 0)
+        entry = {
+            'live': state == 'in',
+            'status': state,
+            'period': period,
+            'clock': timer,
+            'status_detail': short,
+            'home_score': home_total,
+            'away_score': away_total,
+            'score_diff': abs(home_total - away_total),
+            'team_score': home_total,
+            'opp_score': away_total,
+            'home_team': home_name,
+            'away_team': away_name,
+            'espn_sport': f'intl_{sport_key}',
+            'league_id': league_id,
+            'sport_prefix': kalshi_prefix,
+        }
+        for code in _basketball_team_codes(home_name):
+            team_info.setdefault(code, entry)
+            team_info[f'{sport_key}:{code}'] = entry
+        for code in _basketball_team_codes(away_name):
+            # away gets a flipped entry so team_score/opp_score work
+            away_entry = dict(entry)
+            away_entry['team_score'] = away_total
+            away_entry['opp_score'] = home_total
+            team_info.setdefault(code, away_entry)
+            team_info[f'{sport_key}:{code}'] = away_entry
+        matched += 1
+
+    _basketball_api_cache['data'] = team_info
+    _basketball_api_cache['ts'] = time.time()
+    _basketball_api_cache['raw_games'] = games
+    if matched:
+        print(f'🏀 Intl basketball cache refreshed: {matched} live games, {len(team_info)} team-code keys (mode={"hot" if hot_mode else "normal"})')
+    return team_info
 
 
 @app.route('/api/scoreboard/<sport>', methods=['GET'])
@@ -6107,6 +6297,19 @@ def _refresh_espn_cache():
                             team_info[f'{sport}:{kalshi_code}'] = new_entry
         except Exception:
             continue
+    # Merge international basketball (api-sports.io) into the same cache.
+    # Sport-qualified keys (e.g. 'acb:MAN') prevent collision with NBA/NCAA codes;
+    # bare keys are setdefault-only, so ESPN entries always win on collision.
+    try:
+        _intl_data = _fetch_intl_basketball_scoreboard()
+        for k, v in _intl_data.items():
+            if ':' in k:
+                team_info[k] = v
+            else:
+                team_info.setdefault(k, v)
+    except Exception as _e:
+        print(f'⚠️ Intl basketball merge failed: {_e}')
+
     _espn_cache = {'data': team_info, 'ts': time.time()}
     live_teams = [k for k, v in team_info.items() if v.get('live')]
     if live_teams:
@@ -6143,7 +6346,8 @@ def _detect_sport(ticker: str) -> str:
         return 'ucl'
     if prefix.startswith('KXATP') or prefix.startswith('KXWTA') or prefix.startswith('KXITF'):
         return 'tennis'
-    if prefix.startswith(('KXVTB', 'KXBSL', 'KXABA')):
+    if prefix.startswith(('KXVTB','KXBSL','KXABA','KXACB','KXBBL','KXGBL','KXKBL',
+                          'KXCBA','KXEUROLEAGUE','KXJBLEAGUE','KXLNBELITE','KXNBL')):
         return 'intl_basketball'
     return 'unknown'
 

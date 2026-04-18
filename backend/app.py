@@ -693,14 +693,7 @@ def get_markets():
             'f1': ['KXF1RACE'],
             'cricket': ['KXIPL'],
         }
-        # Series excluded from the default "all" fetch — low liquidity / bad pricing.
-        # Accessible via explicit sport filter (e.g. sport=intl / sport=nbl) but not shown by default.
-        _EXCLUDE_FROM_ALL = {'KXVTBGAME', 'KXBSLGAME', 'KXABAGAME', 'KXNBLGAME',
-                             'KXKBLGAME', 'KXCBAGAME', 'KXEUROLEAGUEGAME',
-                             'KXBBLGAME', 'KXGBLGAME', 'KXACBGAME',
-                             'KXJBLEAGUEGAME', 'KXLNBELITEGAME',
-                             'KXUFCFIGHT', 'KXF1RACE',
-                             'KXKBOGAME', 'KXNPBGAME'}
+        _EXCLUDE_FROM_ALL = set()
 
         # Determine which series to fetch
         if sport_filter and sport_filter.lower() != 'all':
@@ -6252,19 +6245,34 @@ def _enrich_trade_record(record: dict, bot: dict = None) -> dict:
         'KXNFLGAME':'NFL','KXNFLSPREAD':'NFL','KXNFLTOTAL':'NFL',
         'KXNHLGAME':'NHL','KXNHLSPREAD':'NHL','KXNHLTOTAL':'NHL','KXNHLGOAL':'NHL',
         'KXMLBGAME':'MLB','KXMLBSPREAD':'MLB','KXMLBTOTAL':'MLB','KXMLBSTGAME':'MLB',
-        'KXMLSGAME':'MLS','KXMLSSPREAD':'MLS','KXMLSTOTAL':'MLS',
+        'KXMLSGAME':'MLS','KXMLSSPREAD':'MLS','KXMLSTOTAL':'MLS','KXMLSBTTS':'MLS',
         'KXNCAAMBGAME':'NCAAB','KXNCAAMBSPREAD':'NCAAB','KXNCAAMBTOTAL':'NCAAB',
         'KXNCAAMBPTS':'NCAAB','KXNCAAMBREB':'NCAAB','KXNCAAMBAST':'NCAAB',
         'KXNCAAMB3PT':'NCAAB','KXNCAAMBSTL':'NCAAB','KXNCAAMBBLK':'NCAAB',
         'KXNCAAMB1HWINNER':'NCAAB','KXNCAAMB1HSPREAD':'NCAAB','KXNCAAMB1HTOTAL':'NCAAB',
         'KXMARMAD':'NCAAB','KXNCAAWBGAME':'NCAAW',
         'KXNCAAFGAME':'NCAAF','KXNCAAFSPREAD':'NCAAF','KXNCAAFTOTAL':'NCAAF',
-        'KXEPLGAME':'EPL','KXEPLSPREAD':'EPL','KXEPLTOTAL':'EPL','KXEPLGOAL':'EPL',
-        'KXUCLGAME':'UCL','KXUCLSPREAD':'UCL','KXUCLTOTAL':'UCL','KXUCLGOAL':'UCL',
+        'KXEPLGAME':'EPL','KXEPLSPREAD':'EPL','KXEPLTOTAL':'EPL','KXEPLGOAL':'EPL','KXEPLBTTS':'EPL',
+        'KXUCLGAME':'UCL','KXUCLSPREAD':'UCL','KXUCLTOTAL':'UCL','KXUCLGOAL':'UCL','KXUCLBTTS':'UCL',
         'KXATPMATCH':'Tennis','KXATPCHALLENGERMATCH':'Tennis','KXWTAMATCH':'Tennis','KXWTACHALLENGERMATCH':'Tennis',
         'KXITFMATCH':'Tennis','KXITFWMATCH':'Tennis',
-        'KXKBOGAME':'KBO','KXNPBGAME':'NPB',
-        'KXWBCGAME':'WBC','KXVTBGAME':'Volleyball','KXBSLGAME':'Basketball','KXABAGAME':'ABA',
+        'KXKBOGAME':'KBO','KXNPBGAME':'NPB','KXWBCGAME':'WBC',
+        # International basketball — each league gets its own bucket
+        'KXVTBGAME':'VTB','KXBSLGAME':'BSL','KXABAGAME':'ABA',
+        'KXKBLGAME':'KBL','KXCBAGAME':'CBA','KXEUROLEAGUEGAME':'EuroLeague',
+        'KXBBLGAME':'BBL','KXGBLGAME':'GBL','KXACBGAME':'ACB',
+        'KXJBLEAGUEGAME':'JBLeague','KXLNBELITEGAME':'LNBElite',
+        'KXNBLGAME':'NBL',
+        # Additional soccer leagues
+        'KXLALIGAGAME':'LaLiga','KXLIGAMXGAME':'LigaMX','KXSERIEAGAME':'SerieA',
+        'KXBUNDESLIGAGAME':'Bundesliga','KXLIGUE1GAME':'Ligue1',
+        # Combat / motorsport / cricket
+        'KXUFCFIGHT':'UFC','KXF1RACE':'F1','KXIPL':'Cricket',
+        # Golf
+        'KXPGAH2H':'Golf','KXPGATOP10':'Golf','KXPGATOP5':'Golf','KXPGAMAKECUT':'Golf',
+        'KXPGAR1LEAD':'Golf','KXPGAR2LEAD':'Golf','KXPGAR3LEAD':'Golf',
+        'KXLIVH2H':'Golf','KXLIVTOP10':'Golf','KXLIVTOP5':'Golf','KXLIVR1LEAD':'Golf','KXLIVTOUR':'Golf',
+        'KXTGLMATCH':'Golf',
     }
     record['sport'] = _SPORT_MAP.get(series, 'Other')
     return record

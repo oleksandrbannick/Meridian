@@ -708,7 +708,7 @@ function _sportRankForTicker(ticker) {
 function matchesSport(ticker, key, subKey) {
     const cfg = SPORT_FILTER_CONFIG[key];
     if (!cfg) return true;
-    if (cfg.unknownOnly) return detectSport(ticker) === 'Sports';
+    if (cfg.unknownOnly) return detectSport(ticker) === 'Other';
     if (!cfg.prefixes) return true;
     const et = (ticker || '').toUpperCase();
     let pool = cfg.prefixes;
@@ -1908,7 +1908,7 @@ function detectSport(eventTicker) {
     if (upper.includes('KXF1')) return 'F1';
     if (upper.includes('KXIPL')) return 'Cricket';
     if (upper.includes('KXLOL') || upper.includes('KXDOTA') || upper.includes('KXCS')) return 'Esports';
-    return 'Sports';
+    return 'Other';
 }
 
 // Get sport emoji
@@ -1923,7 +1923,7 @@ function getSportEmoji(sport) {
         'GBL': '🏀', 'ACB': '🏀', 'JBLeague': '🏀', 'LNBElite': '🏀',
         'UFC': '🥊', 'Bundesliga': '⚽', 'LaLiga': '⚽', 'LigaMX': '⚽',
         'Ligue1': '⚽', 'SerieA': '⚽', 'F1': '🏎️', 'Cricket': '🏏',
-        'Sports': '🏆'
+        'Other': '🏆'
     };
     return emojis[sport] || '🏆';
 }
@@ -7841,7 +7841,7 @@ async function loadBots() {
                     const _dSportBar = document.createElement('div');
                     _dSportBar.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;padding:8px 12px;margin-bottom:4px;align-items:center;';
                     const _dAllActive = _botsActiveSport === 'all';
-                    const _dsi = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'KBO': '⚾', 'NPB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'Golf': '⛳' };
+                    const _dsi = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'KBO': '⚾', 'NPB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'NCAAW': '🏀', 'NCAAF': '🏈', 'Golf': '⛳', 'WBC': '⚾', 'NBL': '🏀', 'VTB': '🏀', 'BSL': '🏀', 'ABA': '🏀', 'KBL': '🏀', 'CBA': '🏀', 'EuroLeague': '🏀', 'BBL': '🏀', 'GBL': '🏀', 'ACB': '🏀', 'JBLeague': '🏀', 'LNBElite': '🏀', 'UFC': '🥊', 'F1': '🏎️', 'Cricket': '🏏', 'Bundesliga': '⚽', 'LaLiga': '⚽', 'LigaMX': '⚽', 'Ligue1': '⚽', 'SerieA': '⚽' };
                     _dSportBar.innerHTML = `<span onclick="window._filterBotsSport('all')" style="background:${_dAllActive ? '#ffaa0022' : '#0f1419'};color:${_dAllActive ? '#ffaa00' : '#556'};border:1px solid ${_dAllActive ? '#ffaa0044' : '#1e2740'};border-radius:6px;padding:3px 8px;font-size:10px;font-weight:700;cursor:pointer;">All <span style="color:${_dTotalCol}">${_dTotalNet >= 0 ? '+' : ''}${(_dTotalNet/100).toFixed(2)}</span></span>` +
                         _dogSportEntries.map(([sp, d]) => {
                             const isActive = _botsActiveSport === sp;
@@ -7968,7 +7968,7 @@ async function loadBots() {
         // ── Sport filter pills (daily P&L from Apex trades only) ──
         const _sportPnlRaw = (window._lastPnlData || {}).arb_sport_pnl || {};
         const _sportPnl = {};
-        const _si = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'KBO': '⚾', 'NPB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'Golf': '⛳' };
+        const _si = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'KBO': '⚾', 'NPB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'NCAAW': '🏀', 'NCAAF': '🏈', 'Golf': '⛳', 'WBC': '⚾', 'NBL': '🏀', 'VTB': '🏀', 'BSL': '🏀', 'ABA': '🏀', 'KBL': '🏀', 'CBA': '🏀', 'EuroLeague': '🏀', 'BBL': '🏀', 'GBL': '🏀', 'ACB': '🏀', 'JBLeague': '🏀', 'LNBElite': '🏀', 'UFC': '🥊', 'F1': '🏎️', 'Cricket': '🏏', 'Bundesliga': '⚽', 'LaLiga': '⚽', 'LigaMX': '⚽', 'Ligue1': '⚽', 'SerieA': '⚽' };
         // Seed from daily P&L (in dollars from sport_pnl)
         Object.entries(_sportPnlRaw).forEach(([sp, netDollars]) => {
             _sportPnl[sp] = { net: Math.round(netDollars * 100), count: 0 };

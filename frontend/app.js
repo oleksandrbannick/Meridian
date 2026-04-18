@@ -106,6 +106,22 @@ function kalshiFeeCents(yesPrice, noPrice, count, ticker) {
     const p = yesPrice / 100;
     return Math.ceil(0.0175 * count * p * (1 - p) * 100);
 }
+
+// Format fractional quantity — strips IEEE 754 precision artifacts like 0.8800000000000026.
+// Integers render without decimals; fractionals render with up to 2 decimals, trailing zeros trimmed.
+function fmtQty(v) {
+    const n = Number(v);
+    if (!isFinite(n)) return '0';
+    if (Math.abs(n - Math.round(n)) < 1e-6) return String(Math.round(n));
+    return n.toFixed(2).replace(/\.?0+$/, '');
+}
+// Format cents with same precision stripping (for Est: +5.28¢ etc).
+function fmtCents(v) {
+    const n = Number(v);
+    if (!isFinite(n)) return '0';
+    if (Math.abs(n - Math.round(n)) < 1e-6) return String(Math.round(n));
+    return n.toFixed(2).replace(/\.?0+$/, '');
+}
 let allMarkets = [];
 let autoMonitorInterval = null;
 let _tabRefreshInterval = null; // Auto-refresh for history/positions tabs
@@ -6300,7 +6316,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 const _priceLabel = isLadder && dogFillQty > 0 && bot.avg_fill_price > 0 ? `Avg ${avgDogPrice}¢` : isLadder && rungs.length > 0 ? `${rungs[rungs.length-1].price}¢–${rungs[0].price}¢` : `${dogPrice}¢`;
                 const _barPct = dogFillPct;
                 const _barCol = dogFillCol;
-                const _barLabel = `${Math.min(dogFillQty, qty)}/${qty}`;
+                const _barLabel = `${fmtQty(Math.min(dogFillQty, qty))}/${fmtQty(qty)}`;
                 return `<div style="background:#060a14;border:1px solid ${_borderCol};border-radius:8px;padding:10px;">
                 <div style="color:${_headerCol};font-size:9px;font-weight:800;text-transform:uppercase;margin-bottom:6px;">${_headerLabel}</div>
                 <div style="color:#fff;font-weight:700;font-size:14px;margin-bottom:4px;">${_priceLabel}</div>
@@ -6320,7 +6336,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                         <div style="flex:1;height:6px;background:#1a2540;border-radius:3px;overflow:hidden;">
                             <div style="width:${favFillPct}%;height:100%;background:${favFillCol};border-radius:3px;"></div>
                         </div>
-                        <span style="color:${favFillCol};font-size:10px;font-weight:700;">${Math.min(favFillQty, hedgeQty)}/${hedgeQty}</span>
+                        <span style="color:${favFillCol};font-size:10px;font-weight:700;">${fmtQty(Math.min(favFillQty, hedgeQty))}/${fmtQty(hedgeQty)}</span>
                     </div>
                 ` : ''}
             </div>
@@ -6335,8 +6351,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 const netProfit = profitPer * totalQty - estFee;
                 const pnlCol = netProfit > 0 ? '#00ff88' : netProfit < 0 ? '#ff4444' : '#ffaa00';
                 return `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding:6px 10px;background:#060a14;border:1px solid ${pnlCol}33;border-radius:6px;font-size:11px;">
-                    <span style="color:${pnlCol};font-weight:800;">P&L: ${netProfit >= 0 ? '+' : ''}${netProfit}¢ ($${(netProfit/100).toFixed(2)})</span>
-                    <span style="color:#555;font-size:9px;">${profitPer}¢/ea × ${totalQty} - ${estFee}¢ fees</span>
+                    <span style="color:${pnlCol};font-weight:800;">P&L: ${netProfit >= 0 ? '+' : ''}${fmtCents(netProfit)}¢ ($${(netProfit/100).toFixed(2)})</span>
+                    <span style="color:#555;font-size:9px;">${fmtCents(profitPer)}¢/ea × ${fmtQty(totalQty)} - ${estFee}¢ fees</span>
                 </div>`;
             } else if (dogFilled && favPrice > 0) {
                 const estProfitPer = 100 - avgDogPrice - favPrice;
@@ -6345,7 +6361,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 const estNet = estProfitPer * totalQty - estFee;
                 const pnlCol = estNet > 0 ? '#00ff88' : estNet < 0 ? '#ff4444' : '#ffaa00';
                 return `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding:6px 10px;background:#060a14;border:1px solid ${pnlCol}33;border-radius:6px;font-size:11px;">
-                    <span style="color:${pnlCol};font-weight:800;">Est: ${estNet >= 0 ? '+' : ''}${estNet}¢</span>
+                    <span style="color:${pnlCol};font-weight:800;">Est: ${estNet >= 0 ? '+' : ''}${fmtCents(estNet)}¢</span>
                     <span style="color:#555;font-size:9px;">if fav fills @${favPrice}¢</span>
                 </div>`;
             } else if (dogFilled && favBid > 0) {
@@ -6356,7 +6372,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 const estNet = estProfitPer * totalQty - estFee;
                 const pnlCol = estNet > 0 ? '#00ff88' : estNet < 0 ? '#ff4444' : '#ffaa00';
                 return `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding:6px 10px;background:#060a14;border:1px solid ${pnlCol}33;border-radius:6px;font-size:11px;">
-                    <span style="color:${pnlCol};font-weight:800;">Est: ${estNet >= 0 ? '+' : ''}${estNet}¢</span>
+                    <span style="color:${pnlCol};font-weight:800;">Est: ${estNet >= 0 ? '+' : ''}${fmtCents(estNet)}¢</span>
                     <span style="color:#555;font-size:9px;">at bid ${estFavPrice}¢</span>
                 </div>`;
             }
@@ -6381,7 +6397,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             return '';
         })()}
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid #1e2740;font-size:10px;">
-            <span style="color:#ff66aa;font-weight:600;">Depth: ${bot.anchor_depth || targetWidth}¢${bot.auto_depth ? ' <span style="color:#64ffda;font-size:8px;">AUTO</span>' : ''}</span>${bot._rec_qty != null ? (() => { const _rq = bot._rec_qty, _mq = bot._max_qty || _rq; const _ok = qty <= _rq; const _over = qty > _mq; const _border = _ok ? '#00ff8833' : _over ? '#ff444433' : '#ffaa0033'; const _recCol = qty <= _rq ? '#00ff88' : '#ff4444'; return `<span style="display:inline-flex;align-items:center;border:1px solid ${_border};border-radius:4px;overflow:hidden;font-size:9px;font-weight:700;" title="Fav bid L1: ${bot._fav_bid_l1 || '?'} · Fav ask L1: ${bot._fav_ask_l1 || '?'}"><span style="padding:1px 5px;color:#b2ff59;background:#b2ff5910;">×${qty}</span><span style="padding:1px 5px;color:${_recCol};background:${_recCol}10;border-left:1px solid #1e2740;">rec ${_rq}</span><span style="padding:1px 5px;color:#ff4444;background:#ff444410;border-left:1px solid #1e2740;">max ${_mq}</span></span>`; })() : `<span style="color:#b2ff59;">×${qty}</span>`}${(() => {
+            <span style="color:#ff66aa;font-weight:600;">Depth: ${bot.anchor_depth || targetWidth}¢${bot.auto_depth ? ' <span style="color:#64ffda;font-size:8px;">AUTO</span>' : ''}</span>${bot._rec_qty != null ? (() => { const _rq = bot._rec_qty, _mq = bot._max_qty || _rq; const _ok = qty <= _rq; const _over = qty > _mq; const _border = _ok ? '#00ff8833' : _over ? '#ff444433' : '#ffaa0033'; const _recCol = qty <= _rq ? '#00ff88' : '#ff4444'; return `<span style="display:inline-flex;align-items:center;border:1px solid ${_border};border-radius:4px;overflow:hidden;font-size:9px;font-weight:700;" title="Fav bid L1: ${bot._fav_bid_l1 || '?'} · Fav ask L1: ${bot._fav_ask_l1 || '?'}"><span style="padding:1px 5px;color:#b2ff59;background:#b2ff5910;">×${fmtQty(qty)}</span><span style="padding:1px 5px;color:${_recCol};background:${_recCol}10;border-left:1px solid #1e2740;">rec ${fmtQty(_rq)}</span><span style="padding:1px 5px;color:#ff4444;background:#ff444410;border-left:1px solid #1e2740;">max ${fmtQty(_mq)}</span></span>`; })() : `<span style="color:#b2ff59;">×${fmtQty(qty)}</span>`}${(() => {
                 const _ppi = bot._live_ppi != null ? bot._live_ppi : bot._last_ppi;
                 if (_ppi != null) {
                     const _ppiCol = _ppi >= 85 ? '#00ff88' : _ppi >= 55 ? '#00ccff' : _ppi >= 45 ? '#ff8800' : _ppi >= 40 ? '#ff6600' : _ppi >= 35 ? '#ff4400' : '#ff4444';

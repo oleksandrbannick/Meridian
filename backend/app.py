@@ -21,6 +21,7 @@ sys.setswitchinterval(0.0005)
 import threading
 import math as _math
 import re
+from collections import deque
 from datetime import datetime, date, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor
 import anthropic
@@ -3164,72 +3165,65 @@ def load_state():
 
 # ─── Rate Limiter (Upgrade #7: API rate limit guard) ──────────────────────────
 class RateLimiter:
-    """Burst rate limiter — fires up to `burst` requests instantly within a
-    1-second window, then hard-blocks until the next window starts.
-    No delay between requests within the burst (preserves 1ms latency).
-    Reserves 2 tokens for priority hedge operations so they never queue."""
-    RESERVED_HEDGE_TOKENS = 2  # always keep 2 slots free for hedges
+    """Sliding-window rate limiter — caps at `burst` requests per ROLLING 1-second
+    window. Matches Kalshi's enforcement (fixed-reset limiters overshoot at window
+    boundaries: 30 fired at t=0.05 + 30 at t=1.05 = 60 in Kalshi's rolling view → 429).
+    Reserves 2 tokens for priority hedge operations."""
+    RESERVED_HEDGE_TOKENS = 2
 
     def __init__(self, burst: int = 10):
         self.burst = burst
-        self._count = 0
-        self._window_start = time.time()
+        self._times = deque()  # timestamps of granted calls within last 1s
         self._lock = threading.Lock()
-        # Usage tracking
         self._total_calls = 0
         self._calls_last_min = 0
         self._min_start = time.time()
 
+    def _prune(self, now):
+        cutoff = now - 1.0
+        while self._times and self._times[0] <= cutoff:
+            self._times.popleft()
+
     def get_usage(self):
-        """Return calls/min and current burst count."""
         with self._lock:
             now = time.time()
             if now - self._min_start >= 60:
                 self._calls_last_min = 0
                 self._min_start = now
-            return {'calls_per_min': self._calls_last_min, 'burst_used': self._count, 'burst_max': self.burst}
+            self._prune(now)
+            return {'calls_per_min': self._calls_last_min, 'burst_used': len(self._times), 'burst_max': self.burst}
+
+    def _grant(self, now):
+        self._times.append(now)
+        self._total_calls += 1
+        if now - self._min_start >= 60:
+            self._min_start = now
+            self._calls_last_min = 1
+        else:
+            self._calls_last_min += 1
 
     def wait(self, priority=False):
         while True:
             with self._lock:
                 now = time.time()
-                elapsed = now - self._window_start
-                if elapsed >= 1.0:
-                    # New window — reset counter
-                    self._window_start = now
-                    self._count = 1
-                    self._total_calls += 1
-                    if now - self._min_start >= 60:
-                        self._calls_last_min = 1
-                        self._min_start = now
-                    else:
-                        self._calls_last_min += 1
-                    return
-                # Priority (hedge) calls can use the full burst including reserved tokens
+                self._prune(now)
                 effective_burst = self.burst if priority else (self.burst - self.RESERVED_HEDGE_TOKENS)
-                if self._count < effective_burst:
-                    self._count += 1
-                    self._total_calls += 1
-                    self._calls_last_min += 1
+                if len(self._times) < effective_burst:
+                    self._grant(now)
                     return
-                # Burst exhausted — compute sleep, release lock FIRST
-                sleep_time = 1.0 - elapsed
-            # Sleep OUTSIDE the lock so priority callers aren't blocked
+                # Sleep until oldest slot expires (then retry under lock)
+                oldest = self._times[0]
+                sleep_time = max(0.001, (oldest + 1.0) - now)
             time.sleep(sleep_time)
 
     def try_wait(self):
-        """Non-blocking: return True if a token was available, False if burst exhausted.
-        Use this inside the monitor lock to avoid blocking the entire server."""
+        """Non-blocking: True if a token was available, False if burst exhausted."""
         with self._lock:
             now = time.time()
-            elapsed = now - self._window_start
-            if elapsed >= 1.0:
-                self._window_start = now
-                self._count = 1
-                return True
+            self._prune(now)
             effective_burst = self.burst - self.RESERVED_HEDGE_TOKENS
-            if self._count < effective_burst:
-                self._count += 1
+            if len(self._times) < effective_burst:
+                self._grant(now)
                 return True
             return False
 
@@ -5847,7 +5841,7 @@ MIN_FAV_ENTRY_CENTS = 65    # Guardrail: never deploy fav side below 65¢ (65-69
 # ─── Kalshi Milestones Cache (authoritative live detection for tennis) ────────
 # Maps event_ticker → {status, start_date} from milestone data
 _milestones_cache = {'data': {}, 'ts': 0}
-_MILESTONES_CACHE_TTL = 60  # seconds
+_MILESTONES_CACHE_TTL = 180  # seconds (tennis state is slow-moving; reduces /events 429 pressure)
 
 def _refresh_milestones_cache():
     """Fetch Kalshi milestones for tennis series — cached, lazy refresh."""

@@ -11140,6 +11140,15 @@ def create_order_maker(ticker, side, action, count, price, post_only=True,
     Also returns the actual price used (may differ from requested after retries).
     Return: (response_dict, actual_price)
     """
+    # Coerce fractional count to int — Kalshi's order submit wants integer count,
+    # but partial fills (Mar 2026 rollout) can propagate float into bot['_partial_hedge_qty'].
+    # Ceil on buy (ensure full hedge coverage), floor on sell (don't exceed holdings).
+    if isinstance(count, float) and abs(count - int(count)) > 1e-9:
+        _orig = count
+        count = int(_math.ceil(count)) if action == 'buy' else int(_math.floor(count))
+        print(f'⚠ FRACTIONAL COUNT COERCED: {_orig} → {count} ({action} {side} {ticker})')
+    elif isinstance(count, float):
+        count = int(count)
     price_key = 'yes_price' if side == 'yes' else 'no_price'
     attempt_price = price
 

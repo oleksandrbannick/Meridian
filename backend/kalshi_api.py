@@ -268,7 +268,7 @@ class KalshiAPI:
         """Cancel an order"""
         return self._make_request('DELETE', f'/portfolio/orders/{order_id}', authenticated=True)
 
-    def amend_order(self, order_id: str, ticker: str, side: str, count: int,
+    def amend_order(self, order_id: str, ticker: str, side: str, count,
                     yes_price: Optional[int] = None, no_price: Optional[int] = None,
                     action: str = 'buy') -> Dict:
         """Amend a resting limit order's price and/or quantity.
@@ -277,6 +277,13 @@ class KalshiAPI:
         Increasing qty forfeits queue position. Decreasing preserves it.
         Returns: {old_order: Order, order: Order} — order_id stays the same.
         """
+        # Coerce fractional count to int — Kalshi wants integer on amend.
+        # Ceil on buy, floor on sell; matches create_order_maker semantics.
+        if isinstance(count, float) and abs(count - int(count)) > 1e-9:
+            import math as _m
+            count = int(_m.ceil(count)) if action == 'buy' else int(_m.floor(count))
+        elif isinstance(count, float):
+            count = int(count)
         data: Dict[str, Any] = {
             'ticker': ticker,
             'side': side,

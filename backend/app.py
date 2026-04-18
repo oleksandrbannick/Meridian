@@ -1399,30 +1399,38 @@ def _bid_depth(ob_data, side, window=3):
 
 def _parse_fill_count(order_data):
     """Parse fill count from Kalshi order object.
-    Handles old format (filled_count/fill_count int), new FP format (fill_count_fp string),
-    and the case where Kalshi returns filled_count=None for executed orders.
+    Handles old format (filled_count/fill_count int), new FP format (fill_count_fp string,
+    up to 2 decimal places for fractional contracts post-Mar 2026 rollout), and the case
+    where Kalshi returns filled_count=None for executed orders.
+
+    Returns float — fractional fills are preserved; downstream math works via Python
+    numeric promotion. Int-truncation previously caused 1-unit residual orphans on
+    fractional-enabled markets.
     """
     fp = order_data.get('fill_count_fp')
     if fp is not None:
         try:
-            return int(float(fp))
+            val = float(fp)
+            if abs(val - round(val)) > 1e-9:
+                print(f'⚠ FRACTIONAL FILL_COUNT_FP: raw={fp!r} → {val}')
+            return val
         except Exception:
             pass
     fc = order_data.get('filled_count')
     if fc is not None:
-        return int(fc) if fc else 0
+        return float(fc) if fc else 0.0
     fc2 = order_data.get('fill_count')
     if fc2 is not None:
-        return int(fc2) if fc2 else 0
+        return float(fc2) if fc2 else 0.0
     # Kalshi returns filled_count=None when status='executed' (fully filled)
     if order_data.get('status') == 'executed':
-        return int(order_data.get('count', 0) or 0)
+        return float(order_data.get('count', 0) or 0)
     # remaining_count approach: filled = count - remaining
-    count = int(order_data.get('count', 0) or 0)
+    count = float(order_data.get('count', 0) or 0)
     remaining = order_data.get('remaining_count')
     if remaining is not None and count > 0:
-        return max(0, count - int(remaining))
-    return 0
+        return max(0.0, count - float(remaining))
+    return 0.0
 
 
 def _extract_order_id(resp, context=''):
@@ -1760,15 +1768,23 @@ def close_position():
 
 
 def _parse_position_qty(pos_entry):
-    """Parse position quantity from Kalshi API response, handling both 'position' and 'position_fp' fields."""
+    """Parse position quantity from Kalshi API response, handling both 'position' and
+    'position_fp' fields. Returns float — fractional contracts (Mar 2026 rollout) are
+    preserved; downstream math uses Python numeric promotion. Prefer position_fp since
+    Kalshi may truncate the legacy 'position' field on fractional-enabled markets."""
+    fp = pos_entry.get('position_fp')
+    if fp is not None:
+        try:
+            val = float(str(fp))
+            if abs(val - round(val)) > 1e-9:
+                print(f'⚠ FRACTIONAL POSITION_FP: raw={fp!r} → {val}')
+            return val
+        except Exception:
+            pass
     qty_raw = pos_entry.get('position', None)
-    if qty_raw is None or qty_raw == 0:
-        fp = pos_entry.get('position_fp')
-        if fp is not None:
-            qty_raw = fp
     if qty_raw is None:
-        return 0
-    return int(float(str(qty_raw)))
+        return 0.0
+    return float(str(qty_raw))
 
 
 @app.route('/api/positions/reconcile', methods=['GET'])

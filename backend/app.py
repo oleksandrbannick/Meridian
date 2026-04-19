@@ -4646,6 +4646,7 @@ def _ws_phantom_drift_guard(ticker, yes_bid, no_bid):
 
 
 _phantom_drift_log_lock = threading.Lock()
+_phantom_sympathy_hist = {}  # bot_id -> deque, kept off bot dict to stay JSON-serializable
 
 def _phantom_drift_log(entry):
     """Append one JSON line to phantom_drift_log.jsonl for sympathy/drift analysis.
@@ -4696,11 +4697,12 @@ def _ws_phantom_sympathy_guard(ticker, yes_bid, no_bid, yes_ask, no_ask):
         if dog_price <= 0:
             continue
 
-        # Rolling 2s history on bot dict
-        hist = bot.get('_sympathy_hist')
+        # Rolling 2s history — stored in module-level dict, NOT on bot dict
+        # (bot dict gets jsonify'd by /api/bot/list; deque isn't JSON-serializable)
+        hist = _phantom_sympathy_hist.get(bot_id)
         if hist is None:
             hist = _deque(maxlen=40)
-            bot['_sympathy_hist'] = hist
+            _phantom_sympathy_hist[bot_id] = hist
         hist.append((now, fav_bid, fav_ask, dog_bid))
 
         # Find reference ~500ms ago (walks forward to newest entry ≤ cutoff)

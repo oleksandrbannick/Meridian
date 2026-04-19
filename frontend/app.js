@@ -6541,7 +6541,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     const _depCombo = (_depFloor2 > 0 && _comb2 > 0 && !_isExit)
                         ? (() => { const _dc = _depCap2; const _df = _depFloor2; const _capCol = _dc >= _df ? '#ff66aa' : _dc >= _df - 2 ? '#ffaa00' : _dc >= 0 ? '#cc6688' : '#ff8800'; return '<span style="font-size:8px;font-weight:700;display:inline-flex;min-width:28px;justify-content:flex-end;"><span style="color:' + _capCol + ';">' + _dc + '</span><span style="color:#334;">/</span><span style="color:#ff66aa;">' + _df + '</span></span>'; })()
                         : '';
-                    return '<div style="display:grid;grid-template-columns:18px 72px 30px auto 28px 46px;align-items:center;padding:3px 6px;' + (i > 0 ? 'border-top:1px solid #141a24;' : '') + 'font-size:11px;">'
+                    return '<div style="display:grid;grid-template-columns:18px 72px 30px auto 52px 60px;align-items:center;gap:4px;padding:3px 6px;' + (i > 0 ? 'border-top:1px solid #141a24;' : '') + 'font-size:11px;">'
                     + '<span style="color:#00e5ff;font-weight:700;font-size:10px;">#' + (r.run || i + 1) + '</span>'
                     + '<span style="white-space:nowrap;">'
                     + '<span style="color:' + _dogCol3 + ';font-weight:700;">' + (r.dog_price || '?') + '</span>'
@@ -6551,8 +6551,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     + '</span>'
                     + (_depCombo ? '<span>' + _depCombo + '</span>' : '<span></span>')
                     + '<span style="display:flex;align-items:center;gap:2px;">' + (_hmsStr || '') + (r.taker ? '<span style="color:#ff66aa;font-size:8px;font-weight:700;">+1</span>' : '') + '</span>'
-                    + '<span style="color:#b2ff59;font-weight:700;text-align:center;">x' + (r.qty || 1) + '</span>'
-                    + '<span style="color:' + (r.pnl >= 0 ? '#00ff88' : '#ff4444') + ';font-weight:800;text-align:right;">' + (r.pnl >= 0 ? '+' : '') + r.pnl + '¢</span>'
+                    + '<span style="color:#b2ff59;font-weight:700;text-align:center;">x' + fmtQty(r.qty || 1) + '</span>'
+                    + '<span style="color:' + (r.pnl >= 0 ? '#00ff88' : '#ff4444') + ';font-weight:800;text-align:right;">' + (r.pnl >= 0 ? '+' : '') + fmtCents(r.pnl) + '¢</span>'
                     + '</div>'
                     + '';
                 }).join('');
@@ -6563,7 +6563,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 html += '<div style="display:flex;gap:16px;font-size:11px;color:#8892a6;justify-content:center;flex-wrap:wrap;margin-top:6px;padding-top:6px;border-top:1px solid #ff66aa22;">'
                     + '<span>Runs: <strong style="color:#ff66aa;">' + (bot.repeats_done || _rh.length) + '</strong></span>'
                     + (_isCross && (_crossQtyDog > 0 || _crossQtyFav > 0) ? '<span>Holding: <strong style="color:#fff;">' + (_crossQtyDog === _crossQtyFav ? _crossQtyDog + 'x each' : _crossQtyDog + 'x / ' + _crossQtyFav + 'x') + '</strong></span>' : '')
-                    + '<span>P&L: <strong style="color:' + (_ltPnlDisp >= 0 ? '#00ff88' : '#ff4444') + ';font-size:13px;">' + (_ltPnlDisp >= 0 ? '+' : '') + _ltPnlDisp + '¢</strong></span>'
+                    + '<span>P&L: <strong style="color:' + (_ltPnlDisp >= 0 ? '#00ff88' : '#ff4444') + ';font-size:13px;">' + (_ltPnlDisp >= 0 ? '+' : '') + fmtCents(_ltPnlDisp) + '¢</strong></span>'
                     + (bot.anchor_depth ? '<span>Depth: <strong style="color:#ff66aa;">' + bot.anchor_depth + '¢</strong></span>' : '')
                     + (bot.smart_mode ? '<span>Streak: <strong style="color:' + ((bot.consecutive_losses || 0) >= 2 ? '#ff4444' : (bot.consecutive_losses || 0) >= 1 ? '#ffaa00' : '#00ff88') + ';">' + (bot.consecutive_losses || 0) + 'L</strong></span>' : '')
                     + '</div>';

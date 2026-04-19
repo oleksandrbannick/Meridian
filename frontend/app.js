@@ -6165,21 +6165,23 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const _isParked = status === 'dog_anchor_posted' && bot._parked_at_ceiling;
     const _livePpi = bot._live_ppi != null ? bot._live_ppi : bot._last_ppi;
     const _isPpiKill = bot._ppi_pulled || (_livePpi != null && _livePpi < 35);
+    const _isSympathyPulled = bot._sympathy_pulled && (status === 'dog_anchor_posted' || status === 'waiting_repeat');
     const _isPulledFloor = (status === 'dog_anchor_posted' || status === 'waiting_repeat') && (bot._price_floor_pulled || _isPpiKill);
-    const _pullLabel = _isPpiKill ? '🚨 PPI KILL' : '⏸ PULLED';
+    const _isAnyPulled = _isSympathyPulled || _isPulledFloor;
+    const _pullLabel = _isSympathyPulled ? '🎯 SYMPATHY PULL' : _isPpiKill ? '🚨 PPI KILL' : '⏸ PULLED';
     const statusMap = {
-        'dog_anchor_posted': _isPulledFloor ? _pullLabel : _isParked ? '🅿️ PARKED' : '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
+        'dog_anchor_posted': _isAnyPulled ? _pullLabel : _isParked ? '🅿️ PARKED' : '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
         'dog_filled': bot._orphan_hedge ? '🚨 ORPHAN — HEDGING' : '👻 FILLED — HEDGING', 'ladder_filled_no_fav': '👻 FILLED — HEDGING',
-        'fav_hedge_posted': bot._game_over_holding ? '⏳ HOLDING — SETTLEMENT' : '⭐ HEDGE POSTED', 'waiting_repeat': _isPulledFloor ? _pullLabel : bot._just_completed ? '✅ COMPLETED' : bot._flip_pending ? '⚡ FLIPPING' : '🔄 REPEATING',
+        'fav_hedge_posted': bot._game_over_holding ? '⏳ HOLDING — SETTLEMENT' : '⭐ HEDGE POSTED', 'waiting_repeat': _isAnyPulled ? _pullLabel : bot._just_completed ? '✅ COMPLETED' : bot._flip_pending ? '⚡ FLIPPING' : '🔄 REPEATING',
         'completed': _isSettled ? '🏁 SETTLED' : _isAwaitingSettlement ? '⏳ AWAITING SETTLEMENT' : _isDeathZone ? '💀 DEATH ZONE' : _isSmartStopped ? '⏹ SMART STOP' : _isCompletedRuns ? '✅ COMPLETED RUNS' : '✅ COMPLETE',
         'stopped': bot._stop_reason === 'scout_orphan_cleanup' ? '🛑 STOPPED — Scout managing' : _isDeathZone ? '💀 DEATH ZONE' : _isSmartStopped ? '⏹ SMART STOP' : (bot._pending_sells?.length ? '📤 SELLING' : '🛑 STOPPED'),
         'paused_by_scout': '⏸️ PAUSED — Scout active',
         'awaiting_settlement': '⏳ AWAITING SETTLEMENT',
     };
     const borderMap = {
-        'dog_anchor_posted': _isPulledFloor ? _phPurple : _isParked ? _phPurple : _phAmber, 'ladder_posted': _phAmber,
+        'dog_anchor_posted': _isAnyPulled ? _phPurple : _isParked ? _phPurple : _phAmber, 'ladder_posted': _phAmber,
         'dog_filled': _phPink, 'ladder_filled_no_fav': _phPink,
-        'fav_hedge_posted': bot._game_over_holding ? _phAmber : _phPink, 'waiting_repeat': _isPulledFloor ? _phPurple : bot._just_completed ? _phGreen : _phAmber,
+        'fav_hedge_posted': bot._game_over_holding ? _phAmber : _phPink, 'waiting_repeat': _isAnyPulled ? _phPurple : bot._just_completed ? _phGreen : _phAmber,
         'completed': _isSettled ? _phGreen : _isAwaitingSettlement ? _phAmber : _isDeathZone ? _phDeath : _isSmartStopped ? _phRed : _phGreen,
         'stopped': _isDeathZone ? _phDeath : bot._pending_sells?.length ? _phAmber : _phRed,
         'awaiting_settlement': _phAmber,
@@ -7780,7 +7782,7 @@ async function loadBots() {
         function _isBotPulled(b) {
             const s = b.status || '';
             if (s !== 'dog_anchor_posted' && s !== 'waiting_repeat') return false;
-            if (b._price_floor_pulled || b._parked_at_ceiling || b._ppi_pulled) return true;
+            if (b._price_floor_pulled || b._parked_at_ceiling || b._ppi_pulled || b._sympathy_pulled) return true;
             const _p = b._live_ppi != null ? b._live_ppi : b._last_ppi;
             return (_p != null && _p < 35);
         }
@@ -8236,7 +8238,8 @@ async function loadBots() {
             const isAnchorDog = bot.bot_category === 'anchor_dog';
             const isAnchorLadder = bot.bot_category === 'anchor_ladder';
             const isLadderArb = bot.bot_category === 'ladder_arb';
-            const statusLabel = {
+            const _compactSympathy = bot._sympathy_pulled && (bot.status === 'dog_anchor_posted' || bot.status === 'waiting_repeat');
+            const statusLabel = _compactSympathy ? '🎯 SYMPATHY PULL' : {
                 both_posted:      '⚡ BOTH LIVE',
                 fav_posted:       '⏳ WAITING',     // legacy: one order posted
                 pending_fills:    '⏳ FILLING',

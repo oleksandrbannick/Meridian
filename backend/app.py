@@ -4952,7 +4952,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
         if status == 'fav_posted':
             fav_side = bot.get('fav_side', 'yes')
             fav_filled = yes_filled if fav_side == 'yes' else no_filled
-            if fav_filled >= qty:
+            if fav_filled >= qty - 0.01:  # fractional tolerance
                 if bot.get('_ws_fill_handling'):
                     continue
                 bot['_ws_fill_handling'] = True
@@ -13341,7 +13341,25 @@ def _handle_phantom(bot_id, bot, actions):
                     else:
                         # Need to add a new supplemental order for the true gap
                         _supp_qty = _hedge_gap
+                        # ── Runaway-loop guards (2026-04-18) ──
+                        # MILMIA-MIL2 incident: 40+ supps fired in 5min on a 0.69 fractional gap,
+                        # each supp's 0.69 ceiled→1 whole contract, result was 28 YES vs 3.69 NO = 24c overhedge.
+                        # Guard 1: sub-1-contract gaps — don't supp, let live order's natural fill close the micro-gap.
+                        # Guard 2: last supp <15s ago — give the prior supp time to fill on Kalshi before stacking another.
+                        _last_supp = bot.get('_last_supp_at', 0)
+                        if _supp_qty < 1.0:
+                            bot_log('PHANTOM_SUPPLEMENTAL_SKIP', bot_id, {
+                                'reason': 'sub_contract_gap', 'hedge_gap': _hedge_gap,
+                            })
+                            _supp_qty = 0
+                        elif now - _last_supp < 15:
+                            bot_log('PHANTOM_SUPPLEMENTAL_SKIP', bot_id, {
+                                'reason': 'rate_limited', 'hedge_gap': _hedge_gap,
+                                'since_last_s': round(now - _last_supp, 1),
+                            })
+                            _supp_qty = 0
                         if _supp_qty > 0:
+                            bot['_last_supp_at'] = now
                             try:
                                 _supp_bid = 0
                                 if ws_manager:
@@ -13373,9 +13391,10 @@ def _handle_phantom(bot_id, bot, actions):
                                         'supp_qty': _supp_qty, 'price': _supp_bid,
                                         'order_id': _supp_oid[:12],
                                     })
-                                    # Reset fill tracking — fav_fill_qty should only count new hedge fills
-                                    fav_filled = 0
-                                    bot['fav_fill_qty'] = 0
+                                    # NOTE: fav_fill_qty is NOT reset here. The reconcile aggregator
+                                    # above (line ~13011) sums fills across all _all_hedge_order_ids
+                                    # + fav_order_id, so the original order's fills are still counted.
+                                    # Resetting to 0 was the SSMDRA-DRA double-hedge bug root cause.
                                 else:
                                     print(f'⚠ PHANTOM SUPPLEMENTAL: {bot_id} no fav bid — deferring')
                             except Exception as _supp_err:
@@ -13388,7 +13407,11 @@ def _handle_phantom(bot_id, bot, actions):
             except Exception as _recon_err:
                 bot_log('PHANTOM_RECONCILE_FAIL', bot_id, {'error': str(_recon_err)[:200]}, level='ERROR')
 
-        if fav_filled >= qty:
+        # Completion gate: tolerance for fractional sums. IEEE-754 can leave fav_filled at
+        # 19.999999... after summing partial fills that should equal 20. Also accounts for
+        # ≤0.01 fractional residuals Kalshi keeps on partially-matched orders post-Mar 2026.
+        # Previously required exact >= qty, which stalled bots for hours (140+c frozen).
+        if fav_filled >= qty - 0.01:
             # Guard: if _trade_recorded is already True but status never changed (crash recovery),
             # re-run the completion so the trade actually gets recorded in history
             if bot.get('_trade_recorded') and bot.get('status') != 'completed':
@@ -16974,7 +16997,7 @@ def _run_monitor():
                         print(f'⚠ Fav order check failed for {bot_id}: {fav_err}')
                         continue
 
-                    if fav_filled >= qty:
+                    if fav_filled >= qty - 0.01:  # fractional tolerance
                         # ── Favorite filled! Now post the underdog ──
                         dog_side = bot.get('dog_side', 'no' if fav_side == 'yes' else 'yes')
                         dog_price = bot.get('dog_price', bot['no_price'] if dog_side == 'no' else bot['yes_price'])

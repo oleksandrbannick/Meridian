@@ -2454,11 +2454,10 @@ def _fetch_intl_basketball_scoreboard():
             team_info[f'{sport_key}:{code}'] = away_entry
         matched += 1
 
-    global _basketball_daily_limit_hit
     _basketball_api_cache['data'] = team_info
     _basketball_api_cache['ts'] = time.time()
     _basketball_api_cache['raw_games'] = games
-    _basketball_daily_limit_hit = False  # healthy fetch cleared any prior cap
+    _basketball_daily_limit_hit = False  # healthy fetch cleared any prior cap (global declared above at line ~2376)
     _save_basketball_cache_to_disk()
     if matched:
         print(f'🏀 Intl basketball cache refreshed: {matched} games, {len(team_info)} team-code keys (mode={"hot" if hot_mode else "normal"})')

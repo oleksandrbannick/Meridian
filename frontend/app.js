@@ -2363,8 +2363,8 @@ function displayEventRow(eventData, container) {
         const pnlColor = gamePnl > 0 ? '#00ff88' : '#ff4444';
         const pnlSign = gamePnl > 0 ? '+' : '';
         pnlBadge.style.cssText = `background:${pnlColor}18;color:${pnlColor};border-radius:4px;padding:2px 6px;font-size:10px;font-weight:700;`;
-        pnlBadge.textContent = `${pnlSign}${gamePnl}¢`;
-        pnlBadge.title = `Net P&L across all bots on this game: ${pnlSign}$${(gamePnl/100).toFixed(2)}`;
+        pnlBadge.textContent = fmtDollars(gamePnl, {sign:true});
+        pnlBadge.title = `Net P&L across all bots on this game: ${fmtDollars(gamePnl, {sign:true})}`;
         badgeWrap.appendChild(pnlBadge);
     }
 
@@ -6910,7 +6910,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                         <span style="color:#ff7043;text-align:right;">${rt.exit_price}c</span>
                         <span style="color:${combCol};font-weight:700;text-align:right;">${rt.combined}c</span>
                         <span style="color:#b2ff59;text-align:right;">x${rt.qty}</span>
-                        <span style="color:${pCol};font-weight:700;text-align:right;">${rt.pnl >= 0 ? '+' : ''}${rt.pnl}c</span>
+                        <span style="color:${pCol};font-weight:700;text-align:right;">${fmtDollars(rt.pnl, {sign:true})}</span>
                     </div>`;
                 }).join('') : ''}
                 ${exitLog.length > 0 ? `<div style="margin-top:6px;padding-top:4px;border-top:1px solid #1a0a0a;"><div style="color:#ff7043;font-size:8px;font-weight:800;letter-spacing:1px;margin-bottom:2px;padding-bottom:2px;border-bottom:1px solid #ff704320;">EXITS</div>` +
@@ -6929,7 +6929,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                             <span style="color:${exitCol};text-align:right;">${sellPrice}c</span>
                             <span style="text-align:right;">${combPrice > 0 ? `<span style="color:${combCol};font-weight:700;">${combPrice}c</span>` : ''}</span>
                             <span style="color:#b2ff59;text-align:right;">x${ex.qty}</span>
-                            <span style="color:${pCol};font-weight:700;text-align:right;">${ex.pnl >= 0 ? '+' : ''}${ex.pnl}c</span>
+                            <span style="color:${pCol};font-weight:700;text-align:right;">${fmtDollars(ex.pnl, {sign:true})}</span>
                         </div>`;
                     }).join('') + '</div>' : ''}
             </div>
@@ -6967,7 +6967,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 ${(bot.loss_limit_cents || 0) > 0 ? `<span style="color:#ff4444;font-size:9px;font-weight:600;">SL $${(bot.loss_limit_cents/100).toFixed(2)}</span>` : ''}
             </div>
             <div style="display:flex;align-items:center;gap:5px;flex-shrink:0;">
-                <span style="color:${pnlColor};font-weight:800;font-size:13px;">${pnlSign}${totalPnl}c</span>
+                <span style="color:${pnlColor};font-weight:800;font-size:13px;">${fmtDollars(totalPnl, {sign:true})}</span>
                 <span style="color:#334;font-size:9px;">${ageStr}</span>
                 ${!isCompleted && !isAwaitingSettlement ? `<button onclick="apexMmModify('${botId}')" style="background:#ff704315;color:#ff7043;border:1px solid #ff704330;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Edit</button>` : ''}
                 ${!bot._smart_stopped && !bot._stop_pending && !bot._smart_stop_pending && !isCompleted && !isAwaitingSettlement ? `<button onclick="stopBot('${botId}')" style="background:#ff880015;color:#ff8800;border:1px solid #ff880030;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
@@ -7966,7 +7966,7 @@ async function loadBots() {
                         </div>
                         <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
                             <span style="display:inline-flex;align-items:center;gap:3px;">${_dgDotHtml}</span>
-                            <span style="background:${groupPnlTotal >= 0 ? '#00ff8815' : '#ff444415'};border:1px solid ${groupPnlTotal >= 0 ? '#00ff8833' : '#ff444433'};border-radius:5px;padding:2px 8px;color:${groupPnlTotal >= 0 ? '#00ff88' : '#ff4444'};font-size:11px;font-weight:700;">${groupPnlTotal >= 0 ? '+' : ''}${groupPnlTotal}¢</span>
+                            <span style="background:${groupPnlTotal >= 0 ? '#00ff8815' : '#ff444415'};border:1px solid ${groupPnlTotal >= 0 ? '#00ff8833' : '#ff444433'};border-radius:5px;padding:2px 8px;color:${groupPnlTotal >= 0 ? '#00ff88' : '#ff4444'};font-size:11px;font-weight:700;">${fmtDollars(groupPnlTotal, {sign:true})}</span>
                         </div>`;
                     dogList.appendChild(header);
                     for (const botId of groupIds) {
@@ -8019,11 +8019,11 @@ async function loadBots() {
             const sportBar = document.createElement('div');
             sportBar.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;padding:8px 12px;margin-bottom:4px;align-items:center;';
             const allActive = _botsActiveSport === 'all';
-            sportBar.innerHTML = `<span onclick="window._filterBotsSport('all')" style="background:${allActive ? '#00d4ff22' : '#0f1419'};color:${allActive ? '#00d4ff' : '#556'};border:1px solid ${allActive ? '#00d4ff44' : '#1e2740'};border-radius:6px;padding:3px 8px;font-size:10px;font-weight:700;cursor:pointer;">All <span style="color:${_totalCol}">${_totalNet >= 0 ? '+' : ''}${(_totalNet/100).toFixed(2)}</span></span>` +
+            sportBar.innerHTML = `<span onclick="window._filterBotsSport('all')" style="background:${allActive ? '#00d4ff22' : '#0f1419'};color:${allActive ? '#00d4ff' : '#556'};border:1px solid ${allActive ? '#00d4ff44' : '#1e2740'};border-radius:6px;padding:3px 8px;font-size:10px;font-weight:700;cursor:pointer;">All <span style="color:${_totalCol}">${fmtDollars(_totalNet, {sign:true})}</span></span>` +
                 _sportEntries.map(([sp, d]) => {
                     const isActive = _botsActiveSport === sp;
                     const col = d.net >= 0 ? '#00ff88' : '#ff4444';
-                    return `<span onclick="window._filterBotsSport('${sp}')" style="background:${isActive ? '#00d4ff22' : '#0f1419'};color:${isActive ? '#00d4ff' : '#8892a6'};border:1px solid ${isActive ? '#00d4ff44' : '#1e2740'};border-radius:6px;padding:3px 8px;font-size:10px;font-weight:700;cursor:pointer;">${_si[sp] || '🏟️'} ${sp} <span style="color:${col}">${d.net >= 0 ? '+' : ''}${(d.net/100).toFixed(2)}</span></span>`;
+                    return `<span onclick="window._filterBotsSport('${sp}')" style="background:${isActive ? '#00d4ff22' : '#0f1419'};color:${isActive ? '#00d4ff' : '#8892a6'};border:1px solid ${isActive ? '#00d4ff44' : '#1e2740'};border-radius:6px;padding:3px 8px;font-size:10px;font-weight:700;cursor:pointer;">${_si[sp] || '🏟️'} ${sp} <span style="color:${col}">${fmtDollars(d.net, {sign:true})}</span></span>`;
                 }).join('');
             botsList.appendChild(sportBar);
         }

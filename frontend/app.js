@@ -173,11 +173,16 @@ function getTeamLogoHtml(code, size = 20, sportHint = '') {
     const hint = sportHint.toLowerCase();
     // NCAA/college teams don't have ESPN CDN logos — skip straight to letter badge
     const isCollege = hint.includes('ncaa') || hint.includes('college') || hint === 'ncaab' || hint === 'ncaaw' || hint === 'ncaaf';
+    // When a sportHint is given, NEVER cross-sport guess.
+    // DAL exists in NBA/NFL/NHL/MLB sets — without this guard, an MLS Dallas card
+    // would render the NBA Mavericks logo. If the hint's sport doesn't have the
+    // code, use the letter badge instead.
     let sport = '';
     if (!isCollege) {
-        // Use sport hint if provided, otherwise guess from code membership
-        if (hint && _ESPN_LOGO_SPORTS[hint] && _ESPN_LOGO_SPORTS[hint].has(upper)) {
-            sport = hint;
+        if (hint) {
+            if (_ESPN_LOGO_SPORTS[hint] && _ESPN_LOGO_SPORTS[hint].has(upper)) {
+                sport = hint;
+            }
         } else {
             for (const [s, codes] of Object.entries(_ESPN_LOGO_SPORTS)) {
                 if (codes.has(upper)) { sport = s; break; }

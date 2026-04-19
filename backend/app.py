@@ -13567,6 +13567,11 @@ def _handle_phantom(bot_id, bot, actions):
                 _actual_fav_fee = None
             if len(_all_fav_oids) > 1:
                 print(f'📊 SPLIT HEDGE: {bot_id} {len(_all_fav_oids)} fav orders, {_fav_total_qty} fills, wavg={actual_fav_price}¢')
+            # Also store 1-decimal precision fav wavg for run-history display (so users
+            # can see e.g. 76.1 when the weighted avg wasn't a clean integer cent — the
+            # rounded int value was causing (100 - dog - fav) × qty to not match pnl).
+            if _fav_total_qty > 0:
+                bot['_fav_price_precise'] = round(_fav_total_cents / _fav_total_qty, 2)
             bot['fav_price'] = actual_fav_price
             dog_price = bot['dog_price']
 
@@ -13777,6 +13782,7 @@ def _handle_phantom(bot_id, bot, actions):
                 'result': 'win' if net_pnl >= 0 else 'loss',
                 'dog_price': dog_price,
                 'fav_price': actual_fav_price,
+                'fav_price_precise': bot.get('_fav_price_precise'),  # 2-decimal weighted avg (split hedges)
                 'qty': qty,
                 'anchor_depth': bot.get('anchor_depth', 0),
                 'raw_hedge_ms': bot.get('raw_hedge_ms'),
@@ -13785,6 +13791,7 @@ def _handle_phantom(bot_id, bot, actions):
                 'taker': bool(bot.get('_fav_was_taker')),
                 'ts': time.time(),
             })
+            bot.pop('_fav_price_precise', None)  # clear for next cycle
             if _will_repeat:
                 bot['status'] = 'waiting_repeat'
                 bot['waiting_repeat_since'] = time.time() + 3  # 3s linger to show completion

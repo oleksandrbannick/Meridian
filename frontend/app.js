@@ -6519,7 +6519,10 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 const _dogCol3 = '#ffaa00';
                 const _favCol3 = '#ff66aa';
                 html += _rh.map((r, i) => {
-                    const _comb2 = (r.dog_price || 0) + (r.fav_price || 0);
+                    // Use 2-decimal weighted avg if available (split-hedge cycles), else integer
+                    const _favDisplay = r.fav_price_precise != null ? r.fav_price_precise : (r.fav_price || '?');
+                    const _favForMath = r.fav_price_precise != null ? r.fav_price_precise : (r.fav_price || 0);
+                    const _comb2 = (r.dog_price || 0) + _favForMath;
                     const _combCol2 = _comb2 <= 96 ? '#00ff88' : _comb2 <= 98 ? '#ffaa00' : '#ff4444';
                     const _depCap2 = _comb2 > 0 ? 100 - _comb2 : 0;
                     const _depFloor2 = r.anchor_depth || bot.anchor_depth || 0;
@@ -6546,8 +6549,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     + '<span style="white-space:nowrap;">'
                     + '<span style="color:' + _dogCol3 + ';font-weight:700;">' + (r.dog_price || '?') + '</span>'
                     + '<span style="color:#3a4560;">+</span>'
-                    + '<span style="color:' + (_isExit ? _exitCol : _favCol3) + ';font-weight:700;">' + (r.fav_price || '?') + '</span>'
-                    + (!_isExit && _comb2 > 0 ? '<span style="color:#3a4560;">=</span><span style="color:' + _combCol2 + ';font-weight:700;">' + _comb2 + '</span>' : '')
+                    + '<span style="color:' + (_isExit ? _exitCol : _favCol3) + ';font-weight:700;">' + _favDisplay + '</span>'
+                    + (!_isExit && _comb2 > 0 ? '<span style="color:#3a4560;">=</span><span style="color:' + _combCol2 + ';font-weight:700;">' + fmtCents(_comb2) + '</span>' : '')
                     + '</span>'
                     + (_depCombo ? '<span>' + _depCombo + '</span>' : '<span></span>')
                     + '<span style="display:flex;align-items:center;gap:2px;">' + (_hmsStr || '') + (r.taker ? '<span style="color:#ff66aa;font-size:8px;font-weight:700;">+1</span>' : '') + '</span>'

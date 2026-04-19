@@ -6171,7 +6171,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const _pullLabel = _isSympathyPulled ? '🎯 SYMPATHY PULL' : _isPpiKill ? '🚨 PPI KILL' : '⏸ PULLED';
     const statusMap = {
         'dog_anchor_posted': _isAnyPulled ? _pullLabel : _isParked ? '🅿️ PARKED' : '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
-        'dog_filled': bot._orphan_hedge ? '🚨 ORPHAN — HEDGING' : '👻 FILLED — HEDGING', 'ladder_filled_no_fav': '👻 FILLED — HEDGING',
+        'dog_filled': bot._sub_contract_stranded ? '🧊 SUB-1 STRANDED' : bot._orphan_hedge ? '🚨 ORPHAN — HEDGING' : '👻 FILLED — HEDGING', 'ladder_filled_no_fav': '👻 FILLED — HEDGING',
         'fav_hedge_posted': bot._game_over_holding ? '⏳ HOLDING — SETTLEMENT' : '⭐ HEDGE POSTED', 'waiting_repeat': _isAnyPulled ? _pullLabel : bot._just_completed ? '✅ COMPLETED' : bot._flip_pending ? '⚡ FLIPPING' : '🔄 REPEATING',
         'completed': _isSettled ? '🏁 SETTLED' : _isAwaitingSettlement ? '⏳ AWAITING SETTLEMENT' : _isDeathZone ? '💀 DEATH ZONE' : _isSmartStopped ? '⏹ SMART STOP' : _isCompletedRuns ? '✅ COMPLETED RUNS' : '✅ COMPLETE',
         'stopped': bot._stop_reason === 'scout_orphan_cleanup' ? '🛑 STOPPED — Scout managing' : _isDeathZone ? '💀 DEATH ZONE' : _isSmartStopped ? '⏹ SMART STOP' : (bot._pending_sells?.length ? '📤 SELLING' : '🛑 STOPPED'),
@@ -6715,7 +6715,9 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const combined = exitPrice > 0 ? (exitPrice <= origTarget ? origTargetCombined : postedCombined) : (liveCombined < 999 ? liveCombined : 0);
         const profit = 100 - combined;
         const combinedCol = combined > 100 ? '#ff4444' : combined >= 99 ? '#ffaa00' : '#00ff88';
-        const slThreshold = _apexStopLossThreshold(width, avgCost);
+        // Match backend Apex MM SL formula at app.py:16253 — `100 + max(width, 6)`.
+        // The _apexStopLossThreshold(w*2) formula is for old per-rung Apex, not MM.
+        const slThreshold = Math.max(6, width);
         const stopLoss = 100 + slThreshold;
         const exitPostedAt = bot._exit_posted_at || 0;
         const skewSec = exitPostedAt > 0 ? Math.floor(nowSec - exitPostedAt) : 0;

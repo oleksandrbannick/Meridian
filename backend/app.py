@@ -5262,10 +5262,17 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                     bot['_sl_breach_peak'] = best_combined
                     bot['_sl_breach_phase'] = _phase
                     print(f'⏱ APEX MM SOFT BREACH: {bot_id} combined={best_combined}c >= {stop}c — gate {_persist_s}s ({_phase})')
+                    # Run walk-up during persistence so exit can park at wall (100c combined)
+                    # before SL fires — gives the order a chance to fill at breakeven.
+                    try: _apex_mm_walk_up(bot_id, bot)
+                    except Exception: pass
                     continue
                 bot['_sl_breach_peak'] = max(bot.get('_sl_breach_peak', 0), best_combined)
                 _breach_age = _pc - bot['_sl_breach_since']
                 if _breach_age < _persist_s:
+                    # Keep walking toward wall during the persistence window
+                    try: _apex_mm_walk_up(bot_id, bot)
+                    except Exception: pass
                     continue  # still within persistence window — let it breathe
                 # Persisted long enough — fire the exit
                 bot['status'] = 'mm_exiting'
@@ -5886,6 +5893,53 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                         daemon=True
                     ).start()
 
+                    # Anchor pause: cancel opposite-side entry rungs INSTANTLY.
+                    # Monitor-tick hedge-pull (_handle_apex:16515) does this too but on 2s cadence,
+                    # leaving a window where round-trip can close at unplanned prices via entry rungs.
+                    # Leaves the dedicated exit order ({exit_side}_exit_oid) untouched — that's separate.
+                    _anc_opp = 'no' if matched_side == 'yes' else 'yes'
+                    _anc_key = f'{_anc_opp}_orders'
+                    _anc_exit_oid = bot.get(f'_{_anc_opp}_exit_oid')
+                    _anc_to_cancel = []
+                    for _anc_price, _anc_lvl in list(bot.get(_anc_key, {}).items()):
+                        _anc_oid = _anc_lvl.get('oid')
+                        if _anc_oid and _anc_oid != _anc_exit_oid and _anc_lvl.get('fill_qty', 0) < _anc_lvl.get('qty', 1):
+                            _anc_to_cancel.append((_anc_oid, _anc_lvl, _anc_price))
+                    if _anc_to_cancel:
+                        def _anchor_pause_cancel(_cancel_list, _bid=bot_id, _side=_anc_opp, _held=matched_side):
+                            _cancelled = 0
+                            for _oid, _lvl, _price in _cancel_list:
+                                try:
+                                    cr = _safe_cancel(_oid, f'anchor_pause_{_bid}')
+                                    if isinstance(cr, tuple) and cr[0] == 'filled':
+                                        _b = active_bots.get(_bid)
+                                        if _b:
+                                            _kf = cr[1]
+                                            _ws = max(_lvl.get('fill_qty', 0), _b.get('_counted_order_fills', {}).get(_oid, 0))
+                                            _nf = max(0, _kf - _ws)
+                                            if _nf > 0:
+                                                _pr = int(_price)
+                                                _b[f'net_{_side}'] = _b.get(f'net_{_side}', 0) + _nf
+                                                _b[f'total_{_side}_cost'] = _b.get(f'total_{_side}_cost', 0) + (_pr * _nf)
+                                                _n = _b[f'net_{_side}']
+                                                _b[f'avg_{_side}_cost'] = round(_b[f'total_{_side}_cost'] / _n) if _n > 0 else 0
+                                                _b.setdefault('_counted_order_fills', {})[_oid] = _kf
+                                                print(f'🚨 ANCHOR PAUSE LATE FILL: {_bid} {_side.upper()} +{_nf}x @{_pr}c')
+                                    _lvl['oid'] = None
+                                    _cancelled += 1
+                                except Exception:
+                                    pass
+                            if _cancelled > 0:
+                                print(f'🛡️ APEX MM ANCHOR PAUSE: {_bid} held={_held.upper()} cancelled {_cancelled} {_side} entry rungs (exit order kept)')
+                                bot_log('APEX_MM_ANCHOR_PAUSE', _bid, {
+                                    'held_side': _held, 'paused_side': _side,
+                                    'cancelled': _cancelled,
+                                })
+                                _b = active_bots.get(_bid)
+                                if _b:
+                                    save_state()
+                        threading.Thread(target=_anchor_pause_cancel, args=(_anc_to_cancel,), daemon=True).start()
+
             save_state()
         break
 
@@ -5921,6 +5975,27 @@ def _execute_phantom_hedge(bot_id):
         dog_side = bot['dog_side']
         qty = bot.get('_partial_hedge_qty') or bot.get('quantity', 1)
         dog_price = bot['dog_price']
+
+        # Sub-1 contract guard: race-fill paths (price_floor, drift_pull, sympathy,
+        # death_zone, ending) set _partial_hedge_qty from whatever got caught during
+        # cancel. Fractional nibbles (Kalshi Mar 2026 rollout) can be < 1 contract.
+        # The WS path already accumulates until ≥1 before firing; this guard enforces
+        # the same invariant centrally so no path can slip a 0.X hedge through.
+        if qty < 1.0:
+            _now_ts = time.time()
+            _last_log = bot.get('_sub_contract_last_log', 0)
+            if _now_ts - _last_log > 60:  # rate-limit to 1/min
+                bot['_sub_contract_last_log'] = _now_ts
+                print(f'⚠ PHANTOM HEDGE BLOCKED (sub-1): {bot_id} qty={qty} < 1.0 — stranded fractional, not hedging')
+                bot_log('PHANTOM_HEDGE_SUB_CONTRACT_SKIP', bot_id, {
+                    'hedge_qty': qty,
+                    'dog_fill_qty': bot.get('dog_fill_qty', 0),
+                    'status': bot.get('status'),
+                    'partial_hedge_qty': bot.get('_partial_hedge_qty'),
+                    'dog_side': dog_side, 'dog_price': dog_price,
+                }, level='WARN')
+            bot['_sub_contract_stranded'] = True
+            return
 
         # Post at fav BID — maker order, first in queue with our speed
         # ALWAYS read from ws_manager first (real-time), fall back to bot cache
@@ -14204,22 +14279,70 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['_cross_settled_qty'] = bot.get('_cross_settled_qty', 0) + _cycle_dog
                 bot['_cross_settled_qty_dog'] = bot.get('_cross_settled_qty_dog', 0) + _cycle_dog
                 bot['_cross_settled_qty_fav'] = bot.get('_cross_settled_qty_fav', 0) + _cycle_fav
-            # Record run history before resetting fills
-            bot.setdefault('_run_history', []).append({
-                'run': repeats_done_now,
-                'pnl': net_pnl,
-                'result': 'win' if net_pnl >= 0 else 'loss',
-                'dog_price': dog_price,
-                'fav_price': actual_fav_price,
-                'fav_price_precise': bot.get('_fav_price_precise'),  # 2-decimal weighted avg (split hedges)
-                'qty': qty,
-                'anchor_depth': bot.get('anchor_depth', 0),
-                'raw_hedge_ms': bot.get('raw_hedge_ms'),
-                'hedge_latency_ms': bot.get('hedge_latency_ms'),
-                'fill_time_ms': bot.get('hedge_fill_latency_ms'),
-                'taker': bool(bot.get('_fav_was_taker')),
-                'ts': time.time(),
-            })
+            # Record run history. MERGE into the previous entry when this is a
+            # supplemental completion (verify-rehedge path at line 14210 catches a
+            # small unhedged remainder after the main run completes). Without merging,
+            # the supplemental's small pnl OVERWRITES the run's true total — e.g.
+            # run #1 really made 58.45c but card shows 0.45c because only the
+            # supplemental's final numbers made it to run_history.
+            _rh = bot.setdefault('_run_history', [])
+            _rh_last = _rh[-1] if _rh else None
+            _rh_now = time.time()
+            _is_supplemental = (
+                _rh_last is not None
+                and (_rh_now - _rh_last.get('ts', 0)) < 300  # within 5 min of last completion
+                and _rh_last.get('dog_price') == dog_price    # same dog price = same cycle
+            )
+
+            if _is_supplemental:
+                # Roll back the repeats_done increment — this is a cleanup of the
+                # previous run, not a new run. Also reverts the lifetime pnl +=
+                # that happens below in the _will_repeat branch (handled by merge).
+                bot['repeats_done'] = max(0, bot.get('repeats_done', 1) - 1)
+                repeats_done_now = _rh_last.get('run', repeats_done_now - 1) or 1
+
+                _old_qty = _rh_last.get('qty') or 0
+                _new_qty = qty or 0
+                _total_qty = _old_qty + _new_qty
+                _old_fav = _rh_last.get('fav_price_precise') or _rh_last.get('fav_price') or actual_fav_price
+                _new_fav = bot.get('_fav_price_precise') or actual_fav_price or 0
+                if _total_qty > 0:
+                    _wavg_fav = ((_old_fav * _old_qty) + (_new_fav * _new_qty)) / _total_qty
+                else:
+                    _wavg_fav = _new_fav
+
+                _rh_last['qty'] = _total_qty
+                _rh_last['pnl'] = (_rh_last.get('pnl') or 0) + net_pnl
+                _rh_last['fav_price_precise'] = round(_wavg_fav, 2)
+                _rh_last['fav_price'] = round(_wavg_fav)
+                _rh_last['result'] = 'win' if _rh_last['pnl'] >= 0 else 'loss'
+                _rh_last['ts'] = _rh_now
+                if bot.get('hedge_fill_latency_ms') is not None:
+                    _rh_last['fill_time_ms'] = max(_rh_last.get('fill_time_ms') or 0, bot.get('hedge_fill_latency_ms'))
+                _rh_last['_merged_completions'] = (_rh_last.get('_merged_completions') or 1) + 1
+
+                print(f'📊 RUN HISTORY MERGE: {bot_id} supplemental +{_new_qty}x @ {_new_fav} → run {repeats_done_now} qty={_total_qty} pnl={_rh_last["pnl"]:.2f}c wavg_fav={_wavg_fav:.2f}')
+                bot_log('PHANTOM_RUN_MERGE', bot_id, {
+                    'run': repeats_done_now, 'added_qty': _new_qty, 'added_pnl': net_pnl,
+                    'total_qty': _total_qty, 'total_pnl': _rh_last['pnl'],
+                    'wavg_fav': round(_wavg_fav, 2),
+                })
+            else:
+                _rh.append({
+                    'run': repeats_done_now,
+                    'pnl': net_pnl,
+                    'result': 'win' if net_pnl >= 0 else 'loss',
+                    'dog_price': dog_price,
+                    'fav_price': actual_fav_price,
+                    'fav_price_precise': bot.get('_fav_price_precise'),  # 2-decimal weighted avg (split hedges)
+                    'qty': qty,
+                    'anchor_depth': bot.get('anchor_depth', 0),
+                    'raw_hedge_ms': bot.get('raw_hedge_ms'),
+                    'hedge_latency_ms': bot.get('hedge_latency_ms'),
+                    'fill_time_ms': bot.get('hedge_fill_latency_ms'),
+                    'taker': bool(bot.get('_fav_was_taker')),
+                    'ts': _rh_now,
+                })
             bot.pop('_fav_price_precise', None)  # clear for next cycle
             if _will_repeat:
                 bot['status'] = 'waiting_repeat'
@@ -16224,10 +16347,18 @@ def _handle_apex(bot_id, bot, actions):
                   bot['_sl_breach_peak'] = _best_combined
                   bot['_sl_breach_phase'] = _phase
                   print(f'⏱ APEX MM SOFT BREACH: {bot_id} combined={_best_combined}c > {_stop}c — gate {_persist_s}s ({_phase})')
+                  # Walk exit toward wall (100c combined) during persistence so it can
+                  # park at breakeven before SL fires. Otherwise exit stays stuck at
+                  # original target and SL eats the full gap to bid.
+                  try: _apex_mm_walk_up(bot_id, bot)
+                  except Exception: pass
                   return
               bot['_sl_breach_peak'] = max(bot.get('_sl_breach_peak', 0), _best_combined)
               _breach_age = _pc - bot['_sl_breach_since']
               if _breach_age < _persist_s:
+                  # Keep walking toward wall during persistence
+                  try: _apex_mm_walk_up(bot_id, bot)
+                  except Exception: pass
                   return  # still within persistence window
               _apex_mm_begin_exit(bot_id, bot, f'drift_stop (combined={_best_combined}c > {_stop}c, persisted={_breach_age:.3f}s/{_persist_s}s, phase={_phase})')
               return

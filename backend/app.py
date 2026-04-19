@@ -16081,18 +16081,46 @@ def _handle_apex(bot_id, bot, actions):
                     _dp_ky = max(0, _dp_kalshi_net)
                     _dp_kn = max(0, -_dp_kalshi_net)
                     if _dp_ky != _dp_net_yes or _dp_kn != _dp_net_no:
+                        # Infer missing-inventory cost from posted ladder rungs.
+                        # Takers cross best bid first, so fills sweep price DESC top→bottom.
+                        def _infer_orphan_cost(posted, missing_qty, fallback_price):
+                            remaining = missing_qty
+                            total = 0.0
+                            consumed = 0
+                            try:
+                                rungs = sorted(
+                                    [(int(p), int(o.get('qty', 0) or 0)) for p, o in (posted or {}).items()],
+                                    key=lambda x: x[0], reverse=True
+                                )
+                            except Exception:
+                                rungs = []
+                            for price, qty in rungs:
+                                if remaining <= 0:
+                                    break
+                                take = min(qty, remaining)
+                                if take <= 0:
+                                    continue
+                                total += price * take
+                                consumed += take
+                                remaining -= take
+                            if remaining > 0:
+                                total += fallback_price * remaining
+                                consumed += remaining
+                            return (total / consumed) if consumed > 0 else fallback_price
                         # UPWARD: Kalshi has more than bot tracks — add missing inventory
                         if _dp_ky > _dp_net_yes:
                             _m = _dp_ky - _dp_net_yes
                             _fl = [f for f in bot.get('_fill_log', []) if f.get('side') == 'yes' and not f.get('is_exit')]
-                            _ec = _fl[-1]['price'] if _fl else bot.get('midpoint', 50)
+                            _fallback = _fl[-1]['price'] if _fl else bot.get('midpoint', 50)
+                            _ec = _infer_orphan_cost(bot.get('yes_orders', {}), _m, _fallback)
                             bot['net_yes'] = _dp_ky
                             bot['total_yes_cost'] = bot.get('total_yes_cost', 0) + (_ec * _m)
                             bot['avg_yes_cost'] = round(bot['total_yes_cost'] / _dp_ky) if _dp_ky > 0 else 0
                         if _dp_kn > _dp_net_no:
                             _m = _dp_kn - _dp_net_no
                             _fl = [f for f in bot.get('_fill_log', []) if f.get('side') == 'no' and not f.get('is_exit')]
-                            _ec = _fl[-1]['price'] if _fl else (100 - bot.get('midpoint', 50))
+                            _fallback = _fl[-1]['price'] if _fl else (100 - bot.get('midpoint', 50))
+                            _ec = _infer_orphan_cost(bot.get('no_orders', {}), _m, _fallback)
                             bot['net_no'] = _dp_kn
                             bot['total_no_cost'] = bot.get('total_no_cost', 0) + (_ec * _m)
                             bot['avg_no_cost'] = round(bot['total_no_cost'] / _dp_kn) if _dp_kn > 0 else 0

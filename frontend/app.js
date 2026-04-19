@@ -122,6 +122,15 @@ function fmtCents(v) {
     if (Math.abs(n - Math.round(n)) < 1e-6) return String(Math.round(n));
     return n.toFixed(2).replace(/\.?0+$/, '');
 }
+// Format cents as signed dollars ($X.XX) — used for totals / P&L summaries.
+function fmtDollars(cents, opts) {
+    const n = Number(cents);
+    if (!isFinite(n)) return '$0.00';
+    const showSign = opts && opts.sign;
+    const dollars = n / 100;
+    const sign = dollars < 0 ? '-' : (showSign ? '+' : '');
+    return sign + '$' + Math.abs(dollars).toFixed(2);
+}
 let allMarkets = [];
 let autoMonitorInterval = null;
 let _tabRefreshInterval = null; // Auto-refresh for history/positions tabs
@@ -6400,8 +6409,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 const ltPnl = bot.lifetime_pnl ?? bot.net_pnl_cents ?? 0;
                 const ltCol = ltPnl > 0 ? '#00ff88' : ltPnl < 0 ? '#ff4444' : '#ffaa00';
                 return `<div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding:8px 10px;background:#060a14;border:1px solid ${lpCol}44;border-radius:6px;font-size:12px;">
-                    <span style="color:${lpCol};font-weight:800;">✅ ${lp >= 0 ? '+' : ''}${lp}¢</span>
-                    <span style="color:${ltCol};font-weight:700;font-size:11px;">Total: ${ltPnl >= 0 ? '+' : ''}${ltPnl}¢ ($${(ltPnl/100).toFixed(2)})</span>
+                    <span style="color:${lpCol};font-weight:800;">✅ ${fmtDollars(lp, {sign:true})}</span>
+                    <span style="color:${ltCol};font-weight:700;font-size:11px;">Total: ${fmtDollars(ltPnl, {sign:true})}</span>
                 </div>`;
             }
             // Show lifetime P&L if bot has completed at least 1 run
@@ -6409,7 +6418,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             if (_lt != null && _lt !== 0) {
                 const _ltc = _lt > 0 ? '#00ff88' : _lt < 0 ? '#ff4444' : '#ffaa00';
                 return `<div style="margin-top:6px;padding:4px 10px;font-size:11px;">
-                    <span style="color:${_ltc};font-weight:700;">Total: ${_lt >= 0 ? '+' : ''}${_lt}¢ ($${(_lt/100).toFixed(2)})</span>
+                    <span style="color:${_ltc};font-weight:700;">Total: ${fmtDollars(_lt, {sign:true})}</span>
                 </div>`;
             }
             return '';
@@ -6555,7 +6564,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                     + (_depCombo ? '<span>' + _depCombo + '</span>' : '<span></span>')
                     + '<span style="display:flex;align-items:center;gap:2px;">' + (_hmsStr || '') + (r.taker ? '<span style="color:#ff66aa;font-size:8px;font-weight:700;">+1</span>' : '') + '</span>'
                     + '<span style="color:#b2ff59;font-weight:700;text-align:center;">x' + fmtQty(r.qty || 1) + '</span>'
-                    + '<span style="color:' + (r.pnl >= 0 ? '#00ff88' : '#ff4444') + ';font-weight:800;text-align:right;">' + (r.pnl >= 0 ? '+' : '') + fmtCents(r.pnl) + '¢</span>'
+                    + '<span style="color:' + (r.pnl >= 0 ? '#00ff88' : '#ff4444') + ';font-weight:800;text-align:right;">' + fmtDollars(r.pnl, {sign:true}) + '</span>'
                     + '</div>'
                     + '';
                 }).join('');
@@ -6566,7 +6575,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 html += '<div style="display:flex;gap:16px;font-size:11px;color:#8892a6;justify-content:center;flex-wrap:wrap;margin-top:6px;padding-top:6px;border-top:1px solid #ff66aa22;">'
                     + '<span>Runs: <strong style="color:#ff66aa;">' + (bot.repeats_done || _rh.length) + '</strong></span>'
                     + (_isCross && (_crossQtyDog > 0 || _crossQtyFav > 0) ? '<span>Holding: <strong style="color:#fff;">' + (_crossQtyDog === _crossQtyFav ? _crossQtyDog + 'x each' : _crossQtyDog + 'x / ' + _crossQtyFav + 'x') + '</strong></span>' : '')
-                    + '<span>P&L: <strong style="color:' + (_ltPnlDisp >= 0 ? '#00ff88' : '#ff4444') + ';font-size:13px;">' + (_ltPnlDisp >= 0 ? '+' : '') + fmtCents(_ltPnlDisp) + '¢</strong></span>'
+                    + '<span>P&L: <strong style="color:' + (_ltPnlDisp >= 0 ? '#00ff88' : '#ff4444') + ';font-size:13px;">' + fmtDollars(_ltPnlDisp, {sign:true}) + '</strong></span>'
                     + (bot.anchor_depth ? '<span>Depth: <strong style="color:#ff66aa;">' + bot.anchor_depth + '¢</strong></span>' : '')
                     + (bot.smart_mode ? '<span>Streak: <strong style="color:' + ((bot.consecutive_losses || 0) >= 2 ? '#ff4444' : (bot.consecutive_losses || 0) >= 1 ? '#ffaa00' : '#00ff88') + ';">' + (bot.consecutive_losses || 0) + 'L</strong></span>' : '')
                     + '</div>';

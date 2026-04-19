@@ -501,6 +501,20 @@ def ws_status():
     })
 
 
+@app.route('/api/tennis_ws/status', methods=['GET'])
+def tennis_ws_status():
+    """Diagnostics for API Tennis WS push feed."""
+    now = time.time()
+    last_ts = tennis_ws_manager._last_msg_ts
+    return jsonify({
+        'connected': tennis_ws_manager.connected,
+        'message_count': tennis_ws_manager._msg_count,
+        'reconnect_count': tennis_ws_manager._reconnect_count,
+        'last_message_age_s': round(now - last_ts, 1) if last_ts else None,
+        'cache_matches': len(_api_tennis_cache.get('data') or []),
+    })
+
+
 @app.route('/api/ws/balance', methods=['GET'])
 def ws_balance():
     """Return cached balance + positions from the WS/poll cache."""
@@ -1966,6 +1980,7 @@ def get_milestones():
 # ─── API Tennis integration (replaces ESPN for tennis) ──────────────────────
 _API_TENNIS_KEY = 'a12d0895ba334cfa37cc5e131a8f94c78f0cd5d2d3785a28f36fe2e3c564747f'
 _api_tennis_cache = {'data': None, 'ts': 0}
+_api_tennis_lock = threading.Lock()  # guards read-modify-write on cache from REST + WS
 _API_TENNIS_TTL = 20  # seconds
 
 def _set_won(score_obj, player):
@@ -2002,8 +2017,22 @@ def _fetch_api_tennis_scoreboard(tour_filter):
             result = resp.json()
             all_matches = result.get('result', [])
             if isinstance(all_matches, list):
-                _api_tennis_cache['data'] = all_matches
-                _api_tennis_cache['ts'] = now
+                # Merge with any WS-pushed matches not yet in REST (e.g. just-started games)
+                with _api_tennis_lock:
+                    existing = _api_tennis_cache.get('data') or []
+                    by_key = {}
+                    for m in existing:
+                        k = m.get('event_key')
+                        if k is not None:
+                            by_key[k] = m
+                    for m in all_matches:
+                        k = m.get('event_key')
+                        if k is not None:
+                            by_key[k] = m  # REST wins on overlap (full snapshot)
+                    merged = list(by_key.values()) if by_key else all_matches
+                    _api_tennis_cache['data'] = merged
+                    _api_tennis_cache['ts'] = now
+                    all_matches = merged
             else:
                 all_matches = []
         except Exception as e:
@@ -4259,6 +4288,101 @@ class KalshiWSManager:
 
 # Global WS manager instance
 ws_manager = KalshiWSManager()
+
+
+class TennisWSManager:
+    """Live push feed from API Tennis. Upserts matches into _api_tennis_cache
+    by event_key so downstream readers get sub-second updates instead of the
+    20s REST TTL. REST backfill still runs (new-match discovery, WS outages)."""
+
+    def __init__(self):
+        self._ws = None
+        self._thread = None
+        self._connected = False
+        self._reconnect_count = 0
+        self._last_msg_ts = 0
+        self._msg_count = 0
+
+    @property
+    def connected(self):
+        return self._connected and self._ws is not None
+
+    def start(self):
+        if self._thread and self._thread.is_alive() and self._connected:
+            return
+        if not _API_TENNIS_KEY:
+            return
+
+        url = f'wss://wss.api-tennis.com/live?APIkey={_API_TENNIS_KEY}&timezone=+00:00'
+
+        def on_open(ws):
+            self._connected = True
+            self._reconnect_count = 0
+            print('🎾 API Tennis WS connected')
+
+        def on_message(ws, message):
+            try:
+                if not message:
+                    return
+                data = json.loads(message)
+                self._handle_message(data)
+            except Exception as e:
+                print(f'⚠ Tennis WS parse error: {e}')
+
+        def on_error(ws, error):
+            print(f'⚠ Tennis WS error: {error}')
+            self._connected = False
+
+        def on_close(ws, code, msg):
+            self._connected = False
+            print(f'🎾 Tennis WS closed: {code} {msg}')
+            # Exponential backoff: 5, 10, 20, 40, 60s cap
+            delay = min(60, 5 * (2 ** min(self._reconnect_count, 4)))
+            self._reconnect_count += 1
+            threading.Timer(delay, self.start).start()
+
+        try:
+            self._ws = _ws_lib.WebSocketApp(
+                url,
+                on_open=on_open,
+                on_message=on_message,
+                on_error=on_error,
+                on_close=on_close,
+            )
+            self._thread = threading.Thread(
+                target=self._ws.run_forever,
+                kwargs={'ping_interval': 30, 'ping_timeout': 10},
+                daemon=True,
+            )
+            self._thread.start()
+        except Exception as e:
+            print(f'❌ Tennis WS connect failed: {e}')
+
+    def _handle_message(self, data):
+        if not data:
+            return
+        matches = data if isinstance(data, list) else [data]
+        matches = [m for m in matches if isinstance(m, dict) and m.get('event_key') is not None]
+        if not matches:
+            return
+        self._last_msg_ts = time.time()
+        self._msg_count += 1
+        with _api_tennis_lock:
+            existing = _api_tennis_cache.get('data') or []
+            by_key = {}
+            for m in existing:
+                k = m.get('event_key')
+                if k is not None:
+                    by_key[k] = m
+            for m in matches:
+                by_key[m.get('event_key')] = m
+            _api_tennis_cache['data'] = list(by_key.values())
+            # Don't touch ts — REST TTL still governs full-snapshot refresh
+
+
+tennis_ws_manager = TennisWSManager()
+tennis_ws_manager.start()
+
 
 # ─── Monitor lock: prevent concurrent monitor calls from double-executing ─────
 monitor_lock = threading.Lock()

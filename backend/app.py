@@ -2193,9 +2193,48 @@ def _fetch_api_tennis_scoreboard(tour_filter):
 # Strategy: cache aggressively, gate by "any active intl bot OR recent scanner ping".
 _BASKETBALL_API_KEY = os.environ.get('BASKETBALL_API_KEY', 'b7d73ee21537b6de04e1933a3ef99df4')
 _basketball_api_cache = {'data': {}, 'ts': 0, 'raw_games': []}
-_BASKETBALL_API_TTL_NORMAL = 300  # 5 min when no bot in hot state
-_BASKETBALL_API_TTL_HOT = 60      # 1 min when a covered-league bot is hedging
-_basketball_browse_ts = 0          # last time someone hit /api/markets — refresh while active
+_BASKETBALL_API_TTL_NORMAL = 900   # 15 min normal — fits 4 refreshes/hour in 100/day cap
+_BASKETBALL_API_TTL_HOT = 120      # 2 min when a covered-league bot is hedging
+_basketball_browse_ts = 0           # last time someone hit /api/markets — refresh while active
+_BASKETBALL_CACHE_PATH = '/root/meridian/backend/basketball_api_cache.json'
+_basketball_daily_limit_hit = False  # flip true when api-sports reports daily cap exhaustion
+
+
+def _load_basketball_cache_from_disk():
+    """Seed the cache from disk on startup so restarts don't burn an API call.
+    Only trust entries < 30 min old."""
+    global _basketball_api_cache
+    try:
+        if not os.path.exists(_BASKETBALL_CACHE_PATH):
+            return
+        with open(_BASKETBALL_CACHE_PATH) as _f:
+            payload = json.load(_f)
+        ts = float(payload.get('ts') or 0)
+        if time.time() - ts > 1800:
+            return  # stale, let the next fetch populate
+        _basketball_api_cache['data'] = payload.get('data') or {}
+        _basketball_api_cache['raw_games'] = payload.get('raw_games') or []
+        _basketball_api_cache['ts'] = ts
+        print(f'🏀 Loaded intl basketball cache from disk: {len(_basketball_api_cache["raw_games"])} games, age={int(time.time()-ts)}s')
+    except Exception as _e:
+        print(f'⚠️ Intl basketball cache disk load failed: {_e}')
+
+
+def _save_basketball_cache_to_disk():
+    try:
+        payload = {
+            'ts': _basketball_api_cache.get('ts', 0),
+            'data': _basketball_api_cache.get('data', {}),
+            'raw_games': _basketball_api_cache.get('raw_games', []),
+        }
+        with open(_BASKETBALL_CACHE_PATH + '.tmp', 'w') as _f:
+            json.dump(payload, _f)
+        os.replace(_BASKETBALL_CACHE_PATH + '.tmp', _BASKETBALL_CACHE_PATH)
+    except Exception as _e:
+        print(f'⚠️ Intl basketball cache disk save failed: {_e}')
+
+
+_load_basketball_cache_from_disk()
 
 # Kalshi series prefix → api-sports.io basketball league ID
 _INTL_BASKETBALL_LEAGUES = {
@@ -2302,6 +2341,21 @@ def _fetch_intl_basketball_scoreboard():
         print(f'⚠️ Intl basketball API fetch failed: {e}')
         return _basketball_api_cache.get('data', {})
 
+    # Detect daily-cap exhaustion so we stop hammering the API
+    _errors = payload.get('errors')
+    if isinstance(_errors, dict) and _errors:
+        global _basketball_daily_limit_hit
+        _first_err = next(iter(_errors.values()), '')
+        if 'limit' in str(_first_err).lower() or 'reached' in str(_first_err).lower():
+            _basketball_daily_limit_hit = True
+            # Reserve cache ts so we stop retrying until the TTL rolls over at
+            # UTC midnight (the reset point). Bump ts so age < ttl for a while.
+            _basketball_api_cache['ts'] = time.time()
+            print(f'🚫 Intl basketball API daily cap hit: {_first_err}')
+            return _basketball_api_cache.get('data', {})
+        else:
+            print(f'⚠️ Intl basketball API errors: {_errors}')
+
     games = payload.get('response', []) or []
     wanted_ids = set(_INTL_BASKETBALL_LEAGUES.values())
     team_info = {}
@@ -2371,11 +2425,16 @@ def _fetch_intl_basketball_scoreboard():
             team_info[f'{sport_key}:{code}'] = away_entry
         matched += 1
 
+    global _basketball_daily_limit_hit
     _basketball_api_cache['data'] = team_info
     _basketball_api_cache['ts'] = time.time()
     _basketball_api_cache['raw_games'] = games
+    _basketball_daily_limit_hit = False  # healthy fetch cleared any prior cap
+    _save_basketball_cache_to_disk()
     if matched:
-        print(f'🏀 Intl basketball cache refreshed: {matched} live games, {len(team_info)} team-code keys (mode={"hot" if hot_mode else "normal"})')
+        print(f'🏀 Intl basketball cache refreshed: {matched} games, {len(team_info)} team-code keys (mode={"hot" if hot_mode else "normal"})')
+    else:
+        print(f'🏀 Intl basketball fetch returned 0 games in our leagues (total in slate: {len(games)})')
     return team_info
 
 

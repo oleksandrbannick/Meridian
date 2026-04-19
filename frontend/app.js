@@ -6314,7 +6314,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 ${!_isCompletedSummary && dogFilled && favPrice > 0 ? '<span style="background:#33445522;color:#8892a6;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;">● snap bid</span>' : ''}
                 ${!_isCompletedSummary && dogFilled ? `<span style="color:#8892a6;font-size:10px;">${fillAgeStr}</span>` : ''}
                 ${bot.smart_mode ? `<span style="background:#00e5ff22;color:${!_isCompletedSummary && (bot._smart_stop_pending || bot._stop_pending) ? '#ff8800' : '#00e5ff'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${_isCompletedSummary ? `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L` : (bot._smart_stop_pending || bot._stop_pending) ? `⏸ Stopping after run` : `Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L`}</span>` : repeatCount > 0 ? `<span style="background:${!_isCompletedSummary && bot._stop_pending ? '#ff880022' : '#6366f122'};color:${!_isCompletedSummary && bot._stop_pending ? '#ff8800' : '#818cf8'};padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">${!_isCompletedSummary && bot._stop_pending ? `⏸ Stopping after run` : `Run ${repeatsDone + 1}/${repeatCount + 1}`}</span>` : (!_isCompletedSummary && bot._stop_pending ? `<span style="background:#ff880022;color:#ff8800;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;">⏸ Stopping</span>` : '')}
-                ${(() => { const _r = bot.raw_hedge_ms ?? bot._last_raw_hedge_ms; const _l = bot.hedge_latency_ms ?? bot._last_hedge_latency_ms; return _isCompletedSummary ? ((_r != null ? `<span style="color:${_r < 5 ? '#00ffcc' : _r < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;font-size:10px;">⚡${_r.toFixed(1)}ms</span>` : '') + (_l != null ? `<span style="color:#666;font-size:10px;"> rt ${Math.round(_l)}ms</span>` : '')) : ''; })()}
+                ${''/* hedge speed shown per-run in run-history row below; summary removed as redundant */}
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 ${!_isCompletedSummary && !dogFilled ? `<button onclick="phantomModify('${botId}')" style="background:#ff66aa22;color:#ff66aa;border:1px solid #ff66aa44;border-radius:6px;padding:4px 8px;font-size:10px;cursor:pointer;font-weight:700;">Edit</button>` : ''}
@@ -6465,7 +6465,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             ${isLadder && bot.avg_fill_price > 0 ? `<span style="color:#ffaa00;">Avg: ${bot.avg_fill_price}¢</span>` : ''}
             ${!_isCompletedSummary && bot.smart_mode ? `<span style="color:#00e5ff;font-weight:700;">Smart · ${bot.repeats_done || 0} runs · ${bot.consecutive_losses || 0}L</span>` : !_isCompletedSummary && bot.repeat_count > 0 ? `<span style="color:#aa66ff;">🔄 ${(bot.repeats_done || 0) + 1}/${bot.repeat_count + 1}</span>` : ''}
             ${_isCompletedSummary && bot.smart_mode ? `<span style="color:#8892a6;">Streak: <strong style="color:${(bot.consecutive_losses || 0) >= 2 ? '#ff4444' : (bot.consecutive_losses || 0) >= 1 ? '#ffaa00' : '#00ff88'};">${bot.consecutive_losses || 0}L</strong></span>` : ''}
-            ${(() => { const raw = bot.raw_hedge_ms ?? bot._last_raw_hedge_ms; const lat = bot.hedge_latency_ms ?? bot._last_hedge_latency_ms; return (raw != null && raw > 0 ? `<span style="color:${raw < 5 ? '#00ffcc' : raw < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;">⚡raw ${raw.toFixed(1)}ms</span>` : '') + (lat != null ? `<span style="color:${lat < 300 ? '#00ff88' : lat < 800 ? '#ffaa00' : '#ff4444'};font-weight:700;"> ⚡rt ${Math.round(lat)}ms</span>` : ''); })()}
+            ${(() => { const raw = bot.raw_hedge_ms ?? bot._last_raw_hedge_ms; return (raw != null && raw > 0 ? `<span style="color:${raw < 5 ? '#00ffcc' : raw < 15 ? '#00ff88' : '#ffaa00'};font-weight:700;">⚡${raw.toFixed(1)}ms</span>` : ''); })()}
             ${(() => {
                 if (status === 'dog_anchor_posted' || status === 'ladder_posted') {
                     const repostCt = bot.dog_repost_count || 0;
@@ -6548,12 +6548,13 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                         _depBadge2 = ' <span style="color:' + _dcCol2 + ';font-size:8px;font-weight:700;background:' + _dcCol2 + '18;padding:0 3px;border-radius:2px;margin-left:2px;">' + _depCap2 + '¢</span>';
                     }
                     const _floorBadge2 = _depFloor2 > 0 ? ' <span style="color:#ff66aa;font-size:8px;font-weight:700;background:#ff66aa18;padding:0 3px;border-radius:2px;margin-left:2px;">F' + _depFloor2 + '</span>' : '';
-                    const _hedgeMs2 = r.raw_hedge_ms != null ? r.raw_hedge_ms : (r.hedge_latency_ms != null ? r.hedge_latency_ms : null);
+                    // Original hedge speed only (raw_hedge_ms). Skip rt-latency fallback — user wants one metric.
+                    const _hedgeMs2 = r.raw_hedge_ms != null ? r.raw_hedge_ms : null;
                     const _hmsStr = _hedgeMs2 != null ? ' <span style="color:' + (_hedgeMs2 < 1 ? '#00ffcc' : _hedgeMs2 < 5 ? '#00ff88' : '#ffaa00') + ';font-size:8px;font-weight:700;margin-left:2px;">⚡' + (_hedgeMs2 < 1 ? _hedgeMs2.toFixed(1) : Math.round(_hedgeMs2)) + 'ms</span>' : '';
-                    // Combined depth badge: captured/floor (e.g. "3/6" = caught 3¢ on 6¢ floor)
-                    // Captured in green/yellow/red based on how much of floor was caught, floor stays pink
+                    // Combined depth badge: captured/floor (e.g. "3/6" = caught 3¢ on 6¢ floor).
+                    // Round captured to kill IEEE 754 float noise (e.g. 10.37999999 from 100 - 89.62).
                     const _depCombo = (_depFloor2 > 0 && _comb2 > 0 && !_isExit)
-                        ? (() => { const _dc = _depCap2; const _df = _depFloor2; const _capCol = _dc >= _df ? '#ff66aa' : _dc >= _df - 2 ? '#ffaa00' : _dc >= 0 ? '#cc6688' : '#ff8800'; return '<span style="font-size:8px;font-weight:700;display:inline-flex;min-width:28px;justify-content:flex-end;"><span style="color:' + _capCol + ';">' + _dc + '</span><span style="color:#334;">/</span><span style="color:#ff66aa;">' + _df + '</span></span>'; })()
+                        ? (() => { const _dc = Math.round(_depCap2); const _df = _depFloor2; const _capCol = _dc >= _df ? '#ff66aa' : _dc >= _df - 2 ? '#ffaa00' : _dc >= 0 ? '#cc6688' : '#ff8800'; return '<span style="font-size:8px;font-weight:700;display:inline-flex;min-width:28px;justify-content:flex-end;"><span style="color:' + _capCol + ';">' + _dc + '</span><span style="color:#334;">/</span><span style="color:#ff66aa;">' + _df + '</span></span>'; })()
                         : '';
                     return '<div style="display:grid;grid-template-columns:18px 72px 30px auto 52px 60px;align-items:center;gap:4px;padding:3px 6px;' + (i > 0 ? 'border-top:1px solid #141a24;' : '') + 'font-size:11px;">'
                     + '<span style="color:#00e5ff;font-weight:700;font-size:10px;">#' + (r.run || i + 1) + '</span>'

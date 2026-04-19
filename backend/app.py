@@ -2188,7 +2188,8 @@ def _fetch_api_tennis_scoreboard(tour_filter):
 
 
 # ─── api-sports.io basketball integration (intl leagues ESPN doesn't cover) ──
-# Free tier: 100 requests/day. One ?live=all call returns every live game globally.
+# Free tier: 100 requests/day. One ?date=TODAY call returns the full daily slate
+# (pre/in/post) for every league globally — we filter to our 12 leagues client-side.
 # Strategy: cache aggressively, gate by "any active intl bot OR recent scanner ping".
 _BASKETBALL_API_KEY = os.environ.get('BASKETBALL_API_KEY', 'b7d73ee21537b6de04e1933a3ef99df4')
 _basketball_api_cache = {'data': {}, 'ts': 0, 'raw_games': []}
@@ -2288,8 +2289,12 @@ def _fetch_intl_basketball_scoreboard():
     age = time.time() - _basketball_api_cache['ts']
     if not should_refresh or age < ttl:
         return _basketball_api_cache.get('data', {})
+    # ?date=TODAY returns pregame/live/finished in one call. ?live=all is broken on
+    # this endpoint — returns 0 even when games are actively in Q1/Q2/Q4 etc.
+    import datetime as _dt
+    today_utc = _dt.datetime.utcnow().date().isoformat()
     try:
-        url = 'https://v1.basketball.api-sports.io/games?live=all'
+        url = f'https://v1.basketball.api-sports.io/games?date={today_utc}'
         resp = requests.get(url, headers={'x-apisports-key': _BASKETBALL_API_KEY}, timeout=8)
         resp.raise_for_status()
         payload = resp.json()
@@ -4107,6 +4112,7 @@ class KalshiWSManager:
                     # ceiling exit system removed — fav snaps to bid with no cap
                     threading.Thread(target=_ws_phantom_price_floor, args=(ticker, yb, nb), daemon=True).start()
                     threading.Thread(target=_ws_phantom_drift_guard, args=(ticker, yb, nb), daemon=True).start()
+                    threading.Thread(target=_ws_phantom_sympathy_guard, args=(ticker, yb, nb, ya, na), daemon=True).start()
                 except Exception as _pd_err:
                     pass  # don't spam logs on every tick
                 # ── Real-time phantom retreat: pull dog if bid approaches order ──
@@ -4637,6 +4643,175 @@ def _ws_phantom_drift_guard(ticker, yes_bid, no_bid):
 
 
     # Ceiling sell follow removed — no more dog sell system
+
+
+_phantom_drift_log_lock = threading.Lock()
+
+def _phantom_drift_log(entry):
+    """Append one JSON line to phantom_drift_log.jsonl for sympathy/drift analysis.
+    Separate from activity_log so heavy logging doesn't bury bot events."""
+    try:
+        entry['ts_iso'] = datetime.now(timezone.utc).isoformat()
+        with _phantom_drift_log_lock:
+            with open('phantom_drift_log.jsonl', 'a') as f:
+                f.write(json.dumps(entry) + '\n')
+    except Exception:
+        pass
+
+
+def _ws_phantom_sympathy_guard(ticker, yes_bid, no_bid, yes_ask, no_ask):
+    """Fav-led sympathy trap detector. Whale sweeps favorite first:
+       fav ask gets eaten (rises), fav bid follows up, dog bid lags or drifts down.
+       Our resting dog becomes arb fodder (combined > 99) — pull pre-fill.
+
+       Textbook trigger (all must hold, measured over ~500ms window):
+         fav_ask_delta ≥ +2c, fav_bid_delta ≥ +1c, dog_bid_delta ≤ 0, my_combined ≥ 98
+
+       Shadow (log-only) thresholds: loose/medium for post-hoc calibration."""
+    now = time.time()
+    for bot_id, bot in list(active_bots.items()):
+        if bot.get('bot_category') != 'anchor_dog':
+            continue
+        if bot.get('status') != 'dog_anchor_posted':
+            continue
+        if bot.get('_sympathy_pulled') or bot.get('_price_floor_pulled'):
+            continue
+        if bot.get('cross_market'):
+            continue  # v1: same-market only; cross-market reads hedge_ticker separately
+        if bot.get('ticker') != ticker:
+            continue
+
+        dog_side = bot.get('dog_side', '')
+        fav_side = bot.get('fav_side', '')
+        if not dog_side or not fav_side:
+            continue
+
+        fav_bid = yes_bid if fav_side == 'yes' else no_bid
+        fav_ask = yes_ask if fav_side == 'yes' else no_ask
+        dog_bid = yes_bid if dog_side == 'yes' else no_bid
+        if fav_bid <= 0 or fav_ask <= 0 or dog_bid <= 0:
+            continue
+
+        dog_price = bot.get('dog_price', 0)
+        if dog_price <= 0:
+            continue
+
+        # Rolling 2s history on bot dict
+        hist = bot.get('_sympathy_hist')
+        if hist is None:
+            hist = _deque(maxlen=40)
+            bot['_sympathy_hist'] = hist
+        hist.append((now, fav_bid, fav_ask, dog_bid))
+
+        # Find reference ~500ms ago (walks forward to newest entry ≤ cutoff)
+        ref_ts_cutoff = now - 0.5
+        ref_fav_bid, ref_fav_ask, ref_dog_bid = fav_bid, fav_ask, dog_bid
+        for ts, fb, fa, db in hist:
+            if ts <= ref_ts_cutoff:
+                ref_fav_bid, ref_fav_ask, ref_dog_bid = fb, fa, db
+            else:
+                break
+
+        # Need at least one reference point older than cutoff; otherwise not enough history
+        if ref_ts_cutoff < hist[0][0]:
+            continue
+
+        fav_bid_delta = fav_bid - ref_fav_bid
+        fav_ask_delta = fav_ask - ref_fav_ask
+        dog_bid_delta = dog_bid - ref_dog_bid
+        my_combined = dog_price + fav_bid
+
+        textbook = (
+            fav_ask_delta >= 2 and
+            fav_bid_delta >= 1 and
+            dog_bid_delta <= 0 and
+            my_combined >= 98
+        )
+        shadow_loose = (fav_ask_delta >= 1 and fav_bid_delta >= 1 and my_combined >= 96)
+        shadow_medium = (fav_ask_delta >= 2 and fav_bid_delta >= 1 and my_combined >= 97)
+
+        # Rate-limit baseline snapshots (once per 2s per bot), always log signal events
+        _last_snap = bot.get('_sympathy_last_snap', 0)
+        should_log = textbook or shadow_loose or shadow_medium or (now - _last_snap >= 2.0)
+        if should_log:
+            _phantom_drift_log({
+                'event': 'sympathy_pull' if textbook else ('shadow_hit' if (shadow_loose or shadow_medium) else 'snapshot'),
+                'bot_id': bot_id,
+                'ticker': ticker,
+                'epoch': now,
+                'dog_side': dog_side,
+                'fav_side': fav_side,
+                'dog_price': dog_price,
+                'fav_bid_now': fav_bid,
+                'fav_ask_now': fav_ask,
+                'dog_bid_now': dog_bid,
+                'ref_fav_bid_500ms': ref_fav_bid,
+                'ref_fav_ask_500ms': ref_fav_ask,
+                'ref_dog_bid_500ms': ref_dog_bid,
+                'fav_bid_delta_500ms': fav_bid_delta,
+                'fav_ask_delta_500ms': fav_ask_delta,
+                'dog_bid_delta_500ms': dog_bid_delta,
+                'my_combined': my_combined,
+                'shadow_loose': shadow_loose,
+                'shadow_medium': shadow_medium,
+                'textbook': textbook,
+            })
+            bot['_sympathy_last_snap'] = now
+
+        if not textbook:
+            continue
+
+        dog_oid = bot.get('dog_order_id')
+        if not dog_oid:
+            continue
+
+        # Pull the dog (textbook sympathy)
+        _sp_result = _safe_cancel(dog_oid, f'ws_sympathy_{bot_id}')
+        bot['dog_order_id'] = None
+
+        # Race-fill detection: dog may have filled during cancel
+        if isinstance(_sp_result, tuple) and _sp_result[0] == 'filled':
+            _sp_fills = _sp_result[1]
+            with ws_fill_lock:
+                if bot.get('_hedge_fired'):
+                    save_state()
+                    return
+                bot['_hedge_fired'] = True
+            bot['dog_fill_qty'] = max(bot.get('dog_fill_qty', 0), _sp_fills)
+            bot[f'{dog_side}_fill_qty'] = bot['dog_fill_qty']
+            bot['status'] = 'dog_filled'
+            bot['dog_filled_at'] = now
+            _qty = bot.get('quantity', 1)
+            if _sp_fills < _qty:
+                bot['_original_qty'] = _qty
+                bot['_partial_hedge_qty'] = _sp_fills
+            _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
+            print(f'🚨 WS SYMPATHY RACE FILL: {bot_id} {_sp_fills} fills on cancel — hedge fired, combined={my_combined}¢')
+            bot_log('PHANTOM_SYMPATHY_RACE_FILL', bot_id, {
+                'fills': _sp_fills, 'my_combined': my_combined,
+                'fav_ask_delta': fav_ask_delta, 'fav_bid_delta': fav_bid_delta,
+            }, level='WARN')
+            save_state()
+            return
+
+        # Clean pull — flag for filter/display + store reference prices for recovery gate
+        bot['_sympathy_pulled'] = True
+        bot['_sympathy_pulled_at'] = now
+        bot['_fav_bid_at_pull'] = fav_bid
+        bot['_fav_ask_at_pull'] = fav_ask
+        bot['_dog_bid_at_pull'] = dog_bid
+        bot['_sympathy_combined_at_pull'] = my_combined
+
+        print(f'🎯 PHANTOM SYMPATHY PULL: {bot_id} fav_ask +{fav_ask_delta}c, fav_bid +{fav_bid_delta}c, combined={my_combined}¢ — trap avoided')
+        bot_log('PHANTOM_SYMPATHY_PULL', bot_id, {
+            'fav_bid': fav_bid, 'fav_ask': fav_ask, 'dog_bid': dog_bid,
+            'my_combined': my_combined,
+            'fav_ask_delta_500ms': fav_ask_delta,
+            'fav_bid_delta_500ms': fav_bid_delta,
+            'dog_bid_delta_500ms': dog_bid_delta,
+        }, level='WARN')
+        save_state()
+        return
 
 
 def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
@@ -12486,6 +12661,76 @@ def _handle_phantom(bot_id, bot, actions):
             return
 
         dog_order_id = bot.get('dog_order_id')
+
+        # Sympathy pulled — fav moved against us pre-fill; wait for stabilization
+        if not dog_order_id and bot.get('_sympathy_pulled'):
+            # Settlement guard (mirror price-floor pattern)
+            if now - bot.get('_last_settle_check_sp', 0) > 30:
+                bot['_last_settle_check_sp'] = now
+                try:
+                    api_read_limiter.wait()
+                    _sp_mkt = kalshi_client.get_market(ticker)
+                    if isinstance(_sp_mkt, dict) and _sp_mkt.get('status') in ('settled', 'finalized'):
+                        _phantom_set_final_status(bot, bot_id)
+                        bot['_smart_stopped'] = True
+                        bot['_smart_stop_reason'] = 'final'
+                        print(f'🧹 SYMPATHY PULL SETTLED: {bot_id} market settled while pulled → {bot["status"]}')
+                        save_state()
+                        return
+                except Exception:
+                    pass
+
+            _sp_pulled_at = bot.get('_sympathy_pulled_at', now)
+            _sp_age = now - _sp_pulled_at
+            fav_side = bot.get('fav_side', '')
+            _sp_fav_bid_now = bot.get(f'live_{fav_side}_bid', 0)
+            _sp_fav_bid_at_pull = bot.get('_fav_bid_at_pull', 0)
+
+            # Recovery: fav bid no longer rising above pull level + min settle time
+            # OR: 60s elapsed (max wait — fav may never retreat, let re-anchor logic take over)
+            _recovered = False
+            if _sp_age >= 5 and _sp_fav_bid_now > 0 and _sp_fav_bid_at_pull > 0:
+                if _sp_fav_bid_now <= _sp_fav_bid_at_pull:
+                    _recovered = True
+            if _sp_age >= 60:
+                _recovered = True
+
+            if _recovered:
+                _phantom_drift_log({
+                    'event': 'sympathy_recovery',
+                    'bot_id': bot_id,
+                    'ticker': ticker,
+                    'epoch': now,
+                    'pulled_age_s': round(_sp_age, 1),
+                    'fav_bid_now': _sp_fav_bid_now,
+                    'fav_bid_at_pull': _sp_fav_bid_at_pull,
+                    'timed_out': _sp_age >= 60,
+                })
+                print(f'✅ PHANTOM SYMPATHY RECOVERY: {bot_id} fav_bid {_sp_fav_bid_now}¢ (was {_sp_fav_bid_at_pull}¢ at pull), age={_sp_age:.0f}s')
+                bot_log('PHANTOM_SYMPATHY_RECOVERY', bot_id, {
+                    'fav_bid_now': _sp_fav_bid_now,
+                    'fav_bid_at_pull': _sp_fav_bid_at_pull,
+                    'pulled_age_s': round(_sp_age, 1),
+                })
+                bot['_sympathy_pulled'] = False
+                bot['_sympathy_pulled_at'] = None
+                bot['_fav_bid_at_pull'] = None
+                bot['_fav_ask_at_pull'] = None
+                bot['_dog_bid_at_pull'] = None
+                bot['_sympathy_combined_at_pull'] = None
+                # Clear fill state (mirror price-floor recovery)
+                bot['dog_fill_qty'] = 0
+                bot['fav_fill_qty'] = 0
+                bot['yes_fill_qty'] = 0
+                bot['no_fill_qty'] = 0
+                bot['dog_filled_at'] = None
+                bot['_hedge_fired'] = False
+                bot['_trade_recorded'] = False
+                bot['status'] = 'waiting_repeat'
+                bot['waiting_repeat_since'] = now
+                save_state()
+            return
+
         if not dog_order_id and bot.get('_price_floor_pulled'):
             # Price floor pulled — check settlement first, then recovery
             if now - bot.get('_last_settle_check_pf', 0) > 30:

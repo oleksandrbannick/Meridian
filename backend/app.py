@@ -5178,8 +5178,14 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
                     # Skip save_state — json.dump GIL contention blocks hedge worker (deferred to hedge fn line 3508)
                     break
-                elif bot['dog_fill_qty'] > 0 and not bot.get('_hedge_fired'):
-                    # Partial fill — hedge FIRST, cancel remainder async (don't block hot path)
+                elif bot['dog_fill_qty'] >= 1.0 and not bot.get('_hedge_fired'):
+                    # Partial fill — but only hedge if we have ≥1 whole contract.
+                    # Sub-contract fractional nibbles (Mar 2026 Kalshi rollout) used to
+                    # fire a full hedge cycle per 0.X fill, creating a "shower" of
+                    # tiny arb cycles that stressed rate limits, generated float-drift
+                    # completion stalls, and cluttered the UI. Now we let small fills
+                    # accumulate in bot['dog_fill_qty'] until they add up to ≥1, then
+                    # hedge once for the accumulated qty.
                     bot['_hedge_fired'] = True
                     bot['dog_filled_at'] = time.time()
                     bot['_original_qty'] = qty_bot
@@ -5192,7 +5198,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     print(f'⚡ WS PHANTOM PARTIAL HEDGE: {bot_id} {bot["dog_fill_qty"]}/{qty_bot} filled → hedging now, cancelling rest async')
                     # Skip save_state — deferred to hedge fn (line 3508)
                     break
-                print(f'👻 WS PHANTOM FILL: {bot_id} +{count} → {bot["dog_fill_qty"]}/{qty_bot}')
+                print(f'👻 WS PHANTOM FILL: {bot_id} +{count} → {bot["dog_fill_qty"]}/{qty_bot} (below 1-contract hedge threshold)' if bot['dog_fill_qty'] < 1.0 else f'👻 WS PHANTOM FILL: {bot_id} +{count} → {bot["dog_fill_qty"]}/{qty_bot}')
             elif matched == 'fav':
                 bot['fav_fill_qty'] = bot.get('fav_fill_qty', 0) + count
                 if bot['fav_side'] == 'yes':

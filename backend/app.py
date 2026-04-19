@@ -2374,6 +2374,84 @@ def _fetch_intl_basketball_scoreboard():
     return team_info
 
 
+def _intl_basketball_event_shape(game: dict, sport_label: str) -> dict:
+    """Shape an api-sports.io basketball game into the ESPN event shape that
+    the frontend's parseESPNGame() understands."""
+    status_obj = game.get('status') or {}
+    short = (status_obj.get('short') or '').upper()
+    timer = status_obj.get('timer') or ''
+    live_codes = {'Q1', 'Q2', 'Q3', 'Q4', 'OT', 'BT', 'HT'}
+    finished_codes = {'FT', 'AOT'}
+    if short in live_codes:
+        state = 'in'
+    elif short in finished_codes:
+        state = 'post'
+    else:
+        state = 'pre'
+    period_map = {'Q1': 1, 'Q2': 2, 'Q3': 3, 'Q4': 4, 'OT': 5, 'HT': 2, 'BT': 2, 'FT': 4, 'AOT': 5}
+    period = period_map.get(short, 0)
+    short_detail_map = {
+        'NS': '', 'Q1': '1Q', 'Q2': '2Q', 'Q3': '3Q', 'Q4': '4Q',
+        'HT': 'Halftime', 'BT': 'Break', 'OT': 'OT', 'FT': 'Final', 'AOT': 'Final/OT',
+        'POST': 'Postponed', 'CANC': 'Cancelled', 'AWD': 'Awarded',
+    }
+    short_detail = short_detail_map.get(short, short)
+    home = (game.get('teams') or {}).get('home') or {}
+    away = (game.get('teams') or {}).get('away') or {}
+    scores = game.get('scores') or {}
+    try:
+        h_score = int((scores.get('home') or {}).get('total') or 0)
+    except (ValueError, TypeError):
+        h_score = 0
+    try:
+        a_score = int((scores.get('away') or {}).get('total') or 0)
+    except (ValueError, TypeError):
+        a_score = 0
+    home_name = home.get('name') or ''
+    away_name = away.get('name') or ''
+    # Use sorted-first 3-letter code as primary abbreviation; rest as extras
+    h_codes = sorted(_basketball_team_codes(home_name), key=lambda x: (len(x), x))
+    a_codes = sorted(_basketball_team_codes(away_name), key=lambda x: (len(x), x))
+    h_primary = h_codes[0] if h_codes else (home_name[:3].upper() if home_name else '?')
+    a_primary = a_codes[0] if a_codes else (away_name[:3].upper() if away_name else '?')
+    return {
+        'id': str(game.get('id') or ''),
+        'name': f'{away_name} vs {home_name}' if home_name and away_name else (home_name or away_name),
+        'shortName': f'{a_primary} @ {h_primary}',
+        'date': game.get('date') or '',
+        '_sport': sport_label,
+        'status': {
+            'type': {'state': state, 'shortDetail': short_detail, 'detail': short_detail},
+            'period': period,
+            'displayClock': timer,
+        },
+        'competitions': [{
+            'competitors': [
+                {
+                    'homeAway': 'home',
+                    'score': str(h_score),
+                    'team': {
+                        'abbreviation': h_primary,
+                        'extraAbbrs': [c for c in h_codes if c != h_primary],
+                        'displayName': home_name,
+                        'shortDisplayName': (home_name.split()[-1] if home_name else ''),
+                    },
+                },
+                {
+                    'homeAway': 'away',
+                    'score': str(a_score),
+                    'team': {
+                        'abbreviation': a_primary,
+                        'extraAbbrs': [c for c in a_codes if c != a_primary],
+                        'displayName': away_name,
+                        'shortDisplayName': (away_name.split()[-1] if away_name else ''),
+                    },
+                },
+            ],
+        }],
+    }
+
+
 @app.route('/api/scoreboard/<sport>', methods=['GET'])
 def get_scoreboard(sport):
     """Proxy ESPN/API Tennis scoreboard to avoid CORS issues.
@@ -2399,6 +2477,38 @@ def get_scoreboard(sport):
         'seriea':     'soccer/ita.1',
         'ligamx':     'soccer/mex.1',
     }
+    # Intl basketball leagues — ESPN doesn't cover these; served from api-sports.io cache
+    _INTL_BB_KEYS = {
+        'acb': ('KXACBGAME', 'ACB'),
+        'bbl': ('KXBBLGAME', 'BBL'),
+        'gbl': ('KXGBLGAME', 'GBL'),
+        'cba': ('KXCBAGAME', 'CBA'),
+        'vtb': ('KXVTBGAME', 'VTB'),
+        'aba': ('KXABAGAME', 'ABA'),
+        'jbleague': ('KXJBLEAGUEGAME', 'JBLeague'),
+        'lnbelite': ('KXLNBELITEGAME', 'LNBElite'),
+        'bsl': ('KXBSLGAME', 'BSL'),
+        'kbl': ('KXKBLGAME', 'KBL'),
+        'euroleague': ('KXEUROLEAGUEGAME', 'EuroLeague'),
+    }
+    if sport.lower() in _INTL_BB_KEYS:
+        # Bump browse tracker so cache stays fresh while frontend polls
+        global _basketball_browse_ts
+        _basketball_browse_ts = time.time()
+        try:
+            _fetch_intl_basketball_scoreboard()  # refresh if TTL expired
+        except Exception:
+            pass
+        kalshi_prefix, label = _INTL_BB_KEYS[sport.lower()]
+        target_league_id = _INTL_BASKETBALL_LEAGUES.get(kalshi_prefix)
+        raw_games = _basketball_api_cache.get('raw_games', []) or []
+        events = []
+        for g in raw_games:
+            if (g.get('league') or {}).get('id') != target_league_id:
+                continue
+            events.append(_intl_basketball_event_shape(g, label))
+        return jsonify({'events': events})
+
     sport_path = sport_map.get(sport.lower())
     if not sport_path:
         return jsonify({'error': f'Unknown sport: {sport}'}), 400

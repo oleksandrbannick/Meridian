@@ -442,6 +442,18 @@ async function loadLiveScores() {
             { key: 'ligue1',     sport: 'Ligue1' },
             { key: 'seriea',     sport: 'SerieA' },
             { key: 'ligamx',     sport: 'LigaMX' },
+            // Intl basketball (api-sports.io) — ESPN doesn't cover these leagues
+            { key: 'acb',        sport: 'ACB' },
+            { key: 'bbl',        sport: 'BBL' },
+            { key: 'gbl',        sport: 'GBL' },
+            { key: 'cba',        sport: 'CBA' },
+            { key: 'vtb',        sport: 'VTB' },
+            { key: 'aba',        sport: 'ABA' },
+            { key: 'jbleague',   sport: 'JBLeague' },
+            { key: 'lnbelite',   sport: 'LNBElite' },
+            { key: 'bsl',        sport: 'BSL' },
+            { key: 'kbl',        sport: 'KBL' },
+            { key: 'euroleague', sport: 'EuroLeague' },
         ];
 
         const results = await Promise.allSettled(
@@ -545,7 +557,8 @@ function parseESPNGame(event, sport) {
     let periodLabel = '';
     const state = statusType.state || 'pre';
     if (state === 'in' || state === 'post') {
-        if (sport === 'NBA' || sport === 'NBL') {
+        const isQuarterBasketball = ['NBA','NBL','ACB','BBL','GBL','CBA','VTB','ABA','JBLeague','LNBElite','BSL','KBL','EuroLeague'].includes(sport);
+        if (isQuarterBasketball) {
             // NBA / NBL (Australia): quarters (or OT)
             if (period <= 4) periodLabel = `Q${period}`;
             else periodLabel = period === 5 ? 'OT' : `${period - 4}OT`;

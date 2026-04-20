@@ -6743,22 +6743,30 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             if (combined >= stopLoss) walkBadge = `<span style="background:#ff444422;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;animation:pulse 1.5s infinite;">STOP LOSS</span>`;
             else if (combined > 100) walkBadge = `<span style="background:#ff444422;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">PARKED</span>`;
             else if (combined === 100) walkBadge = `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">WALL</span>`;
-            else if (exitPrice > origTarget) walkBadge = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">SNAPPED</span>`;
+            else if (exitPrice > origTarget) walkBadge = `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">WALKED</span>`;
             else walkBadge = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">TARGET</span>`;
         }
-        // Zone bar — dual markers: cyan = order combined, coral = live bid combined
-        // 100c always centered at 50%. When markers overlap they merge into green glow.
+        // Zone bar math — computed up here so both the header and the zone bar
+        // use the SAME merged flag / colors.
+        //   cyan = my posted combined; coral = live bid combined; both green when merged.
+        let _zoneOrderPct = 0, _zoneLivePct = 0, _zoneMerged = false;
+        if (exitPrice > 0) {
+            const _greenRange = Math.max(1, 100 - origTargetCombined);
+            const _redRange = Math.max(1, stopLoss - 100);
+            const _toPct = (val) => val <= 100
+                ? Math.max(0, Math.min(50, Math.round((val - origTargetCombined) / _greenRange * 50)))
+                : Math.min(100, Math.round(50 + (val - 100) / _redRange * 50));
+            _zoneOrderPct = _toPct(combined);
+            _zoneLivePct = liveCombined < 999 ? _toPct(liveCombined) : _zoneOrderPct;
+            _zoneMerged = Math.abs(_zoneOrderPct - _zoneLivePct) <= 2;
+        }
+        const headerOrderCol = exitPrice > 0 ? (_zoneMerged ? '#00ff88' : '#00d4ff') : combinedCol;
+        const headerLiveCol = _zoneMerged ? '#00ff88' : '#ff7043';
         let zoneBarHtml = '';
         if (exitPrice > 0) {
-            const greenRange = Math.max(1, 100 - origTargetCombined);
-            const redRange = Math.max(1, stopLoss - 100);
-            const _toPct = (val) => val <= 100
-                ? Math.max(0, Math.min(50, Math.round((val - origTargetCombined) / greenRange * 50)))
-                : Math.min(100, Math.round(50 + (val - 100) / redRange * 50));
-            const orderPct = _toPct(combined);
-            const livePct = liveCombined < 999 ? _toPct(liveCombined) : orderPct;
-            const gap = Math.abs(orderPct - livePct);
-            const merged = gap <= 2;
+            const orderPct = _zoneOrderPct;
+            const livePct = _zoneLivePct;
+            const merged = _zoneMerged;
             // Merged = green glow, separate = cyan (order) + coral (live bid)
             const orderCol = merged ? '#00ff88' : '#00d4ff';
             const liveCol = merged ? '#00ff88' : '#ff7043';
@@ -6821,10 +6829,10 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const rightBox = longSide === 'YES' ? exitBox : entryBox;
         positionBarHtml = `<div style="margin-bottom:8px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                <div style="display:flex;align-items:center;gap:8px;">
-                    <span style="color:${combinedCol};font-weight:800;font-size:16px;">${combined}c</span>
+                <div style="display:flex;align-items:baseline;gap:8px;">
+                    <span style="color:${headerOrderCol};font-weight:800;font-size:16px;">${combined}c</span>
+                    ${liveCombined < 999 ? `<span style="color:${headerLiveCol};font-size:11px;font-weight:700;">${liveCombined}c</span>` : ''}
                     ${walkBadge}
-                    ${liveCombined < 999 && liveCombined !== combined ? `<span style="color:#445;font-size:9px;">bid ${liveCombined}c</span>` : ''}
                 </div>
                 ${skewSec > 0 ? `<span style="color:#445;font-size:9px;">${timeStr}</span>` : ''}
             </div>

@@ -9902,12 +9902,15 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
     except Exception as _rfe:
         print(f'⚠ Cycle refill Kalshi check failed: {_rfe}')
 
-    # Clear consumed rungs (fill_qty >= qty) BEFORE any refill/pull decisions
-    # so FILLED labels don't stick around on the card
+    # Pop consumed rungs (fill_qty >= qty) BEFORE any refill/pull decisions.
+    # Removing the entry (not just zeroing fill_qty) prevents ghost oids from
+    # being treated as "live" in the incremental refill below; if the price is
+    # still expected, that loop will repost it cleanly.
     for _sk in ('yes_orders', 'no_orders'):
-        for _prc, _lv in bot.get(_sk, {}).items():
+        for _prc in list(bot.get(_sk, {}).keys()):
+            _lv = bot[_sk][_prc]
             if _lv.get('fill_qty', 0) >= _lv.get('qty', 1) and _lv.get('fill_qty', 0) > 0:
-                _lv['fill_qty'] = 0
+                bot[_sk].pop(_prc, None)
 
     # ── Smart mode check ──
     _cycle_pnl = bot.get('realized_pnl_cents', 0) - bot.get('_cycle_start_pnl', 0)
@@ -10080,6 +10083,18 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
         for side, expected_levels in [('yes', yes_levels), ('no', no_levels)]:
             orders_key = f'{side}_orders'
             orders_dict = bot.setdefault(orders_key, {})
+            expected_prices = {str(p) for p, _ in expected_levels}
+
+            # Prune stale keys — rungs at prices that are no longer expected.
+            # Without this, old prices from prior midpoints accumulate forever
+            # when drift stays under APEX_MM_DRIFT_THRESHOLD.
+            for _stale_price in [p for p in orders_dict.keys() if p not in expected_prices]:
+                _stale = orders_dict.pop(_stale_price, None) or {}
+                _stale_oid = _stale.get('oid')
+                if _stale_oid:
+                    _safe_cancel(_stale_oid, f'apex_mm_prune_stale_{bot_id}')
+                    print(f'🧹 APEX MM PRUNE STALE: {bot_id} {side.upper()} @{_stale_price}c (not in expected ladder)')
+
             missing_specs = []
             missing_meta = []  # (price, qty) for tracking
 

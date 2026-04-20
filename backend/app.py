@@ -1499,12 +1499,17 @@ def _safe_cancel(order_id, context=''):
 
 @app.route('/api/orderbook/<ticker>', methods=['GET'])
 def get_orderbook(ticker):
-    """Get orderbook for a market. One-shot REST read — does NOT subscribe to WS.
-    WS subscription only happens at bot deploy time (was: silent sub on every glance,
-    leaked thousands of stale tickers, choked WS connection)."""
+    """Get orderbook for a market. Subscribes single ticker to WS so depth-rec
+    can read from LocalOrderbook (the create menu calls both endpoints back-to-back).
+    Stale subs are purged by the monitor-cycle cleanup if no bot uses the ticker.
+    Bulk auto-subscribe was removed from /api/prices/batch — that was the leak source."""
     try:
         if not kalshi_client:
             return jsonify({'error': 'Not authenticated'}), 401
+
+        # Single-ticker WS sub for depth-rec/PPI consumers. Cleanup catches stale.
+        if ws_manager and ws_manager.connected:
+            ws_manager.add_ticker(ticker)
 
         if not api_read_limiter.try_wait():
             return jsonify({'error': 'Rate limit — try again shortly'}), 429

@@ -8406,7 +8406,7 @@ def create_bot():
 # APEX MARKET MAKER — continuous quoting with net inventory tracking
 # ═══════════════════════════════════════════════════════════════════════════════
 
-APEX_MM_DRIFT_THRESHOLD = 2        # Reprice ladder if midpoint moves 2+ cents
+APEX_MM_DRIFT_THRESHOLD = 4        # Reprice ladder if midpoint moves 4+ cents (preserves queue priority on tick-level noise)
 APEX_MM_INVENTORY_HYSTERESIS = 10  # Resume quoting side when inv drops this far below limit
 
 

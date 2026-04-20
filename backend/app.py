@@ -1499,14 +1499,12 @@ def _safe_cancel(order_id, context=''):
 
 @app.route('/api/orderbook/<ticker>', methods=['GET'])
 def get_orderbook(ticker):
-    """Get orderbook for a market. Also subscribes ticker to WS for live price updates."""
+    """Get orderbook for a market. One-shot REST read — does NOT subscribe to WS.
+    WS subscription only happens at bot deploy time (was: silent sub on every glance,
+    leaked thousands of stale tickers, choked WS connection)."""
     try:
         if not kalshi_client:
             return jsonify({'error': 'Not authenticated'}), 401
-
-        # Subscribe to WS for live updates on this specific market
-        if ws_manager and ws_manager.connected:
-            ws_manager.add_ticker(ticker)
 
         if not api_read_limiter.try_wait():
             return jsonify({'error': 'Rate limit — try again shortly'}), 429
@@ -1641,11 +1639,9 @@ def get_batch_prices():
         # Cap at 60 tickers per batch — rate limiter handles throttling
         tickers = tickers[:60]
 
-        # Auto-subscribe unsubscribed tickers to WS for live updates
-        if ws_manager and ws_manager.connected:
-            unsub = [t for t in tickers if t not in ws_manager._subscribed_tickers]
-            if unsub:
-                ws_manager.subscribe(unsub)
+        # NOTE: do NOT auto-subscribe to WS. This endpoint serves market scanner
+        # views that span hundreds of tickers — silent subs leaked thousands of
+        # stale markets and choked the WS connection. Subscribe only at bot deploy.
 
         prices = {}
         for ticker in tickers:
@@ -4001,11 +3997,30 @@ class KalshiWSManager:
         print('🔄 WS auto-reconnect...')
         try:
             self.connect(kalshi_api)
-            # Re-subscribe after reconnect using tickers saved before close cleared them
+            # Re-subscribe after reconnect — but ONLY to tickers from currently-active bots.
+            # Otherwise the saved set blasts thousands of stale tickers and chokes the WS again.
             time.sleep(1)
             reconnect_tickers = getattr(self, '_reconnect_tickers', set())
-            if reconnect_tickers:
-                self.subscribe(list(reconnect_tickers))
+            try:
+                _live = set()
+                for _b in active_bots.values():
+                    if _b.get('status') in ('completed', 'stopped', 'cancelled', 'dead'):
+                        continue
+                    _live.add(_b.get('ticker', ''))
+                    if _b.get('hedge_ticker'):
+                        _live.add(_b['hedge_ticker'])
+                _live.discard('')
+                # Intersect saved set with live set — only re-sub things still in use
+                filtered = [t for t in reconnect_tickers if t in _live]
+                if len(filtered) < len(reconnect_tickers):
+                    print(f'🧹 WS RECONNECT FILTER: {len(reconnect_tickers)} saved → {len(filtered)} live (dropped {len(reconnect_tickers)-len(filtered)} stale)')
+                if filtered:
+                    self.subscribe(filtered)
+            except Exception as _filter_err:
+                # Fallback: if filter fails for any reason, fall back to old behavior
+                print(f'⚠ WS reconnect filter failed ({_filter_err}), using full saved set')
+                if reconnect_tickers:
+                    self.subscribe(list(reconnect_tickers))
             threading.Timer(1.0, self._subscribe_portfolio).start()
         except Exception as e:
             print(f'❌ WS reconnect failed: {e}')
@@ -4122,6 +4137,39 @@ class KalshiWSManager:
                     }
                     self._ws.send(json.dumps(cmd))
             self._subscribed_tickers.add(ticker)
+
+    def remove_ticker(self, ticker):
+        """Remove a single ticker from existing subscriptions. No-op if not subscribed."""
+        if ticker not in self._subscribed_tickers:
+            return
+        if not self._connected or not self._ws or not self._sids:
+            self._subscribed_tickers.discard(ticker)
+            return
+        try:
+            with self._lock:
+                for channel, sid in self._sids.items():
+                    if channel in ('ticker', 'orderbook_delta', 'fill', 'user_orders'):
+                        cmd = {
+                            'id': self._next_id(),
+                            'cmd': 'update_subscription',
+                            'params': {
+                                'sids': [sid],
+                                'market_tickers': [ticker],
+                                'action': 'delete_markets',
+                            }
+                        }
+                        self._ws.send(json.dumps(cmd))
+                self._subscribed_tickers.discard(ticker)
+        except Exception as e:
+            # Best-effort — even if Kalshi rejects, drop from local set so we stop tracking
+            self._subscribed_tickers.discard(ticker)
+            print(f'⚠ WS unsubscribe error for {ticker}: {e}')
+
+    def unsubscribe(self, tickers):
+        """Bulk unsubscribe — calls remove_ticker for each."""
+        for t in (tickers or []):
+            if t:
+                self.remove_ticker(t)
 
     # ── Message handler ──────────────────────────────────────
     def _handle_message(self, data):
@@ -20103,6 +20151,27 @@ def _run_monitor():
         active_count = len([b for b in active_bots.values() if b['status'] in active_statuses])
         if actions:
             bot_log('MONITOR_CYCLE', '', {'active_bots': active_count, 'actions_count': len(actions), 'actions_summary': [a.get('action', '?') for a in actions]})
+
+        # WS subscription cleanup: drop tickers not used by any active/in-flight bot.
+        # Active = anything not terminal (completed/stopped/cancelled/dead) — keeps WS
+        # for awaiting_settlement so settlement events still flow.
+        try:
+            if ws_manager and ws_manager.connected and ws_manager._subscribed_tickers:
+                _live_tickers = set()
+                for _b in active_bots.values():
+                    if _b.get('status') in ('completed', 'stopped', 'cancelled', 'dead'):
+                        continue
+                    _live_tickers.add(_b.get('ticker', ''))
+                    if _b.get('hedge_ticker'):
+                        _live_tickers.add(_b['hedge_ticker'])
+                _live_tickers.discard('')
+                _stale = [t for t in list(ws_manager._subscribed_tickers) if t not in _live_tickers]
+                if _stale:
+                    ws_manager.unsubscribe(_stale)
+                    print(f'🧹 WS CLEANUP: unsubscribed {len(_stale)} stale tickers ({len(ws_manager._subscribed_tickers)} remain)')
+        except Exception as _ws_clean_err:
+            print(f'⚠ WS cleanup error (non-fatal): {_ws_clean_err}')
+
         return jsonify({
             'success':     True,
             'actions':     actions,

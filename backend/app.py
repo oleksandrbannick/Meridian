@@ -13348,6 +13348,8 @@ def _handle_phantom(bot_id, bot, actions):
         # continuous KILL check can fire again on future toxic books.
         if bot.get('_ppi_pulled') and dog_order_id and dog_filled == 0:
             bot['_ppi_pulled'] = False
+            # PPI KILL sets both _ppi_pulled and _price_floor_pulled; live dog order means neither applies.
+            bot['_price_floor_pulled'] = False
             bot.pop('_ppi_recovery_ts', None)
             print(f'🔧 PPI FLAG CLEAR: {bot_id} had stale _ppi_pulled with live dog order — re-enabled PPI protection')
 
@@ -15086,6 +15088,10 @@ def _handle_phantom(bot_id, bot, actions):
                             elif time.time() - _recov_ts >= 30:
                                 print(f'✅ PPI RECOVERY: {bot_id} PPI={_ppi_now} ≥ 40 for 30s — re-arming')
                                 bot['_ppi_pulled'] = False
+                                # PPI KILL sets both _ppi_pulled and _price_floor_pulled; clear both on recovery.
+                                # Guard: only clear price-floor flag if dog bid is above 2c floor (not a real price-floor pull).
+                                if current_dog_bid >= 2:
+                                    bot['_price_floor_pulled'] = False
                                 bot.pop('_ppi_recovery_ts', None)
                                 bot_log('PPI_RECOVERY', bot_id, {'ppi': _ppi_now, 'hold_s': round(time.time() - _recov_ts)})
                         else:

@@ -10477,14 +10477,56 @@ def _apex_mm_exit_tick(bot_id, bot):
     ticker = bot['ticker']
     all_sold = True
 
+    # ── FLIP TO BUY-OPPOSITE: if sell-held is stuck but buy-opp @ bid is profitable, switch ──
+    # In wide markets (50c+ spread) a sell-held at the ask waits for someone to cross the whole
+    # spread. Meanwhile buy-opposite at the opposite bid (maker) completes the arb immediately
+    # at a profitable combined. Cancel the sell, post buy-opp at bid, always maker.
+    _net_y = bot.get('net_yes', 0)
+    _net_n = bot.get('net_no', 0)
+    if _net_y or _net_n:
+        _held_side_f = 'yes' if _net_y > _net_n else 'no'
+        _opp_side_f = 'no' if _held_side_f == 'yes' else 'yes'
+        _held_avg_f = bot.get(f'avg_{_held_side_f}_cost', 0)
+        _opp_bid_f = bot.get(f'live_{_opp_side_f}_bid', 0)
+        _sell_info_f = bot.get('_exit_sell_oids', {}).get(_held_side_f)
+        _has_sell_held = bool(_sell_info_f and _sell_info_f.get('oid') and _sell_info_f.get('action') == 'sell')
+        _buy_opp_combined_f = (_held_avg_f + _opp_bid_f) if _opp_bid_f > 0 else 999
+        if _has_sell_held and _held_avg_f > 0 and _opp_bid_f > 0 and _buy_opp_combined_f < 100:
+            _cr_f = _safe_cancel(_sell_info_f['oid'], f'apex_mm_flip_{bot_id}')
+            if isinstance(_cr_f, tuple) and _cr_f[0] == 'filled':
+                print(f'⚡ APEX MM FLIP CANCEL-RACE: {bot_id} sell-held filled {_cr_f[1]} during flip')
+                _sell_info_f['oid'] = None
+                return
+            _sell_info_f['oid'] = None
+            _qty_f = _net_y if _held_side_f == 'yes' else _net_n
+            try:
+                _resp_f, _actual_f = create_order_maker(ticker, _opp_side_f, 'buy', _qty_f, _opp_bid_f)
+                _oid_f = _resp_f.get('order', {}).get('order_id', '') if isinstance(_resp_f, dict) else ''
+                if _oid_f:
+                    bot['_exit_sell_oids'].pop(_held_side_f, None)
+                    bot['_exit_sell_oids'][_opp_side_f] = {
+                        'oid': _oid_f, 'qty': _qty_f, 'price': _actual_f, 'posted_at': time.time(),
+                        'action': 'buy', 'held_side': _held_side_f, 'shadow_mode': True,
+                    }
+                    bot.setdefault('_all_placed_order_ids', []).append(_oid_f)
+                    print(f'🔀 APEX MM FLIP TO BUY-OPP: {bot_id} held {_held_side_f.upper()} avg@{_held_avg_f}c → buy {_opp_side_f.upper()} {_qty_f}x @{_actual_f}c (combined {_buy_opp_combined_f}c, profit {100 - _buy_opp_combined_f}c)')
+                    bot_log('APEX_MM_EXIT_FLIP', bot_id, {
+                        'from': 'sell_held', 'to': 'buy_opp',
+                        'held_side': _held_side_f, 'held_avg': _held_avg_f,
+                        'opp_side': _opp_side_f, 'opp_bid': _opp_bid_f,
+                        'combined': _buy_opp_combined_f, 'qty': _qty_f,
+                    })
+                    save_state()
+                    return
+            except Exception as _fe:
+                print(f'⚠ APEX MM FLIP FAILED: {bot_id}: {_fe}')
+
     # ── REHAB: if market recovered below wall, cancel panic-exit and resume MM ──
     # Rationale: circuit breaker fires on flash spikes. When combined drops back under
     # 100c we're no longer losing, so there's no reason to keep force-selling at bad
     # prices. Cancel exits, drop to mm_depth_pulled — normal MM recovery kicks in.
     # Uses held_bid (realizable sell price), not held_ask, to avoid ping-pong on
     # wide-spread books where ask looks profitable but actual exit would lose.
-    _net_y = bot.get('net_yes', 0)
-    _net_n = bot.get('net_no', 0)
     if _net_y or _net_n:
         _held_side_r = 'yes' if _net_y > _net_n else 'no'
         _exit_side_r = 'no' if _held_side_r == 'yes' else 'yes'

@@ -7444,10 +7444,10 @@ def _calculate_ppi(ticker, fav_side, dog_side):
     _raw = d_pts - g_pts + s_pts + t_pts
     ppi = max(0, min(100, round(_raw * 100 / 75)))
 
-    # PPI → depth rec (v6b — no 3c, 4c gated at 85+, 5c workhorse)
+    # PPI → depth rec (v6c — TRAP merged to 7c depth, 2026-04-20: 6c was 57% WR vs 7c 65% on last-4-day sample)
     if ppi >= 85: rec = 4                              # WALL: pristine book only
     elif ppi >= 55: rec = 5                            # PRIME/SNIPER: money zone workhorse
-    elif ppi >= 45: rec = 6                            # TRAP: caution zone
+    elif ppi >= 45: rec = 7                            # TRAP: caution zone → post 7c for adverse-selection cushion
     elif ppi >= 40: rec = 7                            # DEEP: recovery buffer
     elif ppi >= 35: rec = 8                            # FLOOR: last stop before pull
     else: rec = 0                                      # KILL: pull

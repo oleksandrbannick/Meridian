@@ -3704,7 +3704,7 @@ function displayOrderbookLadder(orderbook) {
     let _recDepth;
     if (catchScore >= 85) _recDepth = 4;                                    // WALL
     else if (catchScore >= 55) _recDepth = 5;                              // PRIME
-    else if (catchScore >= 45) _recDepth = 6;                              // TRAP
+    else if (catchScore >= 45) _recDepth = 7;                              // TRAP → merged to DEEP depth (v6c 2026-04-20)
     else if (catchScore >= 40) _recDepth = 7;                              // DEEP
     else if (catchScore >= 35) _recDepth = 8;                              // FLOOR
     else _recDepth = 0;                                                    // KILL — pull
@@ -3787,7 +3787,7 @@ function displayOrderbookLadder(orderbook) {
         <div style="display:flex;flex-wrap:wrap;gap:4px 5px;margin-bottom:6px;font-size:9px;font-weight:700;justify-content:center;">
             <span style="color:#00ff88;background:#00ff8815;padding:2px 6px;border-radius:4px;">85+ WALL 4¢</span>
             <span style="color:#00ccff;background:#00ccff15;padding:2px 6px;border-radius:4px;">55+ PRIME 5¢</span>
-            <span style="color:#ff8800;background:#ff880015;padding:2px 6px;border-radius:4px;">45+ TRAP 6¢</span>
+            <span style="color:#ff8800;background:#ff880015;padding:2px 6px;border-radius:4px;">45+ TRAP 7¢</span>
             <span style="color:#ff6600;background:#ff660015;padding:2px 6px;border-radius:4px;">40+ DEEP 7¢</span>
             <span style="color:#ff4400;background:#ff440015;padding:2px 6px;border-radius:4px;">35+ FLOOR 8¢</span>
             <span style="color:#ff4444;background:#ff444415;padding:2px 6px;border-radius:4px;">&lt;35 KILL</span>
@@ -4648,7 +4648,7 @@ function updateAnchorPreview() {
             const _ppiScore = _obCache.catchScore || 0;
             const _ppiTier = _obCache.ppiTier || (_ppiScore >= 85 ? 'WALL' : _ppiScore >= 55 ? 'PRIME' : _ppiScore >= 45 ? 'TRAP' : _ppiScore >= 40 ? 'DEEP' : _ppiScore >= 35 ? 'FLOOR' : 'KILL');
             const _ppiTierCol = _ppiScore >= 85 ? '#00ff88' : _ppiScore >= 55 ? '#00ccff' : _ppiScore >= 45 ? '#ff8800' : _ppiScore >= 35 ? '#ff4400' : '#ff4444';
-            const _creBaseD = _ppiScore >= 85 ? 4 : _ppiScore >= 55 ? 5 : _ppiScore >= 45 ? 6 : _ppiScore >= 40 ? 7 : _ppiScore >= 35 ? 8 : 0;
+            const _creBaseD = _ppiScore >= 85 ? 4 : _ppiScore >= 55 ? 5 : _ppiScore >= 45 ? 7 : _ppiScore >= 40 ? 7 : _ppiScore >= 35 ? 8 : 0;
             const _creGapBump = recDepth > _creBaseD && _creBaseD > 0 ? ` <span style="color:#ff8800;font-size:9px;font-weight:700;">gaps→${recDepth}¢</span>` : '';
             depthRec = `<div style="margin-top:3px;padding:3px 6px;background:#ff66aa11;border:1px solid ${recCol}33;border-radius:4px;font-size:10px;">` +
                 `<span style="color:${_ppiTierCol};font-weight:700;">PPI ${_ppiScore} ${_ppiTier}</span>${_creGapBump} ` +
@@ -6431,7 +6431,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 if (_ppi != null) {
                     const _ppiCol = _ppi >= 85 ? '#00ff88' : _ppi >= 55 ? '#00ccff' : _ppi >= 45 ? '#ff8800' : _ppi >= 40 ? '#ff6600' : _ppi >= 35 ? '#ff4400' : '#ff4444';
                     const _ppiLabel = _ppi >= 85 ? 'WALL' : _ppi >= 55 ? 'PRIME' : _ppi >= 45 ? 'TRAP' : _ppi >= 40 ? 'DEEP' : _ppi >= 35 ? 'FLOOR' : 'KILL';
-                    const _baseD = _ppi >= 85 ? 4 : _ppi >= 55 ? 5 : _ppi >= 45 ? 6 : _ppi >= 40 ? 7 : _ppi >= 35 ? 8 : 0;
+                    const _baseD = _ppi >= 85 ? 4 : _ppi >= 55 ? 5 : _ppi >= 45 ? 7 : _ppi >= 40 ? 7 : _ppi >= 35 ? 8 : 0;
                     const _recD = bot._rec_depth || _baseD;
                     const _gapBump = _recD > _baseD && _baseD > 0 ? ` <span style="color:#ff8800;font-size:8px;">gaps→${_recD}¢</span>` : '';
                     return `<span style="color:${_ppiCol};font-size:9px;font-weight:700;">PPI:${_ppi} ${_ppiLabel}</span>${_gapBump}`;
@@ -15368,9 +15368,6 @@ async function loadDogHistory() {
         try { const pnlResp = await fetch(`${API_BASE}/pnl`); pnl = await pnlResp.json(); } catch (_) {}
         window._phantomPnl = pnl;
         window._phantomAllTrades = trades;
-        _phantomActiveSport = 'all';
-        _phantomActiveDepth = 'all';
-        _phantomActivePeriod = 'all';
 
         renderDogStatsAndDepth(trades, pnl);
         renderDogSportBreakdown(trades);

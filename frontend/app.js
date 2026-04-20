@@ -6837,11 +6837,30 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     }
 
     // ── SECTION 3: Ladder grid ──
+    // Only render the N=bot.levels expected rungs (mirrors backend _apex_mm_levels).
+    // Stale yes_orders/no_orders entries from walked/reposted prices are filtered out.
     const yesOrders = bot.yes_orders || {};
     const noOrders = bot.no_orders || {};
-    const sortedYes = Object.entries(yesOrders).sort((a,b) => parseInt(b[0]) - parseInt(a[0]));
-    const sortedNo = Object.entries(noOrders).sort((a,b) => parseInt(b[0]) - parseInt(a[0]));
     const baseQty = bot.base_qty || bot.qty_per_level || 10;
+    const _cfgLevels = bot.levels || 4;
+    const _cfgGap = bot.start_gap || 4;
+    const _cfgSpacing = bot.spacing || 1;
+    const _cfgMid = bot.midpoint || 50;
+    // Expected ladder prices (DESC, like backend): YES = mid - (gap + i*spacing), NO = (100-mid) - (gap + i*spacing)
+    const _expectedYes = [];
+    const _expectedNo = [];
+    for (let i = 0; i < _cfgLevels; i++) {
+        const off = _cfgGap + i * _cfgSpacing;
+        const yp = _cfgMid - off;
+        const np = (100 - _cfgMid) - off;
+        if (yp >= 1) _expectedYes.push(yp);
+        if (np >= 1) _expectedNo.push(np);
+    }
+    // Build sorted lists limited to expected prices. If a live order exists at that price,
+    // use its state; otherwise show a shaded placeholder.
+    const _emptyLevel = { oid: null, qty: baseQty, fill_qty: 0 };
+    const sortedYes = _expectedYes.map(p => [String(p), yesOrders[String(p)] || _emptyLevel]);
+    const sortedNo = _expectedNo.map(p => [String(p), noOrders[String(p)] || _emptyLevel]);
 
     const _rungHtml = (price, level, sideCol, isExitSide) => {
         const filled = level.fill_qty || 0;

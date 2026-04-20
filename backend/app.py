@@ -10712,9 +10712,14 @@ def _apex_mm_exit_tick(bot_id, bot):
                 # Fallback: WS shadow normally handles price following instantly.
                 # This only fires if WS hasn't updated in 10s (disconnect/stale).
                 if _action == 'buy':
-                    # Buy-opposite: follow bid DOWN (buy cheaper)
+                    # Buy-opposite: follow bid DOWN, cap at wall (99 - avg_held) so we don't
+                    # chase past breakeven. Wall keeps combined at 99c max = +1c profit.
                     live_bid = bot.get(f'live_{side}_bid', 0)
-                    if live_bid > 0 and live_bid != sell_info.get('price', 0):
+                    _held_side_m = sell_info.get('held_side') or ('no' if side == 'yes' else 'yes')
+                    _avg_m = bot.get(f'avg_{_held_side_m}_cost', 0)
+                    _wall_m = max(1, 99 - _avg_m) if _avg_m > 0 else 99
+                    _target_price = min(live_bid, _wall_m) if live_bid > 0 else 0
+                    if _target_price > 0 and _target_price != sell_info.get('price', 0):
                         try:
                             _cr = _cancel_with_retry(oid)
                             sell_info['oid'] = None  # clear immediately — old order is gone
@@ -10723,7 +10728,7 @@ def _apex_mm_exit_tick(bot_id, bot):
                                 continue
                             remaining = target - filled
                             if remaining > 0:
-                                resp2, new_price = create_order_maker(ticker, side, 'buy', remaining, live_bid)
+                                resp2, new_price = create_order_maker(ticker, side, 'buy', remaining, _target_price)
                                 new_oid = resp2.get('order', {}).get('order_id', '') if isinstance(resp2, dict) else ''
                                 if new_oid:
                                     sell_info['oid'] = new_oid

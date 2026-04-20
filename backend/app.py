@@ -5178,8 +5178,14 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                         continue
 
                     if _sh_action == 'buy':
-                        # Buy opposite: shadow the bid (buy at front of bid queue)
-                        _sh_live = yes_bid if _sh_side == 'yes' else no_bid
+                        # Buy opposite: shadow the bid, capped at wall so we don't chase
+                        # past breakeven. Wall = (99 - avg_held) → combined 99c = +1c profit.
+                        # If bid > wall, park at wall and wait for mean-revert or SL.
+                        _held_b = _sh_info.get('held_side') or ('no' if _sh_side == 'yes' else 'yes')
+                        _avg_h = bot.get(f'avg_{_held_b}_cost', 0)
+                        _bid_b = yes_bid if _sh_side == 'yes' else no_bid
+                        _wall_b = max(1, 99 - _avg_h) if _avg_h > 0 else 99
+                        _sh_live = min(_bid_b, _wall_b) if _bid_b > 0 else 0
                     else:
                         # Sell held: shadow the ask (sell at front of ask queue)
                         _sh_opp = 'no' if _sh_side == 'yes' else 'yes'

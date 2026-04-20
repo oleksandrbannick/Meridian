@@ -5242,7 +5242,8 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
             stop = 100 + max(width, 6)  # floor: 6c above 100 minimum, prevents W2 from insta-SL
 
             if best_combined >= stop and best_combined < 999:
-                hard_stop = stop + APEX_MM_SL_HARD_MARGIN
+                _hm = _apex_mm_hard_margin(width)
+                hard_stop = stop + _hm
                 _pc = time.perf_counter()  # monotonic, nanosecond res — immune to NTP drift
 
                 # ── HARD BREACH: circuit breaker — instant eject, no timer ──
@@ -5250,8 +5251,8 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                     bot['status'] = 'mm_exiting'
                     _breach_dur = _pc - bot['_sl_breach_since'] if bot.get('_sl_breach_since') else 0
                     print(f'🚨 APEX MM CIRCUIT BREAKER: {bot_id} combined={best_combined}c > {hard_stop}c — INSTANT EJECT (binary gap, breach_dur={_breach_dur:.3f}s)')
-                    def _fire_exit(_bid=bot_id, _b=bot, _bc=best_combined, _hs=hard_stop, _w=width):
-                        _apex_mm_begin_exit(_bid, _b, f'circuit_breaker (combined={_bc}c > {_hs}c, hard_margin={APEX_MM_SL_HARD_MARGIN}c)')
+                    def _fire_exit(_bid=bot_id, _b=bot, _bc=best_combined, _hs=hard_stop, _w=width, _hm_c=_hm):
+                        _apex_mm_begin_exit(_bid, _b, f'circuit_breaker (combined={_bc}c > {_hs}c, hard_margin={_hm_c}c)')
                     threading.Thread(target=_fire_exit, daemon=True).start()
                     return
 
@@ -8428,7 +8429,12 @@ APEX_MM_OBI_DEPTH = 5           # MM uses top-5 levels for OBI (wider view than 
 # ── Dual-threshold stop-loss matrix ──
 # Soft breach (stop <= combined <= stop + HARD_MARGIN): persistence timer filters noise
 # Hard breach (combined > stop + HARD_MARGIN): instant eject, no timer (binary gap)
-APEX_MM_SL_HARD_MARGIN = 4      # Cents above stop for instant circuit-breaker eject
+APEX_MM_SL_HARD_MARGIN = 4      # Min cents above stop for instant circuit-breaker eject (floor)
+
+def _apex_mm_hard_margin(width):
+    """Scale hard-breach margin with ladder width. Wide ladders in thin books need more
+    flash-print tolerance; tight ladders keep the default 4c."""
+    return max(APEX_MM_SL_HARD_MARGIN, int(round(width * 0.3)))
 APEX_MM_SL_FILL_GRACE_S = 5.0  # Suppress SL for 5s after fill (liquidity cliff filter)
 APEX_MM_SL_SOFT_PERSIST = {     # Soft breach persistence by game phase (seconds)
     'early':    1.5,            # Early/mid game: market makers will refill in <1s if noise
@@ -10455,6 +10461,60 @@ def _apex_mm_exit_tick(bot_id, bot):
     now = time.time()
     ticker = bot['ticker']
     all_sold = True
+
+    # ── REHAB: if market recovered below wall, cancel panic-exit and resume MM ──
+    # Rationale: circuit breaker fires on flash spikes. When combined drops back under
+    # 100c we're no longer losing, so there's no reason to keep force-selling at bad
+    # prices. Cancel exits, drop to mm_depth_pulled — normal MM recovery kicks in.
+    _net_y = bot.get('net_yes', 0)
+    _net_n = bot.get('net_no', 0)
+    if _net_y or _net_n:
+        _held_side_r = 'yes' if _net_y > _net_n else 'no'
+        _exit_side_r = 'no' if _held_side_r == 'yes' else 'yes'
+        _held_avg_r = bot.get(f'avg_{_held_side_r}_cost', 0)
+        _opp_ask_r = bot.get(f'live_{_exit_side_r}_ask', 0)
+        _held_ask_r = bot.get(f'live_{_held_side_r}_ask', 0)
+        _buy_opp_r = (_held_avg_r + _opp_ask_r) if _opp_ask_r > 0 else 999
+        _sell_held_r = (_held_avg_r + (100 - _held_ask_r)) if _held_ask_r > 0 else 999
+        _combined_r = min(_buy_opp_r, _sell_held_r)
+        if _held_avg_r > 0 and _combined_r < 100:
+            # Cancel all exit orders — check for cancel-race fills
+            _cancelled = 0
+            for _side_r in ('yes', 'no'):
+                _info_r = bot.get('_exit_sell_oids', {}).get(_side_r)
+                if _info_r and _info_r.get('oid'):
+                    _cr_r = _safe_cancel(_info_r['oid'], f'apex_mm_rehab_{bot_id}')
+                    if isinstance(_cr_r, tuple) and _cr_r[0] == 'filled':
+                        # Race — exit filled during cancel. WS handler records fill; skip rehab this tick.
+                        print(f'⚠ APEX MM REHAB CANCEL-RACE: {bot_id} {_side_r} filled {_cr_r[1]} during rehab cancel')
+                        _info_r['oid'] = None
+                        return
+                    _info_r['oid'] = None
+                    _cancelled += 1
+                _ex_oid = bot.get(f'_{_side_r}_exit_oid')
+                if _ex_oid:
+                    _cr2 = _safe_cancel(_ex_oid, f'apex_mm_rehab2_{bot_id}')
+                    if isinstance(_cr2, tuple) and _cr2[0] == 'filled':
+                        print(f'⚠ APEX MM REHAB CANCEL-RACE: {bot_id} {_side_r} exit_oid filled {_cr2[1]}')
+                        return
+                    bot[f'_{_side_r}_exit_oid'] = None
+            bot['_exit_sell_oids'] = {}
+            bot['_exit_reason'] = None
+            bot['_exit_started_at'] = None
+            bot['_exit_total_qty'] = 0
+            bot['_exit_fill_qty'] = 0
+            bot['_sl_breach_since'] = None
+            bot['_sl_breach_peak'] = None
+            bot['_sl_breach_phase'] = None
+            bot['status'] = 'mm_depth_pulled'
+            bot['_last_pull_reason'] = f'exit_rehab (combined={_combined_r}c < 100c)'
+            bot_log('APEX_MM_EXIT_REHAB', bot_id, {
+                'combined': _combined_r, 'held_side': _held_side_r, 'held_avg': _held_avg_r,
+                'net_yes': _net_y, 'net_no': _net_n, 'cancelled': _cancelled,
+            }, level='INFO')
+            print(f'🔄 APEX MM EXIT REHAB: {bot_id} combined={_combined_r}c < 100c — cancelled {_cancelled} exit orders, resuming MM')
+            save_state()
+            return
 
     for side in ('yes', 'no'):
         sell_info = bot.get('_exit_sell_oids', {}).get(side)
@@ -16365,14 +16425,15 @@ def _handle_apex(bot_id, bot, actions):
           # Drift stop: dual-threshold matrix (soft breach = timer, hard breach = instant)
           # Use >= to match WS handler — prevents monitor from resetting WS breach timer at exact boundary
           if _best_combined >= _stop and _best_combined < 999:
-              _hard_stop = _stop + APEX_MM_SL_HARD_MARGIN
+              _hm = _apex_mm_hard_margin(_width)
+              _hard_stop = _stop + _hm
               _pc = time.perf_counter()  # monotonic clock for sub-second precision
 
               # ── HARD BREACH: circuit breaker — instant eject ──
               if _best_combined > _hard_stop:
                   _breach_dur = _pc - bot['_sl_breach_since'] if bot.get('_sl_breach_since') else 0
                   print(f'🚨 APEX MM CIRCUIT BREAKER: {bot_id} combined={_best_combined}c > {_hard_stop}c — INSTANT EJECT (breach_dur={_breach_dur:.3f}s)')
-                  _apex_mm_begin_exit(bot_id, bot, f'circuit_breaker (combined={_best_combined}c > {_hard_stop}c, hard_margin={APEX_MM_SL_HARD_MARGIN}c)')
+                  _apex_mm_begin_exit(bot_id, bot, f'circuit_breaker (combined={_best_combined}c > {_hard_stop}c, hard_margin={_hm}c)')
                   return
 
               # ── SOFT BREACH: persistence gate ──

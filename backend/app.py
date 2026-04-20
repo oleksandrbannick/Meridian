@@ -10466,6 +10466,8 @@ def _apex_mm_exit_tick(bot_id, bot):
     # Rationale: circuit breaker fires on flash spikes. When combined drops back under
     # 100c we're no longer losing, so there's no reason to keep force-selling at bad
     # prices. Cancel exits, drop to mm_depth_pulled — normal MM recovery kicks in.
+    # Uses held_bid (realizable sell price), not held_ask, to avoid ping-pong on
+    # wide-spread books where ask looks profitable but actual exit would lose.
     _net_y = bot.get('net_yes', 0)
     _net_n = bot.get('net_no', 0)
     if _net_y or _net_n:
@@ -10473,9 +10475,9 @@ def _apex_mm_exit_tick(bot_id, bot):
         _exit_side_r = 'no' if _held_side_r == 'yes' else 'yes'
         _held_avg_r = bot.get(f'avg_{_held_side_r}_cost', 0)
         _opp_ask_r = bot.get(f'live_{_exit_side_r}_ask', 0)
-        _held_ask_r = bot.get(f'live_{_held_side_r}_ask', 0)
+        _held_bid_r = bot.get(f'live_{_held_side_r}_bid', 0)
         _buy_opp_r = (_held_avg_r + _opp_ask_r) if _opp_ask_r > 0 else 999
-        _sell_held_r = (_held_avg_r + (100 - _held_ask_r)) if _held_ask_r > 0 else 999
+        _sell_held_r = (_held_avg_r + (100 - _held_bid_r)) if _held_bid_r > 0 else 999
         _combined_r = min(_buy_opp_r, _sell_held_r)
         if _held_avg_r > 0 and _combined_r < 100:
             # Cancel all exit orders — check for cancel-race fills
@@ -16414,11 +16416,12 @@ def _handle_apex(bot_id, bot, actions):
           _held_avg = bot.get('avg_yes_cost', 0) if net_yes > net_no else bot.get('avg_no_cost', 0)
           _exit_side = 'no' if net_yes > net_no else 'yes'
           _held_side = 'yes' if net_yes > net_no else 'no'
-          # Cheapest exit: buy opposite at ask OR sell held at ask (100 - held_ask)
+          # Cheapest exit: buy opposite at its ask OR sell held at its bid.
+          # Sell-held combined converts realized (= held_bid) to arb-equivalent: 100 - held_bid.
           _exit_ask = bot.get(f'live_{_exit_side}_ask', 0)
-          _held_ask = bot.get(f'live_{_held_side}_ask', 0)
+          _held_bid = bot.get(f'live_{_held_side}_bid', 0)
           _buy_opp_combined = _held_avg + _exit_ask if _exit_ask > 0 else 999
-          _sell_held_combined = _held_avg + (100 - _held_ask) if _held_ask > 0 else 999
+          _sell_held_combined = _held_avg + (100 - _held_bid) if _held_bid > 0 else 999
           _best_combined = min(_buy_opp_combined, _sell_held_combined)
           _width = bot.get('start_gap', 4) * 2
           _stop = 100 + max(_width, 6)  # floor: 6c minimum SL buffer

@@ -8414,10 +8414,12 @@ APEX_MM_INVENTORY_HYSTERESIS = 10  # Resume quoting side when inv drops this far
 # Pull unfilled orders when book conditions are hostile; re-post when they recover.
 APEX_DEPTH_PULL_MIN = 300       # Pull if either side's top-5 depth < this (contracts/dollars)
 APEX_DEPTH_PULL_OBI = 0.7       # Pull if |OBI| > this (market too one-sided)
-APEX_MM_PULL_OBI = 0.85         # MM: more tolerant — small per-level exposure + drift stop backstop
+APEX_MM_PULL_OBI = 0.95         # MM: only pull on near-total one-sidedness — Room Guard/SL handle normal skew
+APEX_MM_PULL_MIN = 50           # MM: minimum depth to quote into — catches halts/glitches, not normal thin books
 APEX_DEPTH_RECOVER_MIN = 350    # Re-post when both sides > this (slight buffer above pull)
 APEX_DEPTH_RECOVER_OBI = 0.65   # Re-post when |OBI| < this (slight buffer below pull)
-APEX_MM_RECOVER_OBI = 0.80      # MM: looser recovery to match looser pull
+APEX_MM_RECOVER_OBI = 0.90      # MM: looser recovery to match looser pull
+APEX_MM_RECOVER_MIN = 75        # MM: looser depth recovery — MM supplies the depth itself
 APEX_PULL_COOLDOWN_S = 10       # Don't re-post within 10s of pulling
 APEX_MAX_PULL_CYCLES = 8        # Phantom: stop re-posting after 8 pulls
 APEX_MM_MAX_PULL_CYCLES = 999   # MM: effectively unlimited — MM is patient, keeps reposting
@@ -8498,11 +8500,14 @@ def _apex_obi_snapshot(ticker):
     }
 
 
-def _apex_should_pull(ticker, depth_levels=3, obi_threshold=None):
+def _apex_should_pull(ticker, depth_levels=3, obi_threshold=None, depth_min=None):
     """Check if book conditions are hostile for Apex. Returns (should_pull, reason) tuple.
-    Uses LocalOrderbook — zero API calls. depth_levels: how many levels to check (3 for phantom, 5 for MM)."""
+    Uses LocalOrderbook — zero API calls. depth_levels: how many levels to check (3 for phantom, 5 for MM).
+    depth_min: override depth threshold (MM uses much lower since it supplies depth itself)."""
     if obi_threshold is None:
         obi_threshold = APEX_DEPTH_PULL_OBI
+    if depth_min is None:
+        depth_min = APEX_DEPTH_PULL_MIN
     lob = _local_orderbooks.get(ticker)
     if not lob or lob.last_update_ts <= 0:
         return False, ''  # no data — don't pull blind
@@ -8516,31 +8521,33 @@ def _apex_should_pull(ticker, depth_levels=3, obi_threshold=None):
     vanish_yes = lob.detect_vanishing_liquidity('yes')
     vanish_no = lob.detect_vanishing_liquidity('no')
 
-    if vanish_yes and yes_depth < APEX_DEPTH_PULL_MIN:
+    if vanish_yes and yes_depth < depth_min:
         return True, f'vanish_yes (depth={yes_depth:.0f})'
-    if vanish_no and no_depth < APEX_DEPTH_PULL_MIN:
+    if vanish_no and no_depth < depth_min:
         return True, f'vanish_no (depth={no_depth:.0f})'
-    if yes_depth < APEX_DEPTH_PULL_MIN:
-        return True, f'thin_yes ({yes_depth:.0f}<{APEX_DEPTH_PULL_MIN})'
-    if no_depth < APEX_DEPTH_PULL_MIN:
-        return True, f'thin_no ({no_depth:.0f}<{APEX_DEPTH_PULL_MIN})'
+    if yes_depth < depth_min:
+        return True, f'thin_yes ({yes_depth:.0f}<{depth_min})'
+    if no_depth < depth_min:
+        return True, f'thin_no ({no_depth:.0f}<{depth_min})'
     if abs(obi) > obi_threshold:
         return True, f'obi_extreme ({obi:+.2f})'
     return False, ''
 
 
-def _apex_depth_recovered(ticker, bot=None, obi_threshold=None):
+def _apex_depth_recovered(ticker, bot=None, obi_threshold=None, depth_min=None):
     """Check if book conditions have recovered enough to re-post. Returns bool.
     Falls back to bot's live bid data if LocalOrderbook is unavailable/stale."""
     if obi_threshold is None:
         obi_threshold = APEX_DEPTH_RECOVER_OBI
+    if depth_min is None:
+        depth_min = APEX_DEPTH_RECOVER_MIN
     lob = _local_orderbooks.get(ticker)
     if lob and lob.last_update_ts > 0 and (time.time() - lob.last_update_ts) < 10:
         yes_depth = lob.get_total_depth('yes', 3)
         no_depth = lob.get_total_depth('no', 3)
         obi = lob.get_weighted_obi()
-        return (yes_depth >= APEX_DEPTH_RECOVER_MIN and
-                no_depth >= APEX_DEPTH_RECOVER_MIN and
+        return (yes_depth >= depth_min and
+                no_depth >= depth_min and
                 abs(obi) <= obi_threshold)
 
     # No fresh LOB — fallback: if both sides have bids, assume OK
@@ -9415,7 +9422,7 @@ def _apex_mm_refill_entry(bot_id, bot, freed_qty):
         return
 
     # ── GATE 2: OBI — book not one-sided ──
-    should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH, obi_threshold=APEX_MM_PULL_OBI)
+    should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH, obi_threshold=APEX_MM_PULL_OBI, depth_min=APEX_MM_PULL_MIN)
     if should_pull:
         bot_log('APEX_MM_REFILL_BLOCKED', bot_id, {'gate': 'obi', 'reason': pull_reason})
         return
@@ -10006,7 +10013,7 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
         return
 
     # ── OBI gate ──
-    should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH, obi_threshold=APEX_MM_PULL_OBI)
+    should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH, obi_threshold=APEX_MM_PULL_OBI, depth_min=APEX_MM_PULL_MIN)
     if should_pull:
         # Cancel all remaining orders — check for fill-race on each cancel
         _obi_late_fills = 0
@@ -16214,7 +16221,7 @@ def _handle_apex(bot_id, bot, actions):
                 # No exit oid — create one
                 _held = 'no' if _exit_side == 'yes' else 'yes'
                 threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _held), daemon=True).start()
-        if _apex_depth_recovered(ticker, bot, obi_threshold=APEX_MM_RECOVER_OBI):
+        if _apex_depth_recovered(ticker, bot, obi_threshold=APEX_MM_RECOVER_OBI, depth_min=APEX_MM_RECOVER_MIN):
             # Room guard: don't repost if room < width + 1 (need buffer above width)
             _rc_yb = bot.get('live_yes_bid', 0)
             _rc_nb = bot.get('live_no_bid', 0)
@@ -16232,10 +16239,10 @@ def _handle_apex(bot_id, bot, actions):
                 _nd = _lob.get_total_depth('no', 3)
                 _obi = _lob.get_weighted_obi()
                 _parts = []
-                if _yd < APEX_DEPTH_RECOVER_MIN:
-                    _parts.append(f'thin_yes ({_yd:.0f}<{APEX_DEPTH_RECOVER_MIN})')
-                if _nd < APEX_DEPTH_RECOVER_MIN:
-                    _parts.append(f'thin_no ({_nd:.0f}<{APEX_DEPTH_RECOVER_MIN})')
+                if _yd < APEX_MM_RECOVER_MIN:
+                    _parts.append(f'thin_yes ({_yd:.0f}<{APEX_MM_RECOVER_MIN})')
+                if _nd < APEX_MM_RECOVER_MIN:
+                    _parts.append(f'thin_no ({_nd:.0f}<{APEX_MM_RECOVER_MIN})')
                 if abs(_obi) > APEX_MM_RECOVER_OBI:
                     _parts.append(f'obi ({_obi:.2f}>{APEX_MM_RECOVER_OBI:.2f})')
                 if _parts:
@@ -16527,7 +16534,7 @@ def _handle_apex(bot_id, bot, actions):
     # Skip if refill is in progress — avoid racing with cycle_refill posting new orders
     if bot.get('_refill_in_progress'):
         return
-    should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH, obi_threshold=APEX_MM_PULL_OBI)
+    should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH, obi_threshold=APEX_MM_PULL_OBI, depth_min=APEX_MM_PULL_MIN)
     if should_pull:
         net_yes = bot.get('net_yes', 0)
         net_no = bot.get('net_no', 0)

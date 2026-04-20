@@ -5970,6 +5970,11 @@ def _execute_phantom_hedge(bot_id):
         if not bot or bot.get('status') in ('stopped', 'completed'):
             return
 
+        # Snapshot fill-time depth for trade-record attribution (auto-depth may drift after fill).
+        # First fill wins — preserve original depth if dog re-fills later in same lifecycle.
+        if bot.get('_anchor_depth_at_fill') is None:
+            bot['_anchor_depth_at_fill'] = bot.get('anchor_depth')
+
         # Guard: monitor path may have already posted a hedge
         with ws_fill_lock:
             if bot.get('fav_order_id'):
@@ -7054,7 +7059,9 @@ def _record_trade(record: dict, bot: dict = None):
         record.setdefault('dog_order_id', bot.get('dog_order_id'))
         record.setdefault('fav_order_id', bot.get('fav_order_id'))
         record.setdefault('hedge_order_id', bot.get('hedge_order_id'))
-        record.setdefault('anchor_depth', bot.get('anchor_depth'))
+        # Prefer fill-time snapshot — anchor_depth on bot dict drifts when auto-depth re-tunes
+        # mid-lifecycle. The depth that caught the dog is what should bucket the trade.
+        record.setdefault('anchor_depth', bot.get('_anchor_depth_at_fill') or bot.get('anchor_depth'))
         # PPI launch-time snapshot (phantom only — None for other bot types)
         record.setdefault('ppi_launch_score', bot.get('_ppi_launch_score'))
         record.setdefault('ppi_launch_d', bot.get('_ppi_launch_d'))

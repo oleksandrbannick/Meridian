@@ -6166,7 +6166,10 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const _livePpi = bot._live_ppi != null ? bot._live_ppi : bot._last_ppi;
     const _isPpiKill = bot._ppi_pulled || (_livePpi != null && _livePpi < 35);
     const _isSympathyPulled = bot._sympathy_pulled && (status === 'dog_anchor_posted' || status === 'waiting_repeat');
-    const _isPulledFloor = (status === 'dog_anchor_posted' || status === 'waiting_repeat') && (bot._price_floor_pulled || _isPpiKill);
+    // Stale flag guard: if dog is actively posted on Kalshi, the bot isn't pulled regardless of flags
+    // (PPI KILL sets _price_floor_pulled but recovery only clears _ppi_pulled, leaving the flag behind)
+    const _hasLiveDog = status === 'dog_anchor_posted' && !!bot.dog_order_id;
+    const _isPulledFloor = (status === 'dog_anchor_posted' || status === 'waiting_repeat') && (bot._price_floor_pulled || _isPpiKill) && !_hasLiveDog;
     const _isAnyPulled = _isSympathyPulled || _isPulledFloor;
     const _pullLabel = _isSympathyPulled ? '🎯 SYMPATHY PULL' : _isPpiKill ? '🚨 PPI KILL' : '⏸ PULLED';
     const statusMap = {
@@ -6337,7 +6340,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
         ${_isCompletedSummary ? '' : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <!-- ANCHOR SIDE -->
             ${(() => {
-                const _isPulled = !!bot._price_floor_pulled || _isPpiKill;
+                const _isPulled = (!!bot._price_floor_pulled || _isPpiKill) && !(status === 'dog_anchor_posted' && !!bot.dog_order_id);
                 const _borderCol = _isPulled ? '#ff444433' : '#ffaa0033';
                 const _pullReason = _isPpiKill ? 'PPI KILL' : 'PULLED';
                 const _headerLabel = _isPulled ? `⏸ ${_pullReason} · ${dogSide.toUpperCase()} · WAITING` : `👻 ANCHOR · ${dogSide.toUpperCase()}${dogFilled ? ' · FILLED ✓' : ''}`;
@@ -7812,6 +7815,8 @@ async function loadBots() {
         function _isBotPulled(b) {
             const s = b.status || '';
             if (s !== 'dog_anchor_posted' && s !== 'waiting_repeat') return false;
+            // Live dog order on Kalshi = bot is actually posted, flags may be stale (PPI recovery bug)
+            if (s === 'dog_anchor_posted' && b.dog_order_id) return false;
             if (b._price_floor_pulled || b._parked_at_ceiling || b._ppi_pulled || b._sympathy_pulled) return true;
             const _p = b._live_ppi != null ? b._live_ppi : b._last_ppi;
             return (_p != null && _p < 35);

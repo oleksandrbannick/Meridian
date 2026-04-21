@@ -6166,12 +6166,13 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const _livePpi = bot._live_ppi != null ? bot._live_ppi : bot._last_ppi;
     const _isPpiKill = bot._ppi_pulled || (_livePpi != null && _livePpi < 35);
     const _isSympathyPulled = bot._sympathy_pulled && (status === 'dog_anchor_posted' || status === 'waiting_repeat');
+    const _isBlowoutPulled = bot._blowout_pulled && (status === 'dog_anchor_posted' || status === 'waiting_repeat');
     // Stale flag guard: if dog is actively posted on Kalshi, the bot isn't pulled regardless of flags
     // (PPI KILL sets _price_floor_pulled but recovery only clears _ppi_pulled, leaving the flag behind)
     const _hasLiveDog = status === 'dog_anchor_posted' && !!bot.dog_order_id;
     const _isPulledFloor = (status === 'dog_anchor_posted' || status === 'waiting_repeat') && (bot._price_floor_pulled || _isPpiKill) && !_hasLiveDog;
-    const _isAnyPulled = _isSympathyPulled || _isPulledFloor;
-    const _pullLabel = _isSympathyPulled ? '🎯 SYMPATHY PULL' : _isPpiKill ? '🚨 PPI KILL' : '⏸ PULLED';
+    const _isAnyPulled = _isSympathyPulled || _isBlowoutPulled || _isPulledFloor;
+    const _pullLabel = _isBlowoutPulled ? '🎾 BLOWOUT' : _isSympathyPulled ? '🎯 SYMPATHY PULL' : _isPpiKill ? '🚨 PPI KILL' : '⏸ PULLED';
     const statusMap = {
         'dog_anchor_posted': _isAnyPulled ? _pullLabel : _isParked ? '🅿️ PARKED' : '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
         'dog_filled': bot._sub_contract_stranded ? '🧊 SUB-1 STRANDED' : bot._orphan_hedge ? '🚨 ORPHAN — HEDGING' : '👻 FILLED — HEDGING', 'ladder_filled_no_fav': '👻 FILLED — HEDGING',
@@ -6342,8 +6343,9 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             ${(() => {
                 const _isPulled = (!!bot._price_floor_pulled || _isPpiKill) && !(status === 'dog_anchor_posted' && !!bot.dog_order_id);
                 const _borderCol = _isPulled ? '#ff444433' : '#ffaa0033';
-                const _pullReason = _isPpiKill ? 'PPI KILL' : 'PULLED';
-                const _headerLabel = _isPulled ? `⏸ ${_pullReason} · ${dogSide.toUpperCase()} · WAITING` : `👻 ANCHOR · ${dogSide.toUpperCase()}${dogFilled ? ' · FILLED ✓' : ''}`;
+                const _pullReason = bot._blowout_pulled ? (bot._blowout_reason ? `BLOWOUT · ${bot._blowout_reason.toUpperCase()}` : 'BLOWOUT') : _isPpiKill ? 'PPI KILL' : 'PULLED';
+                const _pullIcon = bot._blowout_pulled ? '🎾' : '⏸';
+                const _headerLabel = _isPulled ? `${_pullIcon} ${_pullReason} · ${dogSide.toUpperCase()} · WAITING` : `👻 ANCHOR · ${dogSide.toUpperCase()}${dogFilled ? ' · FILLED ✓' : ''}`;
                 const _headerCol = _isPulled ? '#ff4444' : '#ffaa00';
                 const _priceLabel = isLadder && dogFillQty > 0 && bot.avg_fill_price > 0 ? `Avg ${avgDogPrice}¢` : isLadder && rungs.length > 0 ? `${rungs[rungs.length-1].price}¢–${rungs[0].price}¢` : `${dogPrice}¢`;
                 const _barPct = dogFillPct;

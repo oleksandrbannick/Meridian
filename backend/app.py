@@ -7646,19 +7646,59 @@ def _tennis_blowout_check(match_data):
     return False, '', None
 
 
-def _is_tennis_blowout(ticker, bot):
-    """Check if bot's dog side is on the player who just got blown out
-    (completed set 6-0/6-1/6-2). Returns (True, reason) if dog should be pulled."""
-    if not bot:
-        return False, ''
-    prefix = ticker.split('-')[0].upper() if ticker else ''
-    if not (prefix.startswith('KXATP') or prefix.startswith('KXWTA') or prefix.startswith('KXITF')):
-        return False, ''
-    if not _api_tennis_cache.get('data'):
-        return False, ''
+def _tennis_blowout_reversed_for_ticker(ticker, blowout_loser_code):
+    """True if the player who got blown out (identified by code) has won
+    a subsequent completed set. Used to auto-release a blowout pull when
+    the match swings back — e.g. Geerts lost set 1 1-6 but wins set 2 6-3."""
+    if not blowout_loser_code or not _api_tennis_cache.get('data'):
+        return False
     parts = ticker.split('-')
     if len(parts) < 3:
-        return False, ''
+        return False
+    _match_part = parts[1]
+    _match_code = _match_part[7:].upper() if len(_match_part) > 7 else ''
+    _code_a = _match_code[:3] if len(_match_code) >= 6 else ''
+    _code_b = _match_code[3:6] if len(_match_code) >= 6 else ''
+    for _tm in _api_tennis_cache['data']:
+        _p1_code = _tennis_player_code(_tm.get('event_first_player', ''))
+        _p2_code = _tennis_player_code(_tm.get('event_second_player', ''))
+        if _code_a and _code_b:
+            if not ({_code_a, _code_b} <= {_p1_code, _p2_code}):
+                continue
+        else:
+            continue
+        loser_is_first = (blowout_loser_code == _p1_code)
+        scores = _tm.get('scores', [])
+        for s in scores:
+            g1 = int(float(s.get('score_first', 0) or 0))
+            g2 = int(float(s.get('score_second', 0) or 0))
+            w, l = max(g1, g2), min(g1, g2)
+            if w < 6 or w > 7 or (w - l) < 2:
+                continue  # in-progress
+            winner_is_first = g1 > g2
+            # Loser of the blowout won this completed set = reversal
+            if loser_is_first and winner_is_first:
+                return True
+            if (not loser_is_first) and (not winner_is_first):
+                return True
+        return False
+    return False
+
+
+def _is_tennis_blowout(ticker, bot):
+    """Check if bot's dog side is on the player who just got blown out
+    (completed set 6-0/6-1/6-2). Returns (True, reason, loser_code) if
+    dog should be pulled; loser_code is needed for later reversal check."""
+    if not bot:
+        return False, '', None
+    prefix = ticker.split('-')[0].upper() if ticker else ''
+    if not (prefix.startswith('KXATP') or prefix.startswith('KXWTA') or prefix.startswith('KXITF')):
+        return False, '', None
+    if not _api_tennis_cache.get('data'):
+        return False, '', None
+    parts = ticker.split('-')
+    if len(parts) < 3:
+        return False, '', None
     player_code = parts[-1].upper()
     _match_part = parts[1]
     _match_code = _match_part[7:].upper() if len(_match_part) > 7 else ''
@@ -7676,10 +7716,10 @@ def _is_tennis_blowout(ticker, bot):
             continue
         _status = (_tm.get('event_status') or '').lower()
         if _status == 'finished':
-            return False, ''
+            return False, '', None
         _blow, _reason, _losing = _tennis_blowout_check(_tm)
         if not _blow:
-            return False, ''
+            return False, '', None
         _losing_code = _p1_code if _losing == 'first' else _p2_code
         ticker_player_is_loser = (player_code == _losing_code)
         dog_side = bot.get('dog_side', '')
@@ -7687,11 +7727,11 @@ def _is_tennis_blowout(ticker, bot):
         #   - ticker=loser + dog_side='yes' (bet loser wins)
         #   - ticker=winner + dog_side='no' (bet winner loses)
         if ticker_player_is_loser and dog_side == 'yes':
-            return True, _reason
+            return True, _reason, _losing_code
         if (not ticker_player_is_loser) and dog_side == 'no':
-            return True, _reason
-        return False, ''
-    return False, ''
+            return True, _reason, _losing_code
+        return False, '', None
+    return False, '', None
 
 
 def _is_phantom_death_zone(ticker, bot=None):
@@ -13302,9 +13342,18 @@ def _handle_phantom(bot_id, bot, actions):
             if bot.get('_death_zone_stopped'):
                 return
             # Blowout pulled: losing player rarely comes back from 6-0/6-1/6-2 set.
-            # Stay pulled until user manually resumes or market settles.
+            # Auto-release if blown-out player wins a subsequent set (tide turned).
             if bot.get('_blowout_pulled'):
-                return
+                _bl_loser = bot.get('_blowout_loser_code')
+                if _bl_loser and _tennis_blowout_reversed_for_ticker(ticker, _bl_loser):
+                    print(f'🎾 BLOWOUT REVERSED: {bot_id} {_bl_loser} won a set back — clearing pull')
+                    bot_log('PHANTOM_BLOWOUT_REVERSED', bot_id, {'loser': _bl_loser, 'prev_reason': bot.get('_blowout_reason')})
+                    bot['_blowout_pulled'] = False
+                    bot['_blowout_reason'] = None
+                    bot['_blowout_loser_code'] = None
+                    # Fall through to normal price-floor recovery
+                else:
+                    return
             # Don't repost while PPI is still KILL — otherwise we flap between pull and repost
             if bot.get('auto_depth'):
                 _rc_ppi, _rc_rec, _ = _calculate_ppi(ticker, bot.get('fav_side', 'yes'), bot.get('dog_side', 'no'))
@@ -13506,7 +13555,7 @@ def _handle_phantom(bot_id, bot, actions):
         # Completed set 6-0/6-1/6-2 on the side bot's dog is betting on.
         # Losing player rarely comes back from that; dog is a falling knife.
         if dog_filled == 0 and dog_order_id and not bot.get('_blowout_pulled'):
-            _bl_hit, _bl_reason = _is_tennis_blowout(ticker, bot)
+            _bl_hit, _bl_reason, _bl_loser = _is_tennis_blowout(ticker, bot)
             if _bl_hit:
                 print(f'🎾 BLOWOUT PULL: {bot_id} {_bl_reason} — pulling dog')
                 _bl_rc = _safe_cancel(dog_order_id, f'blowout_pull_{bot_id}')
@@ -13515,7 +13564,8 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['_price_floor_pulled'] = True
                 bot['_blowout_pulled'] = True
                 bot['_blowout_reason'] = _bl_reason
-                bot_log('PHANTOM_BLOWOUT_PULL', bot_id, {'reason': _bl_reason, 'dog_side': bot.get('dog_side')})
+                bot['_blowout_loser_code'] = _bl_loser
+                bot_log('PHANTOM_BLOWOUT_PULL', bot_id, {'reason': _bl_reason, 'loser': _bl_loser, 'dog_side': bot.get('dog_side')})
                 save_state()
                 return
         # ── Stale _ppi_pulled recovery ──

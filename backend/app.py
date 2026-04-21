@@ -5150,11 +5150,18 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
                         'fills': _snap_fills, 'status': _snap_status, 'fav_oid': str(_snap_fav_oid)[:12],
                     })
                 elif _snap_fills >= _snap_qty:
-                    # Fav FILLED — let completion run, do NOT clear _hedge_fired
+                    # Fav FILLED — clear order refs so the next monitor tick hits
+                    # _handle_phantom's FILL RECOVERY branch (fav_order_id=None +
+                    # fav_fill_qty>=qty) and runs completion. Without clearing, every
+                    # WS tick re-enters this branch on the same dead oid → infinite
+                    # 404 loop that burns read tokens and delays the trade record.
+                    bot.setdefault('_all_hedge_order_ids', []).append(_snap_fav_oid)
                     bot['fav_fill_qty'] = max(bot.get('fav_fill_qty', 0), _snap_fills)
                     _snap_fav_side = bot.get('fav_side', 'yes')
                     bot[f'{_snap_fav_side}_fill_qty'] = _snap_fills
-                    print(f'✅ WS SNAP 404 → FAV FILLED: {bot_id} {_snap_fills}/{_snap_qty} — completion will handle')
+                    bot['fav_order_id'] = None
+                    bot[f'{_snap_fav_side}_order_id'] = None  # block re-recovery in _handle_phantom
+                    print(f'✅ WS SNAP 404 → FAV FILLED: {bot_id} {_snap_fills}/{_snap_qty} — cleared for completion')
                     bot_log('PHANTOM_WS_SNAP_404_FILLED', bot_id, {
                         'fills': _snap_fills, 'qty': _snap_qty, 'fav_oid': str(_snap_fav_oid)[:12],
                     })

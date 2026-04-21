@@ -14124,7 +14124,7 @@ function filterApexMMLog() {
                         <div style="display:flex;align-items:baseline;gap:4px;">
                             <span style="color:${yesCol};font-weight:800;font-size:16px;">${yp}¢</span>
                         </div>
-                        <div style="color:#5a6484;font-size:10px;margin-top:2px;">x${qty} · $${((qty * yp) / 100).toFixed(2)}</div>
+                        <div style="color:#5a6484;font-size:10px;margin-top:2px;">x${fmtQty(qty)} · $${((qty * yp) / 100).toFixed(2)}</div>
                     </div>
                     <div style="background:#0a0e16;border-radius:8px;padding:10px 12px;border:1px solid ${noCol}18;">
                         <div style="color:${noCol};font-size:9px;font-weight:700;text-transform:uppercase;margin-bottom:5px;">NO</div>
@@ -14146,7 +14146,7 @@ function filterApexMMLog() {
                         <span style="color:#5a6484;font-size:10px;">cost ${avgCost}¢</span>
                         <span style="color:${netCol};font-weight:700;font-size:12px;">${pnl >= 0 ? '+' : ''}${pnl}¢</span>
                     </div>
-                    <div style="color:#5a6484;font-size:10px;margin-top:2px;">x${qty} contracts${t.fee_cents ? ` · fee ${t.fee_cents}¢` : ''}</div>
+                    <div style="color:#5a6484;font-size:10px;margin-top:2px;">x${fmtQty(qty)} contracts${t.fee_cents ? ` · fee ${fmtCents(t.fee_cents)}¢` : ''}</div>
                 </div>`;
         } else if (t.result === 'mm_arb_complete') {
             const heldSide = (t.held_side || 'yes').toUpperCase();
@@ -14159,7 +14159,7 @@ function filterApexMMLog() {
                     <div style="background:#0a0e16;border-radius:8px;padding:10px 12px;border:1px solid #00d4ff18;">
                         <div style="color:#00d4ff;font-size:9px;font-weight:700;text-transform:uppercase;margin-bottom:5px;">HELD ${heldSide}</div>
                         <div style="color:#fff;font-weight:800;font-size:16px;">${heldAvg}¢</div>
-                        <div style="color:#5a6484;font-size:10px;margin-top:2px;">x${qty} · cost $${((qty * heldAvg) / 100).toFixed(2)}</div>
+                        <div style="color:#5a6484;font-size:10px;margin-top:2px;">x${fmtQty(qty)} · cost $${((qty * heldAvg) / 100).toFixed(2)}</div>
                     </div>
                     <div style="background:#0a0e16;border-radius:8px;padding:10px 12px;border:1px solid #ff880018;">
                         <div style="color:#ff8800;font-size:9px;font-weight:700;text-transform:uppercase;margin-bottom:5px;">BOUGHT ${exitSide}</div>
@@ -14170,7 +14170,7 @@ function filterApexMMLog() {
         } else {
             // Settlement or unknown
             bodyHtml = `<div style="background:#0a0e16;border-radius:8px;padding:10px 12px;border:1px solid #00d4ff18;margin-bottom:8px;">
-                <div style="color:#8892a6;font-size:11px;">x${qty} contracts → <strong style="color:${netCol};">${pnl >= 0 ? '+' : ''}${pnl}¢</strong>${t.fee_cents ? ` · fee ${t.fee_cents}¢` : ''}</div>
+                <div style="color:#8892a6;font-size:11px;">x${fmtQty(qty)} contracts → <strong style="color:${netCol};">${pnl >= 0 ? '+' : ''}${fmtCents(pnl)}¢</strong>${t.fee_cents ? ` · fee ${fmtCents(t.fee_cents)}¢` : ''}</div>
             </div>`;
         }
 
@@ -15474,7 +15474,7 @@ function filterPhantomLog() {
                 </div>
                 <div style="text-align:right;flex-shrink:0;margin-left:10px;">
                     <div style="color:${netCol};font-weight:800;font-size:20px;line-height:1;text-shadow:0 0 8px ${netCol}33;">${net>=0?'+':''}$${(Math.abs(net)/100).toFixed(2)}</div>
-                    <div style="color:${netCol};font-size:10px;font-weight:600;opacity:0.7;margin-top:2px;">${net>=0?'+':''}${net}¢</div>
+                    <div style="color:${netCol};font-size:10px;font-weight:600;opacity:0.7;margin-top:2px;">${net>=0?'+':''}${fmtCents(net)}¢</div>
                 </div>
             </div>
 
@@ -15486,7 +15486,7 @@ function filterPhantomLog() {
                         <span style="color:${dogCol};font-weight:800;font-size:16px;">${dogPrice}¢</span>
                         <span style="color:#5a6484;font-size:10px;">${dogSide.toUpperCase()}</span>
                     </div>
-                    <div style="color:#5a6484;font-size:10px;margin-top:2px;">x${qty}${typeof dogPrice === 'number' ? ` · $${((qty * dogPrice) / 100).toFixed(2)}` : ''}</div>
+                    <div style="color:#5a6484;font-size:10px;margin-top:2px;">x${fmtQty(qty)}${typeof dogPrice === 'number' ? ` · $${((qty * dogPrice) / 100).toFixed(2)}` : ''}</div>
                 </div>
                 <div style="background:#0a0e16;border-radius:8px;padding:10px 12px;border:1px solid ${isSellback ? '#ff444418' : '#00aaff18'};">
                     <div style="color:${isSellback ? '#ff4444' : '#00aaff'};font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;">${isSellback ? '🔙 Sold Back' : '⭐ Hedge'}${!isSellback && t.cross_market && t.hedge_ticker ? ` <span style="color:#00ddff;font-size:8px;">→ ${(t.hedge_ticker||'').split('-').pop()}</span>` : ''}</div>
@@ -15495,12 +15495,12 @@ function filterPhantomLog() {
                             <span style="color:${net > 0 ? '#00ff88' : '#ff4444'};font-weight:800;font-size:16px;">${t.sell_back_price > 0 ? t.sell_back_price + '¢' : 'Failed'}</span>
                             <span style="color:#5a6484;font-size:10px;">${dogSide.toUpperCase()} back</span>
                         </div>
-                        <div style="color:#5a6484;font-size:10px;margin-top:2px;">${net > 0 ? 'Recovered +' + (t.profit_cents||0) + '¢' : 'Lost ' + (t.loss_cents||0) + '¢'}${t.fee_cents ? ` · fee ${t.fee_cents}¢` : ''}</div>`
+                        <div style="color:#5a6484;font-size:10px;margin-top:2px;">${net > 0 ? 'Recovered +' + fmtCents(t.profit_cents||0) + '¢' : 'Lost ' + fmtCents(t.loss_cents||0) + '¢'}${t.fee_cents ? ` · fee ${fmtCents(t.fee_cents)}¢` : ''}</div>`
                         : `<div style="display:flex;align-items:baseline;gap:4px;">
                             <span style="color:${favCol};font-weight:800;font-size:16px;">${favPrice}¢</span>
                             <span style="color:#5a6484;font-size:10px;">${favSide.toUpperCase()}</span>
                         </div>
-                        <div style="color:#5a6484;font-size:10px;margin-top:2px;">Combined: <span style="color:${combined && combined <= 98 ? '#00ff88' : combined && combined <= 100 ? '#ffaa00' : '#ff4444'};font-weight:700;">${combined != null ? combined + '¢' : '—'}</span>${t.fee_cents ? ` · fee ${t.fee_cents}¢` : ''}</div>`
+                        <div style="color:#5a6484;font-size:10px;margin-top:2px;">Combined: <span style="color:${combined && combined <= 98 ? '#00ff88' : combined && combined <= 100 ? '#ffaa00' : '#ff4444'};font-weight:700;">${combined != null ? fmtCents(combined) + '¢' : '—'}</span>${t.fee_cents ? ` · fee ${fmtCents(t.fee_cents)}¢` : ''}</div>`
                     }
                 </div>
             </div>

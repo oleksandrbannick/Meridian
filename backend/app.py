@@ -14355,6 +14355,79 @@ def _handle_phantom(bot_id, bot, actions):
             print(f'✅ PHANTOM COMPLETE: {bot_id} dog@{dog_price}¢ + fav@{actual_fav_price}¢ = {dog_price+actual_fav_price}¢ → pnl {pnl_cents}¢ (net {net_pnl}¢) hedge_fill={bot.get("hedge_fill_latency_ms", "?")}ms')
             _audit('PHANTOM_COMPLETE', bot_id, {'ticker': ticker, 'dog_price': dog_price, 'fav_price': actual_fav_price, 'pnl': net_pnl, 'qty': qty})
 
+            # ── CRITICAL ORDER: append run_history + bump lifetime_pnl BEFORE verify-rehedge ──
+            # The verify-rehedge path below can early-return when it detects fractional
+            # unhedged contracts (Kalshi's post-Mar 2026 fractional matching). Historically
+            # these early returns skipped the run_history append → main hedge profit went
+            # into trades.jsonl but NOT into bot state. Then when the supplemental later
+            # completed, its loss got logged as the entire run (GAU bot 2026-04-21: $4.39
+            # main profit vanished, only -$0.47 orphan survived in run_history).
+            # Fix: append now so a subsequent supplemental completion finds the main entry
+            # and merges into it correctly.
+            repeats_done_now = bot.get('repeats_done', 0) + 1
+            bot['repeats_done'] = repeats_done_now
+            _is_cross_early = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
+            if _is_cross_early:
+                _cycle_dog_e = bot.get('dog_fill_qty', 0) or qty
+                _cycle_fav_e = bot.get('fav_fill_qty', 0)
+                if not _cycle_fav_e and bot.get('rungs'):
+                    _cycle_fav_e = sum(r.get('fav_fill_qty', r.get('fill_qty', 0)) for r in bot.get('rungs', []) if isinstance(r, dict) and r.get('_profit_recorded'))
+                _cycle_fav_e = _cycle_fav_e or _cycle_dog_e
+                bot['_cross_settled_qty'] = bot.get('_cross_settled_qty', 0) + _cycle_dog_e
+                bot['_cross_settled_qty_dog'] = bot.get('_cross_settled_qty_dog', 0) + _cycle_dog_e
+                bot['_cross_settled_qty_fav'] = bot.get('_cross_settled_qty_fav', 0) + _cycle_fav_e
+            _rh = bot.setdefault('_run_history', [])
+            _rh_last = _rh[-1] if _rh else None
+            _rh_now = time.time()
+            _is_supplemental = (
+                _rh_last is not None
+                and (_rh_now - _rh_last.get('ts', 0)) < 300
+                and _rh_last.get('dog_price') == dog_price
+            )
+            if _is_supplemental:
+                # Supplemental completion: roll back the run++ and merge into the prior entry.
+                bot['repeats_done'] = max(0, bot.get('repeats_done', 1) - 1)
+                repeats_done_now = _rh_last.get('run', repeats_done_now - 1) or 1
+                _old_qty = _rh_last.get('qty') or 0
+                _new_qty = qty or 0
+                _total_qty = _old_qty + _new_qty
+                _old_fav = _rh_last.get('fav_price_precise') or _rh_last.get('fav_price') or actual_fav_price
+                _new_fav = bot.get('_fav_price_precise') or actual_fav_price or 0
+                _wavg_fav = ((_old_fav * _old_qty) + (_new_fav * _new_qty)) / _total_qty if _total_qty > 0 else _new_fav
+                _rh_last['qty'] = _total_qty
+                _rh_last['pnl'] = (_rh_last.get('pnl') or 0) + net_pnl
+                _rh_last['fav_price_precise'] = round(_wavg_fav, 2)
+                _rh_last['fav_price'] = round(_wavg_fav)
+                _rh_last['result'] = 'win' if _rh_last['pnl'] >= 0 else 'loss'
+                _rh_last['ts'] = _rh_now
+                if bot.get('hedge_fill_latency_ms') is not None:
+                    _rh_last['fill_time_ms'] = max(_rh_last.get('fill_time_ms') or 0, bot.get('hedge_fill_latency_ms'))
+                _rh_last['_merged_completions'] = (_rh_last.get('_merged_completions') or 1) + 1
+                print(f'📊 RUN HISTORY MERGE: {bot_id} supplemental +{_new_qty}x @ {_new_fav} → run {repeats_done_now} qty={_total_qty} pnl={_rh_last["pnl"]:.2f}c wavg_fav={_wavg_fav:.2f}')
+                bot_log('PHANTOM_RUN_MERGE', bot_id, {
+                    'run': repeats_done_now, 'added_qty': _new_qty, 'added_pnl': net_pnl,
+                    'total_qty': _total_qty, 'total_pnl': _rh_last['pnl'],
+                    'wavg_fav': round(_wavg_fav, 2),
+                })
+            else:
+                _rh.append({
+                    'run': repeats_done_now,
+                    'pnl': net_pnl,
+                    'result': 'win' if net_pnl >= 0 else 'loss',
+                    'dog_price': dog_price,
+                    'fav_price': actual_fav_price,
+                    'fav_price_precise': bot.get('_fav_price_precise'),
+                    'qty': qty,
+                    'anchor_depth': bot.get('anchor_depth', 0),
+                    'raw_hedge_ms': bot.get('raw_hedge_ms'),
+                    'hedge_latency_ms': bot.get('hedge_latency_ms'),
+                    'fill_time_ms': bot.get('hedge_fill_latency_ms'),
+                    'taker': bool(bot.get('_fav_was_taker')),
+                    'ts': _rh_now,
+                })
+            bot.pop('_fav_price_precise', None)
+            bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + net_pnl
+
             # Verify ACTUAL fills on Kalshi — check every order this bot placed
             try:
                 _ph_oids = [bot.get('dog_order_id'), bot.get('fav_order_id')]
@@ -14459,97 +14532,19 @@ def _handle_phantom(bot_id, bot, actions):
             except Exception as _pv_err:
                 bot_log('PHANTOM_ORDER_VERIFY_FAIL', bot_id, {'error': str(_pv_err)[:200]}, level='ERROR')
 
-            # Repeat logic
-            repeats_done_now = bot.get('repeats_done', 0) + 1
-            bot['repeats_done'] = repeats_done_now
+            # Repeat decision (run_history + lifetime_pnl already handled up top, before verify-rehedge)
+            repeats_done_now = bot.get('repeats_done', 0)  # already incremented above
             repeat_total = bot.get('repeat_count', 0)
-            # Smart mode override
             _smart_repeat, _smart_reason = _smart_mode_should_repeat(bot, net_pnl)
             _will_repeat = _smart_repeat if _smart_repeat is not None else (True if bot.get('smart_mode') else repeats_done_now <= repeat_total)
-            # Track accumulated cross-market positions before fill reset
             _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
-            if _is_cross:
-                _cycle_dog = bot.get('dog_fill_qty', 0) or qty
-                # Ladder fav fills are per-rung, not bot-level — sum from rungs
-                _cycle_fav = bot.get('fav_fill_qty', 0)
-                if not _cycle_fav and bot.get('rungs'):
-                    _cycle_fav = sum(r.get('fav_fill_qty', r.get('fill_qty', 0)) for r in bot.get('rungs', []) if isinstance(r, dict) and r.get('_profit_recorded'))
-                _cycle_fav = _cycle_fav or _cycle_dog  # fallback to dog count if still 0
-                bot['_cross_settled_qty'] = bot.get('_cross_settled_qty', 0) + _cycle_dog
-                bot['_cross_settled_qty_dog'] = bot.get('_cross_settled_qty_dog', 0) + _cycle_dog
-                bot['_cross_settled_qty_fav'] = bot.get('_cross_settled_qty_fav', 0) + _cycle_fav
-            # Record run history. MERGE into the previous entry when this is a
-            # supplemental completion (verify-rehedge path at line 14210 catches a
-            # small unhedged remainder after the main run completes). Without merging,
-            # the supplemental's small pnl OVERWRITES the run's true total — e.g.
-            # run #1 really made 58.45c but card shows 0.45c because only the
-            # supplemental's final numbers made it to run_history.
-            _rh = bot.setdefault('_run_history', [])
-            _rh_last = _rh[-1] if _rh else None
-            _rh_now = time.time()
-            _is_supplemental = (
-                _rh_last is not None
-                and (_rh_now - _rh_last.get('ts', 0)) < 300  # within 5 min of last completion
-                and _rh_last.get('dog_price') == dog_price    # same dog price = same cycle
-            )
-
-            if _is_supplemental:
-                # Roll back the repeats_done increment — this is a cleanup of the
-                # previous run, not a new run. Also reverts the lifetime pnl +=
-                # that happens below in the _will_repeat branch (handled by merge).
-                bot['repeats_done'] = max(0, bot.get('repeats_done', 1) - 1)
-                repeats_done_now = _rh_last.get('run', repeats_done_now - 1) or 1
-
-                _old_qty = _rh_last.get('qty') or 0
-                _new_qty = qty or 0
-                _total_qty = _old_qty + _new_qty
-                _old_fav = _rh_last.get('fav_price_precise') or _rh_last.get('fav_price') or actual_fav_price
-                _new_fav = bot.get('_fav_price_precise') or actual_fav_price or 0
-                if _total_qty > 0:
-                    _wavg_fav = ((_old_fav * _old_qty) + (_new_fav * _new_qty)) / _total_qty
-                else:
-                    _wavg_fav = _new_fav
-
-                _rh_last['qty'] = _total_qty
-                _rh_last['pnl'] = (_rh_last.get('pnl') or 0) + net_pnl
-                _rh_last['fav_price_precise'] = round(_wavg_fav, 2)
-                _rh_last['fav_price'] = round(_wavg_fav)
-                _rh_last['result'] = 'win' if _rh_last['pnl'] >= 0 else 'loss'
-                _rh_last['ts'] = _rh_now
-                if bot.get('hedge_fill_latency_ms') is not None:
-                    _rh_last['fill_time_ms'] = max(_rh_last.get('fill_time_ms') or 0, bot.get('hedge_fill_latency_ms'))
-                _rh_last['_merged_completions'] = (_rh_last.get('_merged_completions') or 1) + 1
-
-                print(f'📊 RUN HISTORY MERGE: {bot_id} supplemental +{_new_qty}x @ {_new_fav} → run {repeats_done_now} qty={_total_qty} pnl={_rh_last["pnl"]:.2f}c wavg_fav={_wavg_fav:.2f}')
-                bot_log('PHANTOM_RUN_MERGE', bot_id, {
-                    'run': repeats_done_now, 'added_qty': _new_qty, 'added_pnl': net_pnl,
-                    'total_qty': _total_qty, 'total_pnl': _rh_last['pnl'],
-                    'wavg_fav': round(_wavg_fav, 2),
-                })
-            else:
-                _rh.append({
-                    'run': repeats_done_now,
-                    'pnl': net_pnl,
-                    'result': 'win' if net_pnl >= 0 else 'loss',
-                    'dog_price': dog_price,
-                    'fav_price': actual_fav_price,
-                    'fav_price_precise': bot.get('_fav_price_precise'),  # 2-decimal weighted avg (split hedges)
-                    'qty': qty,
-                    'anchor_depth': bot.get('anchor_depth', 0),
-                    'raw_hedge_ms': bot.get('raw_hedge_ms'),
-                    'hedge_latency_ms': bot.get('hedge_latency_ms'),
-                    'fill_time_ms': bot.get('hedge_fill_latency_ms'),
-                    'taker': bool(bot.get('_fav_was_taker')),
-                    'ts': _rh_now,
-                })
-            bot.pop('_fav_price_precise', None)  # clear for next cycle
             if _will_repeat:
                 bot['status'] = 'waiting_repeat'
                 bot['waiting_repeat_since'] = time.time() + 3  # 3s linger to show completion
                 bot['_just_completed'] = True
                 bot['_last_pnl'] = net_pnl
                 bot['_last_result'] = 'win' if net_pnl >= 0 else 'loss'
-                bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + net_pnl
+                # lifetime_pnl already bumped up top (before verify-rehedge) — was duplicated here
                 bot['dog_filled_at'] = None
                 if bot.get('raw_hedge_ms') is not None:
                     bot['_last_raw_hedge_ms'] = bot['raw_hedge_ms']
@@ -14641,7 +14636,7 @@ def _handle_phantom(bot_id, bot, actions):
                     bot['no_fill_qty'] = 0
                 bot['_just_completed'] = True
                 bot['_last_pnl'] = net_pnl
-                bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + net_pnl
+                # lifetime_pnl already bumped up top (before verify-rehedge) — was duplicated here
             save_state()
             actions.append({'bot_id': bot_id, 'action': 'anchor_complete', 'profit_cents': net_pnl})
             return

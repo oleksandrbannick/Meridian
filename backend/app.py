@@ -3281,6 +3281,22 @@ def _migrate_009_fix_tennis_fees():
             updated += 1
     print(f'📊 Migration 009: zeroed fees on {updated} tennis trades')
 
+def _migrate_010_relabel_generic_sports():
+    """Legacy trades labeled 'Basketball'/'Other'/empty pre-date the per-league
+    SPORT_MAP (KXBSLGAME, KXACBGAME, etc.). Re-derive label from current map."""
+    global trade_history
+    stale = {'Basketball', 'basketball', 'Other', 'other', '', None}
+    updated = 0
+    for t in trade_history:
+        if t.get('sport') in stale:
+            ticker = (t.get('ticker') or '').upper()
+            series = ticker.split('-')[0] if ticker else ''
+            new_sport = SPORT_MAP.get(series)
+            if new_sport and new_sport != t.get('sport'):
+                t['sport'] = new_sport
+                updated += 1
+    print(f'📊 Migration 010: relabeled {updated} trades with stale generic sport')
+
 MIGRATIONS = [
     ('001_recalc_fees', _migrate_001_recalc_fees),
     ('002_remove_mar12', _migrate_002_remove_mar12),
@@ -3291,6 +3307,7 @@ MIGRATIONS = [
     ('007_backfill_anchor_depth', _migrate_007_backfill_anchor_depth),
     ('008_fix_sport_labels', _migrate_008_fix_sport_labels),
     ('009_fix_tennis_fees', _migrate_009_fix_tennis_fees),
+    ('010_relabel_generic_sports', _migrate_010_relabel_generic_sports),
 ]
 
 def run_migrations():
@@ -7030,6 +7047,44 @@ def _extract_spread_line(ticker: str) -> str:
     return team_code
 
 
+SPORT_MAP = {
+    'KXNBAGAME':'NBA','KXNBASPREAD':'NBA','KXNBATOTAL':'NBA',
+    'KXNBAPTS':'NBA','KXNBAREB':'NBA','KXNBAAST':'NBA','KXNBA3PT':'NBA',
+    'KXNBASTL':'NBA','KXNBABLK':'NBA','KXNBAMVP':'NBA',
+    'KXNFLGAME':'NFL','KXNFLSPREAD':'NFL','KXNFLTOTAL':'NFL',
+    'KXNHLGAME':'NHL','KXNHLSPREAD':'NHL','KXNHLTOTAL':'NHL','KXNHLGOAL':'NHL',
+    'KXMLBGAME':'MLB','KXMLBSPREAD':'MLB','KXMLBTOTAL':'MLB','KXMLBSTGAME':'MLB',
+    'KXMLSGAME':'MLS','KXMLSSPREAD':'MLS','KXMLSTOTAL':'MLS','KXMLSBTTS':'MLS',
+    'KXNCAAMBGAME':'NCAAB','KXNCAAMBSPREAD':'NCAAB','KXNCAAMBTOTAL':'NCAAB',
+    'KXNCAAMBPTS':'NCAAB','KXNCAAMBREB':'NCAAB','KXNCAAMBAST':'NCAAB',
+    'KXNCAAMB3PT':'NCAAB','KXNCAAMBSTL':'NCAAB','KXNCAAMBBLK':'NCAAB',
+    'KXNCAAMB1HWINNER':'NCAAB','KXNCAAMB1HSPREAD':'NCAAB','KXNCAAMB1HTOTAL':'NCAAB',
+    'KXMARMAD':'NCAAB','KXNCAAWBGAME':'NCAAW',
+    'KXNCAAFGAME':'NCAAF','KXNCAAFSPREAD':'NCAAF','KXNCAAFTOTAL':'NCAAF',
+    'KXEPLGAME':'EPL','KXEPLSPREAD':'EPL','KXEPLTOTAL':'EPL','KXEPLGOAL':'EPL','KXEPLBTTS':'EPL',
+    'KXUCLGAME':'UCL','KXUCLSPREAD':'UCL','KXUCLTOTAL':'UCL','KXUCLGOAL':'UCL','KXUCLBTTS':'UCL',
+    'KXATPMATCH':'Tennis','KXATPCHALLENGERMATCH':'Tennis','KXWTAMATCH':'Tennis','KXWTACHALLENGERMATCH':'Tennis',
+    'KXITFMATCH':'Tennis','KXITFWMATCH':'Tennis',
+    'KXKBOGAME':'KBO','KXNPBGAME':'NPB','KXWBCGAME':'WBC',
+    # International basketball — each league gets its own bucket
+    'KXVTBGAME':'VTB','KXBSLGAME':'BSL','KXABAGAME':'ABA',
+    'KXKBLGAME':'KBL','KXCBAGAME':'CBA','KXEUROLEAGUEGAME':'EuroLeague',
+    'KXBBLGAME':'BBL','KXGBLGAME':'GBL','KXACBGAME':'ACB',
+    'KXJBLEAGUEGAME':'JBLeague','KXLNBELITEGAME':'LNBElite',
+    'KXNBLGAME':'NBL',
+    # Additional soccer leagues
+    'KXLALIGAGAME':'LaLiga','KXLIGAMXGAME':'LigaMX','KXSERIEAGAME':'SerieA',
+    'KXBUNDESLIGAGAME':'Bundesliga','KXLIGUE1GAME':'Ligue1',
+    # Combat / motorsport / cricket
+    'KXUFCFIGHT':'UFC','KXF1RACE':'F1','KXIPL':'Cricket',
+    # Golf
+    'KXPGAH2H':'Golf','KXPGATOP10':'Golf','KXPGATOP5':'Golf','KXPGAMAKECUT':'Golf',
+    'KXPGAR1LEAD':'Golf','KXPGAR2LEAD':'Golf','KXPGAR3LEAD':'Golf',
+    'KXLIVH2H':'Golf','KXLIVTOP10':'Golf','KXLIVTOP5':'Golf','KXLIVR1LEAD':'Golf','KXLIVTOUR':'Golf',
+    'KXTGLMATCH':'Golf',
+}
+
+
 def _enrich_trade_record(record: dict, bot: dict = None) -> dict:
     """Add market_type and spread_line to a trade history record.
     Uses bot data if available, falls back to ticker parsing."""
@@ -7064,43 +7119,7 @@ def _enrich_trade_record(record: dict, bot: dict = None) -> dict:
                 record['bot_category'] = 'arb'
     # Sport from series ticker prefix
     series = ticker.split('-')[0].upper() if ticker else ''
-    _SPORT_MAP = {
-        'KXNBAGAME':'NBA','KXNBASPREAD':'NBA','KXNBATOTAL':'NBA',
-        'KXNBAPTS':'NBA','KXNBAREB':'NBA','KXNBAAST':'NBA','KXNBA3PT':'NBA',
-        'KXNBASTL':'NBA','KXNBABLK':'NBA','KXNBAMVP':'NBA',
-        'KXNFLGAME':'NFL','KXNFLSPREAD':'NFL','KXNFLTOTAL':'NFL',
-        'KXNHLGAME':'NHL','KXNHLSPREAD':'NHL','KXNHLTOTAL':'NHL','KXNHLGOAL':'NHL',
-        'KXMLBGAME':'MLB','KXMLBSPREAD':'MLB','KXMLBTOTAL':'MLB','KXMLBSTGAME':'MLB',
-        'KXMLSGAME':'MLS','KXMLSSPREAD':'MLS','KXMLSTOTAL':'MLS','KXMLSBTTS':'MLS',
-        'KXNCAAMBGAME':'NCAAB','KXNCAAMBSPREAD':'NCAAB','KXNCAAMBTOTAL':'NCAAB',
-        'KXNCAAMBPTS':'NCAAB','KXNCAAMBREB':'NCAAB','KXNCAAMBAST':'NCAAB',
-        'KXNCAAMB3PT':'NCAAB','KXNCAAMBSTL':'NCAAB','KXNCAAMBBLK':'NCAAB',
-        'KXNCAAMB1HWINNER':'NCAAB','KXNCAAMB1HSPREAD':'NCAAB','KXNCAAMB1HTOTAL':'NCAAB',
-        'KXMARMAD':'NCAAB','KXNCAAWBGAME':'NCAAW',
-        'KXNCAAFGAME':'NCAAF','KXNCAAFSPREAD':'NCAAF','KXNCAAFTOTAL':'NCAAF',
-        'KXEPLGAME':'EPL','KXEPLSPREAD':'EPL','KXEPLTOTAL':'EPL','KXEPLGOAL':'EPL','KXEPLBTTS':'EPL',
-        'KXUCLGAME':'UCL','KXUCLSPREAD':'UCL','KXUCLTOTAL':'UCL','KXUCLGOAL':'UCL','KXUCLBTTS':'UCL',
-        'KXATPMATCH':'Tennis','KXATPCHALLENGERMATCH':'Tennis','KXWTAMATCH':'Tennis','KXWTACHALLENGERMATCH':'Tennis',
-        'KXITFMATCH':'Tennis','KXITFWMATCH':'Tennis',
-        'KXKBOGAME':'KBO','KXNPBGAME':'NPB','KXWBCGAME':'WBC',
-        # International basketball — each league gets its own bucket
-        'KXVTBGAME':'VTB','KXBSLGAME':'BSL','KXABAGAME':'ABA',
-        'KXKBLGAME':'KBL','KXCBAGAME':'CBA','KXEUROLEAGUEGAME':'EuroLeague',
-        'KXBBLGAME':'BBL','KXGBLGAME':'GBL','KXACBGAME':'ACB',
-        'KXJBLEAGUEGAME':'JBLeague','KXLNBELITEGAME':'LNBElite',
-        'KXNBLGAME':'NBL',
-        # Additional soccer leagues
-        'KXLALIGAGAME':'LaLiga','KXLIGAMXGAME':'LigaMX','KXSERIEAGAME':'SerieA',
-        'KXBUNDESLIGAGAME':'Bundesliga','KXLIGUE1GAME':'Ligue1',
-        # Combat / motorsport / cricket
-        'KXUFCFIGHT':'UFC','KXF1RACE':'F1','KXIPL':'Cricket',
-        # Golf
-        'KXPGAH2H':'Golf','KXPGATOP10':'Golf','KXPGATOP5':'Golf','KXPGAMAKECUT':'Golf',
-        'KXPGAR1LEAD':'Golf','KXPGAR2LEAD':'Golf','KXPGAR3LEAD':'Golf',
-        'KXLIVH2H':'Golf','KXLIVTOP10':'Golf','KXLIVTOP5':'Golf','KXLIVR1LEAD':'Golf','KXLIVTOUR':'Golf',
-        'KXTGLMATCH':'Golf',
-    }
-    record['sport'] = _SPORT_MAP.get(series, 'Other')
+    record['sport'] = SPORT_MAP.get(series, 'Other')
     return record
 
 

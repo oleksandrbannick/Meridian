@@ -6343,7 +6343,13 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             ${(() => {
                 const _isPulled = (!!bot._price_floor_pulled || _isPpiKill) && !(status === 'dog_anchor_posted' && !!bot.dog_order_id);
                 const _borderCol = _isPulled ? '#ff444433' : '#ffaa0033';
-                const _pullReason = bot._blowout_pulled ? (bot._blowout_reason ? `BLOWOUT · ${bot._blowout_reason.toUpperCase()}` : 'BLOWOUT') : _isPpiKill ? 'PPI KILL' : 'PULLED';
+                const _pullReason = bot._blowout_pulled
+                    ? (bot._blowout_reason ? `BLOWOUT · ${bot._blowout_reason.toUpperCase()}` : 'BLOWOUT')
+                    : _isPpiKill
+                        ? `PPI KILL${bot._last_ppi != null ? ` · PPI ${bot._last_ppi}` : ''}`
+                        : bot._pull_reason
+                            ? `PULLED · ${String(bot._pull_reason).toUpperCase()}`
+                            : 'PULLED';
                 const _pullIcon = bot._blowout_pulled ? '🎾' : '⏸';
                 const _headerLabel = _isPulled ? `${_pullIcon} ${_pullReason} · ${dogSide.toUpperCase()} · WAITING` : `👻 ANCHOR · ${dogSide.toUpperCase()}${dogFilled ? ' · FILLED ✓' : ''}`;
                 const _headerCol = _isPulled ? '#ff4444' : '#ffaa00';

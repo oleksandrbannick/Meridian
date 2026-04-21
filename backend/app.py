@@ -4786,6 +4786,7 @@ def _ws_phantom_price_floor(ticker, yes_bid, no_bid):
             return
         bot['_price_floor_pulled'] = True
         bot['_price_floor_at'] = time.time()
+        bot['_pull_reason'] = f'dog bid {dog_bid}¢ < 2¢ floor'
         print(f'⚡ WS PRICE FLOOR: {bot_id} bid={dog_bid}¢ < 2¢ — pulled instantly')
         bot_log('PHANTOM_WS_PRICE_FLOOR', bot_id, {
             'dog_bid': dog_bid, 'dog_side': dog_side,
@@ -4888,6 +4889,7 @@ def _ws_phantom_drift_guard(ticker, yes_bid, no_bid):
             return
         bot['_price_floor_pulled'] = True
         bot['_price_floor_since'] = time.time()
+        bot['_pull_reason'] = f'dog bid {dog_bid}¢ > 50¢ (drift — dog became favorite)'
         print(f'⚡ WS DRIFT PULL: {bot_id} bid={dog_bid}¢ > 50¢ — pulled, waiting')
         bot_log('PHANTOM_WS_DRIFT_PULL', bot_id, {'dog_bid': dog_bid})
         save_state()
@@ -5315,10 +5317,14 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 held_side = 'no'
 
             # ── Priority 1: Stop-loss ──
-            exit_ask = yes_ask if exit_side == 'yes' else no_ask
-            held_bid = yes_bid if held_side == 'yes' else no_bid
-            buy_opp = (held_avg + exit_ask) if exit_ask > 0 else 999
-            sell_held = (held_avg + (100 - held_bid)) if held_bid > 0 else 999
+            # Use OPTIMISTIC maker pricing — opp BID for arb, held ASK for sellback —
+            # to match the unrealized-P&L model. SL only fires when even the better
+            # maker exit is underwater past the wall; prevents firing on a position
+            # the bot can still exit profitably.
+            exit_bid = yes_bid if exit_side == 'yes' else no_bid
+            held_ask = yes_ask if held_side == 'yes' else no_ask
+            buy_opp = (held_avg + exit_bid) if exit_bid > 0 else 999
+            sell_held = (held_avg + (100 - held_ask)) if held_ask > 0 else 999
             best_combined = min(buy_opp, sell_held)
 
             width = bot.get('start_gap', 4) * 2
@@ -9205,35 +9211,63 @@ def _apex_mm_check_inventory(bot_id, bot):
 
 
 def _apex_mm_check_loss_limit(bot_id, bot):
-    """Check unrealized P&L. Returns True if loss limit hit (begin exit)."""
+    """Check unrealized P&L. Returns True if loss limit hit (begin exit).
+
+    Unrealized = best of (arb-completion at opp bid) vs (sellback at held ask).
+    Both paths are maker-realizable, so we use the better of the two — SL only
+    fires when even the cheapest exit is underwater past the loss limit. This
+    prevents firing SL on a position that's still profitable via the arb path.
+    """
     # Fill grace period — live bids are unreliable right after our fill (liquidity cliff)
     _last_fill_t = max(bot.get('_last_yes_fill_at', 0), bot.get('_last_no_fill_at', 0))
     if _last_fill_t > 0 and (time.time() - _last_fill_t) < APEX_MM_SL_FILL_GRACE_S:
         return False
     loss_limit = bot.get('loss_limit_cents', 500)
-    if loss_limit <= 0:
-        return False
 
-    unrealized = 0
     net_yes = bot.get('net_yes', 0)
     net_no = bot.get('net_no', 0)
+    if net_yes <= 0 and net_no <= 0:
+        bot['_unrealized_pnl'] = 0
+        return False
 
-    if net_yes > 0:
-        live_bid = bot.get('live_yes_bid', 0)
-        avg_cost = bot.get('avg_yes_cost', 0)
-        if live_bid > 0 and avg_cost > 0:
-            unrealized += (live_bid - avg_cost) * net_yes
+    # Net offsetting positions implicitly — only the imbalance carries unrealized P&L
+    if net_yes > net_no:
+        held_side, exit_side = 'yes', 'no'
+        held_qty = net_yes - net_no
+    else:
+        held_side, exit_side = 'no', 'yes'
+        held_qty = net_no - net_yes
 
-    if net_no > 0:
-        live_bid = bot.get('live_no_bid', 0)
-        avg_cost = bot.get('avg_no_cost', 0)
-        if live_bid > 0 and avg_cost > 0:
-            unrealized += (live_bid - avg_cost) * net_no
+    avg_cost = bot.get(f'avg_{held_side}_cost', 0)
+    if avg_cost <= 0 or held_qty <= 0:
+        bot['_unrealized_pnl'] = 0
+        return False
 
+    held_ask = bot.get(f'live_{held_side}_ask', 0)
+    opp_bid = bot.get(f'live_{exit_side}_bid', 0)
+
+    # Path A: complete the arb — post buy on opp side at opp BID (maker)
+    arb_pnl_per = (100 - avg_cost - opp_bid) if opp_bid > 0 else None
+    # Path B: sell back held side at held ASK (maker)
+    sellback_pnl_per = (held_ask - avg_cost) if held_ask > 0 else None
+
+    if arb_pnl_per is None and sellback_pnl_per is None:
+        bot['_unrealized_pnl'] = 0
+        return False
+    if arb_pnl_per is None:
+        best_per = sellback_pnl_per
+    elif sellback_pnl_per is None:
+        best_per = arb_pnl_per
+    else:
+        best_per = max(arb_pnl_per, sellback_pnl_per)
+
+    unrealized = best_per * held_qty
     bot['_unrealized_pnl'] = unrealized
 
+    if loss_limit <= 0:
+        return False
     if unrealized < -loss_limit:
-        _apex_mm_begin_exit(bot_id, bot, f'loss_limit ({unrealized}c < -{loss_limit}c)')
+        _apex_mm_begin_exit(bot_id, bot, f'loss_limit (best_path={unrealized}c < -{loss_limit}c)')
         return True
     return False
 
@@ -10642,7 +10676,8 @@ def _apex_mm_begin_exit_inner(bot_id, bot, reason):
             # Option B: buy opposite at bid (completes arb)
             cost_buy_opp = (avg_cost + opp_bid - 100) if opp_bid > 0 else 999
 
-            if cost_buy_opp < cost_sell and opp_bid > 0:
+            # Prefer arb completion on tie — finishing the arb collects spread instead of crossing it
+            if opp_bid > 0 and cost_buy_opp <= cost_sell:
                 buy_price = opp_bid
                 try:
                     resp, actual_price = create_order_maker(ticker, opposite, 'buy', net_qty, buy_price)
@@ -10722,20 +10757,22 @@ def _apex_mm_exit_tick(bot_id, bot):
             except Exception as _fe:
                 print(f'⚠ APEX MM FLIP FAILED: {bot_id}: {_fe}')
 
-    # ── REHAB: if market recovered below wall, cancel panic-exit and resume MM ──
-    # Rationale: circuit breaker fires on flash spikes. When combined drops back under
-    # 100c we're no longer losing, so there's no reason to keep force-selling at bad
-    # prices. Cancel exits, drop to mm_depth_pulled — normal MM recovery kicks in.
-    # Uses held_bid (realizable sell price), not held_ask, to avoid ping-pong on
-    # wide-spread books where ask looks profitable but actual exit would lose.
+    # ── REHAB: if any maker-realizable exit is profitable, cancel panic-exit and resume MM ──
+    # Match the position bar / unrealized P&L: use the OPTIMISTIC maker exit price
+    # (opp BID for arb, held ASK for sellback). If the bot can post a maker exit
+    # that lands below 100c combined, we're profitable on the better path — sellback
+    # at a worse price is wrong. The 100c floor + the SL persistence gate above
+    # gives ~6c+ of breathing room before SL refires, preventing thrash.
     if _net_y or _net_n:
         _held_side_r = 'yes' if _net_y > _net_n else 'no'
         _exit_side_r = 'no' if _held_side_r == 'yes' else 'yes'
         _held_avg_r = bot.get(f'avg_{_held_side_r}_cost', 0)
-        _opp_ask_r = bot.get(f'live_{_exit_side_r}_ask', 0)
-        _held_bid_r = bot.get(f'live_{_held_side_r}_bid', 0)
-        _buy_opp_r = (_held_avg_r + _opp_ask_r) if _opp_ask_r > 0 else 999
-        _sell_held_r = (_held_avg_r + (100 - _held_bid_r)) if _held_bid_r > 0 else 999
+        _opp_bid_r = bot.get(f'live_{_exit_side_r}_bid', 0)
+        _held_ask_r = bot.get(f'live_{_held_side_r}_ask', 0)
+        # Arb completion: post buy on opp side at opp BID — combined = avg + opp_bid
+        _buy_opp_r = (_held_avg_r + _opp_bid_r) if _opp_bid_r > 0 else 999
+        # Sellback: post sell on held side at held ASK — combined-equivalent = avg + (100 - ask)
+        _sell_held_r = (_held_avg_r + (100 - _held_ask_r)) if _held_ask_r > 0 else 999
         _combined_r = min(_buy_opp_r, _sell_held_r)
         if _held_avg_r > 0 and _combined_r < 100:
             # Cancel all exit orders — check for cancel-race fills
@@ -13371,6 +13408,7 @@ def _handle_phantom(bot_id, bot, actions):
                 })
                 bot['_price_floor_pulled'] = False
                 bot['_drift_pull_logged'] = False
+                bot['_pull_reason'] = None
                 # Clear fill state — prevent stale fills from triggering ghost hedge
                 bot['dog_fill_qty'] = 0
                 bot['fav_fill_qty'] = 0
@@ -13667,6 +13705,7 @@ def _handle_phantom(bot_id, bot, actions):
                         bot_log('PHANTOM_DEAD_MARKET', bot_id, {'dog_bid': current_dog_bid, 'min_viable': _min_viable_bid})
                         bot['_price_floor_pulled'] = True
                         bot['_price_floor_since'] = now
+                        bot['_pull_reason'] = f'dead market (bid {current_dog_bid}¢ < {_min_viable_bid}¢ viable)'
                     # Bot stays pulled — waits indefinitely for recovery or settlement
                     save_state()
                     return
@@ -13737,6 +13776,7 @@ def _handle_phantom(bot_id, bot, actions):
                         bot['dog_order_id'] = None
                     bot['_price_floor_pulled'] = True
                     bot['_price_floor_since'] = now
+                    bot['_pull_reason'] = f'dog bid {current_dog_bid}¢ > 50¢ (drift — dog became favorite)'
                     print(f'⏸ PHANTOM DRIFT PULL: {bot_id} dog bid {current_dog_bid}¢ > 50¢ — pulled, waiting')
                     bot_log('PHANTOM_DRIFT_PULL', bot_id, {'dog_bid': current_dog_bid, 'cross': bool(_is_cross_drift)})
                     save_state()
@@ -13797,6 +13837,7 @@ def _handle_phantom(bot_id, bot, actions):
                             'dog_bid': current_dog_bid, 'new_price': new_dog_price, 'depth': anchor_depth,
                         })
                         bot['_price_floor_pulled'] = True
+                        bot['_pull_reason'] = f'post price {new_dog_price}¢ below floor (bid {current_dog_bid}¢ − depth {anchor_depth}¢)'
                     # Check if market is truly dead (settled/finalized/closed+dead)
                     if now - bot.get('_last_settle_check_pf', 0) > 30:
                         bot['_last_settle_check_pf'] = now
@@ -15234,6 +15275,7 @@ def _handle_phantom(bot_id, bot, actions):
                 # No market — pull and wait for recovery or settlement
                 bot['status'] = 'dog_anchor_posted'
                 bot['_price_floor_pulled'] = True
+                bot['_pull_reason'] = 'no market (bid 0¢)'
                 if not bot.get('_price_floor_since'):
                     bot['_price_floor_since'] = now
                 bot['dog_order_id'] = None
@@ -15341,6 +15383,7 @@ def _handle_phantom(bot_id, bot, actions):
                 # Pull and wait — don't stop the bot
                 bot['status'] = 'dog_anchor_posted'
                 bot['_price_floor_pulled'] = True
+                bot['_pull_reason'] = f'drift: {_drift_reason}'
                 bot['dog_order_id'] = None
                 if not bot.get('_drift_pull_logged'):
                     bot['_drift_pull_logged'] = True
@@ -16711,12 +16754,13 @@ def _handle_apex(bot_id, bot, actions):
           _held_avg = bot.get('avg_yes_cost', 0) if net_yes > net_no else bot.get('avg_no_cost', 0)
           _exit_side = 'no' if net_yes > net_no else 'yes'
           _held_side = 'yes' if net_yes > net_no else 'no'
-          # Cheapest exit: buy opposite at its ask OR sell held at its bid.
-          # Sell-held combined converts realized (= held_bid) to arb-equivalent: 100 - held_bid.
-          _exit_ask = bot.get(f'live_{_exit_side}_ask', 0)
-          _held_bid = bot.get(f'live_{_held_side}_bid', 0)
-          _buy_opp_combined = _held_avg + _exit_ask if _exit_ask > 0 else 999
-          _sell_held_combined = _held_avg + (100 - _held_bid) if _held_bid > 0 else 999
+          # Cheapest maker exit: buy opposite at its BID OR sell held at its ASK.
+          # Both are maker-realizable; matches the unrealized-P&L model so SL agrees
+          # with the position bar — won't fire while the better path is still profitable.
+          _exit_bid = bot.get(f'live_{_exit_side}_bid', 0)
+          _held_ask = bot.get(f'live_{_held_side}_ask', 0)
+          _buy_opp_combined = _held_avg + _exit_bid if _exit_bid > 0 else 999
+          _sell_held_combined = _held_avg + (100 - _held_ask) if _held_ask > 0 else 999
           _best_combined = min(_buy_opp_combined, _sell_held_combined)
           _width = bot.get('start_gap', 4) * 2
           _stop = 100 + max(_width, 6)  # floor: 6c minimum SL buffer

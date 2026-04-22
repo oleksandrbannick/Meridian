@@ -3612,49 +3612,47 @@ function displayOrderbookLadder(orderbook) {
     // Hedge room display (informational only — not used in score)
     const hedgeRoom = (dogBidPrice && favBidPrice) ? 100 - dogBidPrice - favBidPrice : 0;
 
-    // ── PHANTOM PRECISION INDEX (PPI) — 0-100, pure market physics ──
-    // No sport penalties. Four pillars: Density, Gaps, Spread, Time.
+    // ── PHANTOM PRECISION INDEX (PPI v7) — 0-100, pure market physics ──
+    // Three pillars in score: Density, Spread, Time. Gaps drive depth-override only.
     const _favPL = favAnalysis.perLevel;
     const _obTk = ob._ticker || orderbook?.ticker || '';
     const _scoreSport = detectSport(_obTk);
 
-    // 1. DENSITY SCORE (40pts) — avg contracts per penny in fav first 10 levels
+    // 1. DENSITY SCORE (30pts) [v7: 40→30] — avg contracts per penny in fav first 10 levels
     const _densityRaw = _favPL >= 100000 ? 100 : _favPL >= 50000 ? 95 : _favPL >= 10000 ? 90
         : _favPL >= 5000 ? 85 : _favPL >= 1000 ? 80 : _favPL >= 500 ? 70
         : _favPL >= 200 ? 60 : _favPL >= 100 ? 50 : _favPL >= 50 ? 40
         : _favPL >= 20 ? 30 : _favPL >= 10 ? 20 : _favPL >= 5 ? 10 : 0;
-    const densityPts = Math.round(_densityRaw * 0.4);
+    const densityPts = Math.round(_densityRaw * 0.3);
 
-    // 2. GAP PENALTY (-25pts max) — each fav gap in first 10 levels subtracts 5pts
+    // 2. GAP COUNT — kept for telemetry + depth override only [v7: dropped from score]
     const _favGapCount = favAnalysis.gaps;
     const gapPenalty = Math.min(25, _favGapCount * 5);
 
-    // 3. SPREAD MULTIPLIER (20pts) — tighter spread = safer hedge
+    // 3. SPREAD (30pts) [v7: 20→30] — strongest predictor of WR + slippage
     const _spread = (dogBidPrice && favBidPrice) ? Math.max(0, 100 - dogBidPrice - favBidPrice) : 5;
-    const spreadPts = _spread <= 1 ? 20 : _spread === 2 ? 18 : _spread === 3 ? 15 : _spread === 4 ? 12 : _spread <= 6 ? 8 : _spread <= 8 ? 4 : 0;
+    const spreadPts = _spread <= 1 ? 30 : _spread === 2 ? 27 : _spread === 3 ? 22 : _spread === 4 ? 18 : _spread <= 6 ? 12 : _spread <= 8 ? 6 : 0;
 
-    // 4. TIME-TO-BUZZER (15pts) — early = safe, late = volatile
-    // Use game phase from score data if available
+    // 4. TIME-TO-BUZZER (10pts) [v7: 15→10] — death zone is the actual time guardrail
     const _gameScoreData = window._latestGameScores || {};
     const _obTkParts = _obTk.split('-');
     const _gameKey = _obTkParts.length >= 2 ? _obTkParts[1] : _obTkParts[0];
     const _gScore = _gameScoreData[_gameKey] || {};
     const _gPeriod = _gScore.period || 0;
     const _gStatus = (_gScore.status || '').toLowerCase();
-    let timePts = 15; // default: early/pregame
+    let timePts = 10; // default: early/pregame
     if (_gStatus === 'in') {
-        // Detect late game from period
         const _maxPeriod = { 'NBA': 4, 'NHL': 3, 'MLB': 9, 'NCAAB': 2 }[_scoreSport] || 4;
-        if (_gPeriod >= _maxPeriod) timePts = 0; // final period
-        else if (_gPeriod >= _maxPeriod - 1) timePts = 5; // second to last
-        else if (_gPeriod >= Math.ceil(_maxPeriod / 2)) timePts = 10; // mid game
+        if (_gPeriod >= _maxPeriod) timePts = 0;
+        else if (_gPeriod >= _maxPeriod - 1) timePts = 3;
+        else if (_gPeriod >= Math.ceil(_maxPeriod / 2)) timePts = 7;
     } else if (_gStatus === 'post' || _gStatus === 'final') {
         timePts = 0;
     }
 
-    // PPI = Density(40) - Gaps(25) + Spread(20) + Time(15), normalized to 0-100
-    const _rawPPI = densityPts - gapPenalty + spreadPts + timePts;
-    const catchScore = Math.min(100, Math.max(0, Math.round(_rawPPI * 100 / 75)));
+    // v7: PPI = Density(30) + Spread(30) + Time(10), normalized to 0-100 (max raw = 70)
+    const _rawPPI = densityPts + spreadPts + timePts;
+    const catchScore = Math.min(100, Math.max(0, Math.round(_rawPPI * 100 / 70)));
     const catchLabel = catchScore >= 85 ? 'WALL' : catchScore >= 55 ? 'PRIME' : catchScore >= 45 ? 'TRAP' : catchScore >= 40 ? 'DEEP' : catchScore >= 35 ? 'FLOOR' : 'KILL';
     const catchCol = catchScore >= 85 ? '#00ff88' : catchScore >= 55 ? '#00ccff' : catchScore >= 45 ? '#ff8800' : catchScore >= 40 ? '#ff6600' : catchScore >= 35 ? '#ff4400' : '#ff4444';
 
@@ -3718,25 +3716,26 @@ function displayOrderbookLadder(orderbook) {
         _updateGhostPill(tk, catchScore);
     }
 
-    // Score breakdown tooltip
-    const _scoreBreakdown = `PPI: D=${densityPts}pts (${_favPL}/lvl) · G=-${gapPenalty}pts (${_favGapCount} gaps) · S=${spreadPts}pts (${_spread}¢ spread) · T=${timePts}pts`;
+    // Score breakdown tooltip (v7: G shown for context, not in score)
+    const _scoreBreakdown = `PPI: D=${densityPts}pts (${_favPL}/lvl) · S=${spreadPts}pts (${_spread}¢ spread) · T=${timePts}pts · gaps=${_favGapCount} (depth-only)`;
 
     // ── Verdict: plain-language summary of whether this market is good for phantom ──
     const roomCol = hedgeRoom >= 4 ? '#00ff88' : hedgeRoom >= 2 ? '#ffaa00' : '#ff4444';
     const roomLabel = hedgeRoom >= 4 ? 'wide spread' : hedgeRoom >= 2 ? 'ok spread' : 'tight — fav mirrors dog';
     let verdict = '', verdictCol = '';
-    // ── Depth rec driven by PPI score — aligned with backend _calculate_ppi ──
+    // ── Depth rec driven by PPI score — aligned with backend _calculate_ppi (v7) ──
     let _recDepth;
     if (catchScore >= 85) _recDepth = 4;                                    // WALL
-    else if (catchScore >= 55) _recDepth = 5;                              // PRIME
-    else if (catchScore >= 45) _recDepth = 7;                              // TRAP → merged to DEEP depth (v6c 2026-04-20)
+    else if (catchScore >= 55) _recDepth = 5;                              // PRIME / SNIPER
+    else if (catchScore >= 45) _recDepth = 7;                              // TRAP
     else if (catchScore >= 40) _recDepth = 7;                              // DEEP
     else if (catchScore >= 35) _recDepth = 8;                              // FLOOR
     else _recDepth = 0;                                                    // KILL — pull
     const _baseDepth = _recDepth;  // before gap overrides
-    // Fav gaps override (only when not KILL — gaps don't save a toxic book)
+    // Fav gaps override (v7: added fg≥4 → 8c safety belt since G no longer in score)
     if (_recDepth > 0) {
-        if (favAnalysis.gaps >= 3 && _recDepth < 7) _recDepth = 7;
+        if (favAnalysis.gaps >= 4 && _recDepth < 8) _recDepth = 8;
+        else if (favAnalysis.gaps >= 3 && _recDepth < 7) _recDepth = 7;
         else if (favAnalysis.gaps >= 2 && _recDepth < 6) _recDepth = 6;
         else if (favAnalysis.gaps >= 1 && _recDepth < 5) _recDepth = 5;
         _recDepth = Math.min(_recDepth, 12);
@@ -5944,14 +5943,14 @@ function selectMMWidth(w) {
     if (customEl && matchedPreset && document.activeElement !== customEl) customEl.value = '';
     const label = document.getElementById('mm-width-label');
     if (label) label.textContent = w + '¢';
-    // Room vs width recommendation
+    // Room vs width recommendation — target = room/2 (ceiling), be tighter than BBO
     const recEl = document.getElementById('mm-width-rec');
     if (recEl && currentArbMarket) {
         const yb = getPrice(currentArbMarket, 'yes_bid') || 0;
         const nb = getPrice(currentArbMarket, 'no_bid') || 0;
         const room = (yb > 0 && nb > 0) ? 100 - yb - nb : -1;
         if (room > 0) {
-            const recW = Math.max(2, Math.round(room * 0.7));
+            const recW = Math.max(2, Math.floor(room / 2));
             if (w < room) {
                 recEl.innerHTML = `<span style="color:#00ff88;">Room ${room}¢ — W${w} is BBO ✓</span> <span style="color:#556;">rec: W${recW}</span>`;
             } else if (w === room) {
@@ -6357,6 +6356,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 <svg width="22" height="22" viewBox="0 0 24 24" style="flex-shrink:0;filter:drop-shadow(0 0 4px #ffaa0066);"><path d="M12 2C8 2 5 5 5 9c0 2 .8 3.5 2 4.5V16c0 1 .5 2 1.5 2.5L10 22h4l1.5-3.5C16.5 18 17 17 17 16v-2.5c1.2-1 2-2.5 2-4.5 0-4-3-7-7-7z" fill="#ffaa0022" stroke="#ffaa00" stroke-width="1.5"/><circle cx="9.5" cy="9" r="1.5" fill="#ffaa00" opacity=".8"/><circle cx="14.5" cy="9" r="1.5" fill="#ffaa00" opacity=".8"/><path d="M9 13c1.5 1.5 4.5 1.5 6 0" stroke="#ffaa00" stroke-width="1" fill="none" stroke-linecap="round" opacity=".6"/></svg>
                 <span style="color:#ffaa00;font-weight:800;font-size:10px;letter-spacing:.08em;text-transform:uppercase;">PHANTOM</span>
                 <span style="color:#fff;font-weight:700;font-size:14px;">${teamName}</span>
+                ${(() => { const _tt = tennisTier(bot.ticker); return _tt ? `<span title="${_tt.full} — tier ${_tt.tier} of 3, ${_tt.liq} liquidity" style="background:${_tt.color}22;color:${_tt.color};padding:1px 6px;border-radius:4px;font-size:9px;font-weight:800;letter-spacing:0.3px;">${_tt.label} · T${_tt.tier}</span>` : ''; })()}
                 <span style="background:${borderCol}22;color:${borderCol};padding:1px 8px;border-radius:4px;font-size:10px;font-weight:700;">${statusLabel}</span>
                 ${_stopReason ? `<span style="color:#8892a6;font-size:9px;font-style:italic;">${_stopReason}</span>` : ''}
                 ${liveScoreHtml}

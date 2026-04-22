@@ -581,10 +581,10 @@
                                     <strong style="color:#ffaa00;">Ghost label: PPI 0–100</strong> (Phantom Pull Index — live from orderbook)<br>
                                     Rates the market for phantom — is the book deep enough that the hedge catches without gapping?<br>
                                     <div style="margin:4px 0 4px 8px;">
-                                        <span style="color:#00ff88;">Density (D)</span> → up to 40pts — fav contracts per level (thicker = better hedge fill)<br>
-                                        <span style="color:#00ccff;">Spread (S)</span> → up to 20pts — tight bid/ask = clean room to maneuver<br>
-                                        <span style="color:#ffaa00;">Time (T)</span> → up to 15pts — early game safer, endgame liquidity vanishes<br>
-                                        <span style="color:#ff4444;">Gap penalty (G)</span> → up to -25pts — each fav gap = -5pts (hedge skips levels)
+                                        <span style="color:#00ccff;">Spread (S)</span> → up to 30pts — tight bid/ask = clean math, biggest WR + slippage signal<br>
+                                        <span style="color:#00ff88;">Density (D)</span> → up to 30pts — fav contracts per level (thicker = better hedge fill)<br>
+                                        <span style="color:#ffaa00;">Time (T)</span> → up to 10pts — early game safer; death zone is the real time guard<br>
+                                        <span style="color:#ff8800;">Gaps</span> → not in score; bumps depth floor (1 gap→5¢, 2→6¢, 3→7¢, 4+→8¢)
                                     </div>
                                     <strong style="color:#ffaa00;">Open orderbook for detailed analysis:</strong> contracts/level, gaps, max safe qty (capped 50), depth floor rec<br><br>
                                     <span style="color:#00ff88;font-weight:700;">85+ WALL 4¢</span> &nbsp;
@@ -3203,7 +3203,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260422tennis_tiers"></script>
+    <script src="app.js?v=20260422ppi_v7"></script>
     <!-- Bottom status bar — always visible -->
     <div id="bottom-status-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#080c16;border-top:1px solid #1a2035;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;font-size:11px;">
         <span style="color:#3a4560;font-size:10px;letter-spacing:.03em;">hi irene</span>

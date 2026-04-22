@@ -3808,6 +3808,9 @@ function displayOrderbookLadder(orderbook) {
         <div style="padding:5px 8px;background:${verdictCol}11;border:1px solid ${verdictCol}33;border-radius:5px;margin-bottom:6px;">
             <div style="color:${verdictCol};font-size:10px;font-weight:700;">${verdict}</div>
         </div>
+        <div style="font-size:8px;color:#5a6484;text-align:center;letter-spacing:0.3px;margin-bottom:4px;">
+            PPI v7: <span style="color:#00ccff;">S 30</span> + <span style="color:#00ff88;">D 30</span> + <span style="color:#ffaa00;">T 10</span> · <span style="color:#ff8800;">gaps</span> bump depth (1→5¢, 2→6¢, 3→7¢, 4+→8¢)
+        </div>
         <div style="display:flex;flex-wrap:wrap;gap:4px 5px;margin-bottom:6px;font-size:9px;font-weight:700;justify-content:center;">
             <span style="color:#00ff88;background:#00ff8815;padding:2px 6px;border-radius:4px;">85+ WALL 4¢</span>
             <span style="color:#00ccff;background:#00ccff15;padding:2px 6px;border-radius:4px;">55+ PRIME 5¢</span>

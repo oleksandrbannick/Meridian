@@ -6054,7 +6054,7 @@ def _execute_phantom_hedge(bot_id):
             return
 
         # Snapshot fill-time depth for trade-record attribution (auto-depth may drift after fill).
-        # First fill wins — preserve original depth if dog re-fills later in same lifecycle.
+        # First fill of this cycle wins — cleared on repeat re-anchor so each cycle re-snaps.
         if bot.get('_anchor_depth_at_fill') is None:
             bot['_anchor_depth_at_fill'] = bot.get('anchor_depth')
 
@@ -6068,6 +6068,24 @@ def _execute_phantom_hedge(bot_id):
         hedge_ticker = bot.get('hedge_ticker', ticker)
         fav_side = bot['fav_side']
         dog_side = bot['dog_side']
+
+        # Snapshot live PPI at fill time — _ppi_launch_score is bot-lifetime (set once at
+        # bot creation, never updated). After many repeat cycles on a market that drifted,
+        # the launch score is stale and misleads trade-analytics bucketing. This captures
+        # the PPI that actually caught this specific fill. First fill of this cycle wins.
+        if bot.get('_ppi_at_fill') is None:
+            try:
+                _pf, _pfr, _pfd = _calculate_ppi(ticker, fav_side, dog_side)
+                bot['_ppi_at_fill'] = _pf
+                bot['_ppi_at_fill_rec'] = _pfr
+                if _pfd:
+                    bot['_ppi_at_fill_fg'] = _pfd.get('fg')
+                    bot['_ppi_at_fill_d'] = _pfd.get('d')
+                    bot['_ppi_at_fill_s'] = _pfd.get('s')
+                    bot['_ppi_at_fill_t'] = _pfd.get('t')
+                    bot['_ppi_at_fill_spread'] = _pfd.get('spread')
+            except Exception:
+                pass
         qty = bot.get('_partial_hedge_qty') or bot.get('quantity', 1)
         dog_price = bot['dog_price']
 
@@ -7148,6 +7166,8 @@ def _record_trade(record: dict, bot: dict = None):
         # mid-lifecycle. The depth that caught the dog is what should bucket the trade.
         record.setdefault('anchor_depth', bot.get('_anchor_depth_at_fill') or bot.get('anchor_depth'))
         # PPI launch-time snapshot (phantom only — None for other bot types)
+        # Note: ppi_launch_* is bot-lifetime (set once at bot creation). For per-trade
+        # analytics use ppi_at_fill_* below, which snapshots at each cycle's dog fill.
         record.setdefault('ppi_launch_score', bot.get('_ppi_launch_score'))
         record.setdefault('ppi_launch_d', bot.get('_ppi_launch_d'))
         record.setdefault('ppi_launch_g', bot.get('_ppi_launch_g'))
@@ -7157,6 +7177,14 @@ def _record_trade(record: dict, bot: dict = None):
         record.setdefault('ppi_launch_fg', bot.get('_ppi_launch_fg'))
         record.setdefault('ppi_launch_spread', bot.get('_ppi_launch_spread'))
         record.setdefault('ppi_launch_rec_depth', bot.get('_ppi_launch_rec_depth'))
+        # PPI at dog-fill time — per-cycle snapshot, correct bucket for trade analytics
+        record.setdefault('ppi_at_fill', bot.get('_ppi_at_fill'))
+        record.setdefault('ppi_at_fill_rec', bot.get('_ppi_at_fill_rec'))
+        record.setdefault('ppi_at_fill_fg', bot.get('_ppi_at_fill_fg'))
+        record.setdefault('ppi_at_fill_d', bot.get('_ppi_at_fill_d'))
+        record.setdefault('ppi_at_fill_s', bot.get('_ppi_at_fill_s'))
+        record.setdefault('ppi_at_fill_t', bot.get('_ppi_at_fill_t'))
+        record.setdefault('ppi_at_fill_spread', bot.get('_ppi_at_fill_spread'))
         record.setdefault('dog_bid_at_launch', bot.get('_dog_bid_at_launch'))
         record.setdefault('fav_bid_at_launch', bot.get('_fav_bid_at_launch'))
         # Derived: fav-runaway in cents (positive = fav climbed against us)
@@ -11666,10 +11694,18 @@ def create_anchor_bot():
         anchor_depth = int(data.get('anchor_depth', 0))  # 0 = use target_width as depth
         # Always compute PPI for analytics (cheap orderbook read), use it if auto_depth on
         _ppi, _ppi_rec, _ppi_d = _calculate_ppi(ticker, fav_side, dog_side)
+        # KILL guard at initial launch — mirrors the repeat-path guard (_ppi_rec==0 branch
+        # around line 15325). Without this, a bot on a toxic book posts a live order for
+        # 1-3s until the continuous KILL check pulls it. Start pulled; PPI-recovery rearms.
+        _ppi_kill_at_launch = bool(auto_depth and _ppi is not None and _ppi_rec == 0)
         if auto_depth:
             if _ppi is not None and _ppi_rec and _ppi_rec > 0:
                 anchor_depth = _ppi_rec
-                print(f'📊 AUTO DEPTH: PPI={_ppi} → depth={anchor_depth}¢ (D={_ppi_d.get("d")} G=-{_ppi_d.get("g")} S={_ppi_d.get("s")} T={_ppi_d.get("t")})')
+                print(f'📊 AUTO DEPTH: PPI={_ppi} → depth={anchor_depth}¢ (D={_ppi_d.get("d")} S={_ppi_d.get("s")} T={_ppi_d.get("t")} fg={_ppi_d.get("fg")})')
+            elif _ppi_kill_at_launch:
+                if anchor_depth <= 0:
+                    anchor_depth = 5  # placeholder; no order placed while pulled
+                print(f'⛔ AUTO DEPTH KILL: {ticker} PPI={_ppi} (<35) — starting pulled, waiting for recovery')
             elif anchor_depth <= 0:
                 anchor_depth = 5  # fallback if no book
         if anchor_depth <= 0:
@@ -11677,8 +11713,10 @@ def create_anchor_bot():
         fav_shave = 0  # fav always posts at bid, no shave needed
 
         # Smart pricing: always anchor_depth below bid — strict depth floor
-        _start_pulled = False
-        if live_dog_bid > 0:
+        _start_pulled = _ppi_kill_at_launch
+        if _ppi_kill_at_launch:
+            dog_price = 1  # placeholder, no order placed while pulled
+        elif live_dog_bid > 0:
             smart_price = min(40, max(1, live_dog_bid - anchor_depth))
             if smart_price < 2:
                 # Price too low — create bot in pulled mode, will repost when bid recovers
@@ -11790,6 +11828,8 @@ def create_anchor_bot():
             '_all_dog_order_ids':  [dog_order_id] if dog_order_id else [],
             '_fav_depth':          _fav_depth_init,
             '_price_floor_pulled': _start_pulled,
+            '_ppi_pulled':         _ppi_kill_at_launch,  # KILL at launch → gated by PPI≥40 recovery hold
+            '_pull_reason':        'ppi_kill_at_launch' if _ppi_kill_at_launch else None,
             # PPI launch-time snapshot for post-hoc analysis (no hot-path cost)
             '_ppi_launch_score':   _ppi,
             '_ppi_launch_d':       (_ppi_d or {}).get('d'),
@@ -15448,6 +15488,16 @@ def _handle_phantom(bot_id, bot, actions):
             bot['_hedge_fired'] = False  # clear so next fill can hedge
             bot['_trade_recorded'] = False
             bot.pop('_orphan_hedge', None)
+            # Clear per-cycle fill-time snapshots so next cycle's first fill re-snaps
+            # (stale values from prior cycle would mislead trade-record analytics)
+            bot.pop('_anchor_depth_at_fill', None)
+            bot.pop('_ppi_at_fill', None)
+            bot.pop('_ppi_at_fill_rec', None)
+            bot.pop('_ppi_at_fill_fg', None)
+            bot.pop('_ppi_at_fill_d', None)
+            bot.pop('_ppi_at_fill_s', None)
+            bot.pop('_ppi_at_fill_t', None)
+            bot.pop('_ppi_at_fill_spread', None)
             bot['fav_order_id'] = None
             bot['fav_price'] = None
             bot['fav_walk_count'] = 0

@@ -23479,8 +23479,8 @@ def scan_arb_opportunities():
             else:
                 catch_speed = 'slow'     # wide spread or unbalanced
 
-            # Recommended Apex MM width: 70% of room, clamped to valid range
-            recommended_width = max(2, min(20, round(width * 0.7)))
+            # Recommended Apex MM width: half the room (ceiling), clamped to valid range
+            recommended_width = max(2, min(20, width // 2))
 
             opportunities.append({
                 'ticker':        ticker_str,

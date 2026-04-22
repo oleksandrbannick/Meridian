@@ -1896,6 +1896,23 @@ function extractGameId(eventTicker) {
     return eventTicker;
 }
 
+// Tennis tier detection — liquidity tier for the specific tour.
+// T1 = ATP/WTA main tour (top money, deepest books)
+// T2 = ATP/WTA Challenger (mid tier)
+// T3 = ITF (entry level, thin books)
+function tennisTier(ticker) {
+    const u = (ticker || '').toUpperCase();
+    if (!u) return null;
+    // Order matters: check CHALLENGER before the bare ATP/WTA prefix.
+    if (u.includes('KXATPCHALLENGER')) return { label: 'ATP CH', tier: 2, color: '#ffaa00', full: 'ATP Challenger', liq: 'mid' };
+    if (u.includes('KXWTACHALLENGER')) return { label: 'WTA CH', tier: 2, color: '#ffaa00', full: 'WTA Challenger', liq: 'mid' };
+    if (u.includes('KXATP')) return { label: 'ATP', tier: 1, color: '#00d4ff', full: 'ATP Tour (top tier)', liq: 'high' };
+    if (u.includes('KXWTA')) return { label: 'WTA', tier: 1, color: '#ff66cc', full: 'WTA Tour (top tier)', liq: 'high' };
+    if (u.includes('KXITFWMATCH')) return { label: 'ITF W', tier: 3, color: '#8892a6', full: 'ITF Women (entry tier)', liq: 'thin' };
+    if (u.includes('KXITFMATCH'))  return { label: 'ITF M', tier: 3, color: '#8892a6', full: 'ITF Men (entry tier)', liq: 'thin' };
+    return null;
+}
+
 // Detect sport from event_ticker
 function detectSport(eventTicker) {
     const upper = (eventTicker || '').toUpperCase();
@@ -2348,8 +2365,16 @@ function displayEventRow(eventData, container) {
     badgeWrap.style.cssText = 'display:flex;align-items:center;gap:8px;';
 
     const sportBadge = document.createElement('span');
-    sportBadge.style.cssText = 'background: #2a3447; color: #8892a6; border-radius: 4px; padding: 2px 8px; font-size: 10px; font-weight: 600;';
-    sportBadge.textContent = sport;
+    const _tennisT = sport === 'Tennis' ? tennisTier(eventData.eventTicker) : null;
+    if (_tennisT) {
+        // Tier-colored badge with rank — makes ATP/WTA (deep books) stand out vs ITF (thin)
+        sportBadge.style.cssText = `background: ${_tennisT.color}22; color: ${_tennisT.color}; border-radius: 4px; padding: 2px 8px; font-size: 10px; font-weight: 700; letter-spacing:0.3px;`;
+        sportBadge.textContent = `🎾 ${_tennisT.label} · T${_tennisT.tier}`;
+        sportBadge.title = `${_tennisT.full} — tier ${_tennisT.tier} of 3, ${_tennisT.liq} liquidity`;
+    } else {
+        sportBadge.style.cssText = 'background: #2a3447; color: #8892a6; border-radius: 4px; padding: 2px 8px; font-size: 10px; font-weight: 600;';
+        sportBadge.textContent = sport;
+    }
     badgeWrap.appendChild(sportBadge);
 
     // Game-level P&L badge — sum across all bots on this game's markets
@@ -5944,6 +5969,27 @@ function selectMMWidth(w) {
 function selectMMWidthCustom(w) {
     if (!Number.isFinite(w) || w < 2 || w > 80) return;
     selectMMWidth(w);
+}
+
+function selectMMWidthAuto() {
+    if (!currentArbMarket) {
+        showNotification('⚠ Pick a market first');
+        return;
+    }
+    const yb = getPrice(currentArbMarket, 'yes_bid') || 0;
+    const nb = getPrice(currentArbMarket, 'no_bid') || 0;
+    const room = (yb > 0 && nb > 0) ? 100 - yb - nb : -1;
+    if (room <= 0) {
+        showNotification('⚠ Market has no room (yes_bid + no_bid >= 100)');
+        return;
+    }
+    if (room < 4) {
+        showNotification(`⚠ Room ${room}¢ is too tight for MM — use Phantom`);
+        return;
+    }
+    const recW = Math.max(2, Math.floor(room / 2));
+    selectMMWidth(recW);
+    showNotification(`◐ Auto width: room ${room}¢ → W${recW} (room/2)`);
 }
 
 function selectMMLevels(n) {

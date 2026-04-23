@@ -8884,7 +8884,7 @@ def _apex_mm_midpoint(ticker):
 def _apex_mm_target_start_gap(bot):
     """Compute target start_gap based on current room.
     Target width = room/2 → target gap = room/4.
-    Auto mode (_auto_width=True): no user floor, absolute bounds [1, 10].
+    Auto mode (_auto_width=True): no user floor, bounds [1, 20] (width 2-40c).
     Manual mode: user's start_gap acts as floor; cap at start_gap + 6."""
     user_min = bot.get('start_gap', 2)
     ticker = bot.get('ticker', '')
@@ -8899,8 +8899,9 @@ def _apex_mm_target_start_gap(bot):
     if room <= 0:
         return user_min
     if bot.get('_auto_width'):
-        # Pure room-driven: no user floor, clamp to sensible bounds
-        return max(1, min(10, room // 4))
+        # Pure room-driven: width = room/2 → gap = room/4, bounds [1, 20].
+        # Drift guard catches bid>80c before this hits the upper bound in practice.
+        return max(1, min(20, room // 4))
     target = max(user_min, int(room / 4))
     cap = bot.get('max_start_gap', user_min + 6)
     return min(target, cap)
@@ -8932,7 +8933,7 @@ def _apex_mm_sync_auto_width(bot_id, bot):
     room = 100 - yes_bid - no_bid
     if room <= 0:
         return
-    new_gap = max(1, min(10, room // 4))
+    new_gap = max(1, min(20, room // 4))
     old_gap = bot.get('start_gap', 2)
     if new_gap != old_gap:
         bot['start_gap'] = new_gap
@@ -11709,7 +11710,7 @@ def create_ladder_arb_bot():
             _room = 100 - live_yes_bid - live_no_bid
             if _room < 4:
                 return jsonify({'error': f'Room {_room}c too tight for Apex MM (need >= 4c) — use Phantom'}), 400
-            start_gap = max(1, min(10, _room // 4))
+            start_gap = max(1, min(20, _room // 4))
         yes_levels, no_levels = _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=qty_per_level, inv_limit=0)
         # Auto-compute inventory limit from ladder total (max contracts per side)
         inventory_limit = max(sum(q for _, q in yes_levels), sum(q for _, q in no_levels)) if yes_levels or no_levels else 50
@@ -15686,6 +15687,11 @@ def _handle_apex(bot_id, bot, actions):
     if now - bot.get('_last_reconcile', 0) >= 60:
         bot['_last_reconcile'] = now
         _apex_mm_reconcile_inventory(bot_id, bot)
+
+    # ── AUTO-WIDTH LIVE SYNC: keep bot['start_gap'] current even while pulled ──
+    # Without this, a pulled auto bot would show stale width on the card (last
+    # value at pull time). Guarded to flat-only inside the helper.
+    _apex_mm_sync_auto_width(bot_id, bot)
 
     # ── STATUS: mm_depth_pulled — check recovery ──
     if status == 'mm_depth_pulled':

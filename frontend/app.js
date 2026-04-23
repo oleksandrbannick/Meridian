@@ -6019,7 +6019,7 @@ function selectMMWidthAuto() {
     const label = document.getElementById('mm-width-label');
     if (label) label.innerHTML = `<span style="color:#00ff88;">AUTO</span> <span style="color:#556;font-size:10px;">(~${Math.max(2, Math.floor(room/2))}¢ now)</span>`;
     const recEl = document.getElementById('mm-width-rec');
-    if (recEl) recEl.innerHTML = `<span style="color:#00ff88;">Auto: width adapts to room every cycle (room/2, bounded 2-20¢)</span>`;
+    if (recEl) recEl.innerHTML = `<span style="color:#00ff88;">Auto: width adapts to room every cycle (room/2, bounded 2-40¢)</span>`;
     updateMMPreview();
 }
 

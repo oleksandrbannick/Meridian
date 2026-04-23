@@ -5929,12 +5929,30 @@ function updateAllWidthsPreview() {
 
 let _mmSelectedWidth = 4;
 let _mmSelectedLevels = 7;
+let _mmAutoWidth = false;
+
+function _resetAutoBtnStyle(selected) {
+    const autoBtn = document.querySelector('.mm-width-btn[data-width="auto"]');
+    if (!autoBtn) return;
+    if (selected) {
+        autoBtn.style.background = '#00ff8844';
+        autoBtn.style.borderColor = '#00ff88';
+        autoBtn.style.color = '#00ff88';
+    } else {
+        autoBtn.style.background = '#00ff8818';
+        autoBtn.style.borderColor = '#00ff8866';
+        autoBtn.style.color = '#00ff88';
+    }
+}
 
 function selectMMWidth(w) {
     _mmSelectedWidth = w;
+    _mmAutoWidth = false;
+    _resetAutoBtnStyle(false);
     document.getElementById('mm-start-gap').value = Math.round(w / 2);
     let matchedPreset = false;
     document.querySelectorAll('.mm-width-btn').forEach(btn => {
+        if (btn.dataset.width === 'auto') return;
         const bw = parseInt(btn.dataset.width);
         const sel = bw === w;
         if (sel) matchedPreset = true;
@@ -5981,17 +5999,28 @@ function selectMMWidthAuto() {
     const yb = getPrice(currentArbMarket, 'yes_bid') || 0;
     const nb = getPrice(currentArbMarket, 'no_bid') || 0;
     const room = (yb > 0 && nb > 0) ? 100 - yb - nb : -1;
-    if (room <= 0) {
-        showNotification('⚠ Market has no room (yes_bid + no_bid >= 100)');
-        return;
-    }
     if (room < 4) {
         showNotification(`⚠ Room ${room}¢ is too tight for MM — use Phantom`);
         return;
     }
-    const recW = Math.max(2, Math.floor(room / 2));
-    selectMMWidth(recW);
-    showNotification(`◐ Auto width: room ${room}¢ → W${recW} (room/2)`);
+    // Auto mode: bot recomputes width every cycle from current room.
+    // No static pick — the number shown is just a live preview.
+    _mmAutoWidth = true;
+    _mmSelectedWidth = 0;  // sentinel: "no static width"
+    _resetAutoBtnStyle(true);
+    document.querySelectorAll('.mm-width-btn').forEach(btn => {
+        if (btn.dataset.width === 'auto') return;
+        btn.style.borderColor = '#1e2740';
+        btn.style.color = '#556';
+        btn.style.background = 'transparent';
+    });
+    const customEl = document.getElementById('mm-width-custom');
+    if (customEl) customEl.value = '';
+    const label = document.getElementById('mm-width-label');
+    if (label) label.innerHTML = `<span style="color:#00ff88;">AUTO</span> <span style="color:#556;font-size:10px;">(~${Math.max(2, Math.floor(room/2))}¢ now)</span>`;
+    const recEl = document.getElementById('mm-width-rec');
+    if (recEl) recEl.innerHTML = `<span style="color:#00ff88;">Auto: width adapts to room every cycle (room/2, bounded 2-20¢)</span>`;
+    updateMMPreview();
 }
 
 function selectMMLevels(n) {
@@ -6083,9 +6112,10 @@ async function deployMarketMaker() {
     const invLimit = levels * qtyPerLevel * 2;
     const lossLimitCents = parseInt(document.getElementById('mm-loss-limit')?.value) || 0;
     const width = _mmSelectedWidth;
+    const widthLabel = _mmAutoWidth ? 'AUTO (adapts to room)' : `${width}¢`;
     const lossStr = lossLimitCents > 0 ? `Loss limit: $${(lossLimitCents/100).toFixed(2)}` : 'No loss limit';
 
-    if (!confirm(`Deploy Apex MM\n\nMarket: ${ticker}\nWidth: ${width}¢ · ${levels} rungs · ${qtyPerLevel}x/rung\n${lossStr}\n\nContinue?`)) return;
+    if (!confirm(`Deploy Apex MM\n\nMarket: ${ticker}\nWidth: ${widthLabel} · ${levels} rungs · ${qtyPerLevel}x/rung\n${lossStr}\n\nContinue?`)) return;
 
     const deployBtn = document.getElementById('deploy-btn');
     if (deployBtn) { deployBtn.disabled = true; deployBtn.textContent = 'Deploying...'; }
@@ -6103,6 +6133,7 @@ async function deployMarketMaker() {
                 inventory_limit: invLimit,
                 loss_limit_cents: lossLimitCents,
                 smart_mode: lossLimitCents > 0 ? true : false,
+                auto_width: _mmAutoWidth,
             }),
         });
         const data = await resp.json();
@@ -7092,7 +7123,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         ${historyHtml}
 
         <div style="display:flex;gap:6px;flex-wrap:wrap;padding-top:4px;font-size:9px;color:#334;">
-            <span style="color:#00d4ff;">W:${width}</span>
+            <span style="color:#00d4ff;">W:${bot._auto_width ? `<span style="color:#00ff88;">auto</span> ${width}` : width}</span>
             <span style="color:#e0e0e0;">Mid:${midpoint}</span>
             <span style="color:#ff7043;">${bot.base_qty || bot.qty_per_level || '?'}x${bot.levels || '?'}</span>
             ${room >= 0 ? `<span style="color:${roomCol};font-weight:${room < width ? 700 : 400};">Room:${room}${roomTag}</span>` : ''}
@@ -9398,7 +9429,7 @@ async function showBotDetail(botId) {
             html += `<div style="background:#0a0e1a;border:1px solid ${_sectionBorder};border-radius:10px;padding:10px 14px;margin-bottom:12px;">`;
             html += _sectionLabel('APEX CONFIG');
             html += `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:10px;">`;
-            html += `<div><span style="color:#8892a6;">Width:</span> <strong style="color:#00d4ff;">${apexWidth}¢</strong></div>`;
+            html += `<div><span style="color:#8892a6;">Width:</span> <strong style="color:#00d4ff;">${bot._auto_width ? `<span style="color:#00ff88;">AUTO</span> ${apexWidth}¢` : apexWidth + '¢'}</strong></div>`;
             html += `<div><span style="color:#8892a6;">Levels:</span> <strong style="color:#00d4ff;">${apexLevels}</strong></div>`;
             html += `<div><span style="color:#8892a6;">Qty/lvl:</span> <strong style="color:#00d4ff;">${apexQtyPerLevel}</strong></div>`;
             if (apexSmartMode > 0) html += `<div><span style="color:#8892a6;">Smart:</span> <strong style="color:#00e5ff;">${apexSmartMode} loss limit</strong></div>`;

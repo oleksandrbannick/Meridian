@@ -8832,8 +8832,9 @@ def _apex_mm_midpoint(ticker):
 
 def _apex_mm_target_start_gap(bot):
     """Compute target start_gap based on current room.
-    Target width = room/2 → target gap = room/4. Floored at user's start_gap (their min).
-    Capped at start_gap + 6 to avoid runaway widening on huge spreads."""
+    Target width = room/2 → target gap = room/4.
+    Auto mode (_auto_width=True): no user floor, absolute bounds [1, 10].
+    Manual mode: user's start_gap acts as floor; cap at start_gap + 6."""
     user_min = bot.get('start_gap', 2)
     ticker = bot.get('ticker', '')
     lob = _local_orderbooks.get(ticker)
@@ -8846,6 +8847,9 @@ def _apex_mm_target_start_gap(bot):
     room = 100 - yes_bid - no_bid
     if room <= 0:
         return user_min
+    if bot.get('_auto_width'):
+        # Pure room-driven: no user floor, clamp to sensible bounds
+        return max(1, min(10, room // 4))
     target = max(user_min, int(room / 4))
     cap = bot.get('max_start_gap', user_min + 6)
     return min(target, cap)
@@ -8854,6 +8858,35 @@ def _apex_mm_target_start_gap(bot):
 def _apex_mm_shock_active(bot):
     """True while inside the post-velocity 'Wide Mode' window."""
     return time.time() < bot.get('_shock_until', 0)
+
+
+def _apex_mm_sync_auto_width(bot_id, bot):
+    """In auto mode + flat, mutate bot['start_gap'] to current room-derived target.
+    SL and exit-target read bot['start_gap'] directly, so syncing here keeps all
+    downstream code consistent without threading 'effective_width' through every call site.
+    Never mutates while holding inventory — avoids SL band shifting under held positions.
+    No-op when _auto_width is False."""
+    if not bot.get('_auto_width'):
+        return
+    if bot.get('net_yes', 0) != 0 or bot.get('net_no', 0) != 0:
+        return
+    ticker = bot.get('ticker', '')
+    lob = _local_orderbooks.get(ticker)
+    if not lob or lob.last_update_ts <= 0:
+        return
+    yes_bid = lob.get_best_bid('yes') or 0
+    no_bid = lob.get_best_bid('no') or 0
+    if yes_bid <= 0 or no_bid <= 0:
+        return
+    room = 100 - yes_bid - no_bid
+    if room <= 0:
+        return
+    new_gap = max(1, min(10, room // 4))
+    old_gap = bot.get('start_gap', 2)
+    if new_gap != old_gap:
+        bot['start_gap'] = new_gap
+        print(f'📏 APEX MM AUTO-WIDTH: {bot_id} gap {old_gap}→{new_gap} (room={room}c, width={new_gap*2}c)')
+        bot_log('APEX_MM_AUTO_WIDTH', bot_id, {'old_gap': old_gap, 'new_gap': new_gap, 'room': room})
 
 
 def _apex_mm_effective_gap_qty(bot, base_qty):
@@ -10132,6 +10165,7 @@ def _apex_mm_cycle_reset(bot_id, bot):
         for _lv in bot.get(_sk, {}).values():
             _lv['fill_qty'] = 0
             _lv['oid'] = None
+    _apex_mm_sync_auto_width(bot_id, bot)
     _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
     _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
     yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, bot['levels'], bot['spacing'], base_qty=_eff_qty, inv_limit=bot.get('inventory_limit', 0))
@@ -10250,6 +10284,7 @@ def _apex_mm_fresh_ladder(bot_id, bot):
     # Sweep orphaned orders from previous cycles before posting fresh ladder
     _apex_mm_sweep_orphans(bot_id, bot)
 
+    _apex_mm_sync_auto_width(bot_id, bot)
     _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
     _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
     yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, bot['levels'], bot['spacing'], base_qty=_eff_qty, inv_limit=bot.get('inventory_limit', 0))
@@ -10516,6 +10551,7 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
     bot['_refill_in_progress'] = True
     try:
         base_qty = bot.get('base_qty', bot.get('qty_per_level', 10))
+        _apex_mm_sync_auto_width(bot_id, bot)
         _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
         _eff_mid = _apex_mm_skewed_midpoint(bot, stored_midpoint)
         yes_levels, no_levels = _apex_mm_levels(
@@ -11527,6 +11563,7 @@ def create_ladder_arb_bot():
 
         data = request.json or {}
         ticker = data.get('ticker', '')
+        auto_width = bool(data.get('auto_width', False))
         start_gap = int(data.get('start_gap', 4))
         levels = int(data.get('levels', 7))
         spacing = int(data.get('spacing', 1))
@@ -11536,7 +11573,7 @@ def create_ladder_arb_bot():
 
         if not ticker:
             return jsonify({'error': 'Missing ticker'}), 400
-        if start_gap < 1 or start_gap > 20:
+        if not auto_width and (start_gap < 1 or start_gap > 20):
             return jsonify({'error': 'start_gap must be 1-20'}), 400
         if levels < 1 or levels > 15:
             return jsonify({'error': 'levels must be 1-15'}), 400
@@ -11615,6 +11652,13 @@ def create_ladder_arb_bot():
 
         # Calculate midpoint and generate levels (flat sizing — scale param removed)
         midpoint = round((live_yes_bid + (100 - live_no_bid)) / 2)
+        # Auto-width mode: derive initial start_gap from current room (room/4, bounded 1-10).
+        # Runtime _apex_mm_target_start_gap will keep recomputing this each cycle.
+        if auto_width:
+            _room = 100 - live_yes_bid - live_no_bid
+            if _room < 4:
+                return jsonify({'error': f'Room {_room}c too tight for Apex MM (need >= 4c) — use Phantom'}), 400
+            start_gap = max(1, min(10, _room // 4))
         yes_levels, no_levels = _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=qty_per_level, inv_limit=0)
         # Auto-compute inventory limit from ladder total (max contracts per side)
         inventory_limit = max(sum(q for _, q in yes_levels), sum(q for _, q in no_levels)) if yes_levels or no_levels else 50
@@ -11651,6 +11695,7 @@ def create_ladder_arb_bot():
             'type': 'apex_mm',
             'status': 'market_making_active',
             'start_gap': start_gap,
+            '_auto_width': auto_width,
             'levels': levels,
             'spacing': spacing,
             'qty_per_level': qty_per_level,

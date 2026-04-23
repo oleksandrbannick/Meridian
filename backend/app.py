@@ -1599,10 +1599,10 @@ def get_depth_rec(ticker):
     if ppi is None:
         ppi, rd, ppi_det = 0, 0, {}
     tier = 'WALL' if ppi >= 85 else 'PRIME' if ppi >= 55 else 'TRAP' if ppi >= 45 else 'DEEP' if ppi >= 40 else 'FLOOR' if ppi >= 35 else 'KILL'
-    # Base depth before gap overrides (v7: TRAP=7c)
-    _base_rd = 4 if ppi >= 85 else 5 if ppi >= 55 else 7 if ppi >= 45 else 7 if ppi >= 40 else 8 if ppi >= 35 else 0
+    # Base depth before gap overrides
+    _base_rd = 4 if ppi >= 85 else 5 if ppi >= 55 else 6 if ppi >= 45 else 7 if ppi >= 40 else 8 if ppi >= 35 else 0
     _gap_bumped = rd > _base_rd and rd > 0
-    reasons = [f'PPI {ppi} {tier}: D={ppi_det.get("d",0)} S={ppi_det.get("s",0)} T={ppi_det.get("t",0)} (gaps={ppi_det.get("fg",0)})']
+    reasons = [f'PPI {ppi} {tier}: D={ppi_det.get("d",0)} G=-{ppi_det.get("g",0)} S={ppi_det.get("s",0)} T={ppi_det.get("t",0)}']
     if _gap_bumped:
         reasons.append(f'{ppi_det.get("fg",0)} fav gaps → {_base_rd}→{rd}¢')
     return jsonify({
@@ -7597,19 +7597,19 @@ def _calculate_ppi(ticker, fav_side, dog_side):
     fpl = fav_analysis['perLevel']
     fg = fav_analysis['gaps']
 
-    # 1. Density (35pts) — fav contracts/level [v7.1: 30→35, walk back from over-weighted S]
+    # 1. Density (40pts) — fav contracts/level
     _dr = 100 if fpl >= 100000 else 95 if fpl >= 50000 else 90 if fpl >= 10000 else 85 if fpl >= 5000 else 80 if fpl >= 1000 else 70 if fpl >= 500 else 60 if fpl >= 200 else 50 if fpl >= 100 else 40 if fpl >= 50 else 30 if fpl >= 20 else 20 if fpl >= 10 else 10 if fpl >= 5 else 0
-    d_pts = round(_dr * 0.35)
+    d_pts = round(_dr * 0.4)
 
-    # 2. Gap count — kept for telemetry + depth override only [v7: dropped from score, was double-counting with depth-override floor]
+    # 2. Gap penalty (-25pts max) — each fav gap subtracts 5
     g_pts = min(25, fg * 5)
 
-    # 3. Spread (25pts) [v7.1: 30→25 — was over-launching tight-spread tiny-cushion plays, $/trade collapsed in first 4h]
+    # 3. Spread (20pts)
     spread = max(0, 100 - (dog_bid or 0) - (fav_bid or 0)) if dog_bid and fav_bid else 5
-    s_pts = 25 if spread <= 1 else 22 if spread == 2 else 18 if spread == 3 else 15 if spread == 4 else 10 if spread <= 6 else 5 if spread <= 8 else 0
+    s_pts = 20 if spread <= 1 else 18 if spread == 2 else 15 if spread == 3 else 12 if spread == 4 else 8 if spread <= 6 else 4 if spread <= 8 else 0
 
-    # 4. Time (10pts) — game phase [v7: 15→10, death zone is the actual time guardrail]
-    t_pts = 10
+    # 4. Time (15pts) — game phase
+    t_pts = 15
     tu = ticker.upper()
     sport = ''
     if 'KXNBA' in tu or 'KXNCAA' in tu: sport = 'NBA'
@@ -7623,16 +7623,17 @@ def _calculate_ppi(ticker, fav_side, dog_side):
         period = sc.get('period', 0)
         max_p = {'NBA': 4, 'NHL': 3, 'MLB': 9, 'KBO': 9, 'NPB': 9, 'NCAAB': 2}.get(sport, 4)
         if period >= max_p: t_pts = 0
-        elif period >= max_p - 1: t_pts = 3
-        elif period >= max_p // 2: t_pts = 7
+        elif period >= max_p - 1: t_pts = 5
+        elif period >= max_p // 2: t_pts = 10
     elif sport == 'Tennis' and not sc:
         # No score data = Challenger/small tournament not covered by API Tennis
-        t_pts = 3
+        # Penalize: can't detect game phase, flying blind
+        t_pts = 5
 
-    _raw = d_pts + s_pts + t_pts                       # v7.1: G still excluded
-    ppi = max(0, min(100, round(_raw * 100 / 70)))     # divisor 70 (max raw = 35+25+10)
+    _raw = d_pts - g_pts + s_pts + t_pts
+    ppi = max(0, min(100, round(_raw * 100 / 75)))
 
-    # PPI → depth rec (v7.1 — same tier thresholds)
+    # PPI → depth rec (v6c — TRAP merged to 7c depth, 2026-04-20: 6c was 57% WR vs 7c 65% on last-4-day sample)
     if ppi >= 85: rec = 4                              # WALL: pristine book only
     elif ppi >= 55: rec = 5                            # PRIME/SNIPER: money zone workhorse
     elif ppi >= 45: rec = 7                            # TRAP: caution zone → post 7c for adverse-selection cushion
@@ -7640,10 +7641,8 @@ def _calculate_ppi(ticker, fav_side, dog_side):
     elif ppi >= 35: rec = 8                            # FLOOR: last stop before pull
     else: rec = 0                                      # KILL: pull
     # Fav gaps override (only when not KILL — gaps don't save a toxic book)
-    # v7: added fg≥4 → 8c safety belt (G not in score anymore, override carries the load)
     if rec > 0:
-        if fg >= 4 and rec < 8: rec = 8
-        elif fg >= 3 and rec < 7: rec = 7
+        if fg >= 3 and rec < 7: rec = 7
         elif fg >= 2 and rec < 6: rec = 6
         elif fg >= 1 and rec < 5: rec = 5
         rec = min(rec, 12)

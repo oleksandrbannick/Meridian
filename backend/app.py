@@ -5658,8 +5658,59 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     bot['status'] = 'dog_filled'
                     _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
                     _cancel_oid = bot.get('dog_order_id') if bot['dog_fill_qty'] < qty_bot else None
+                    _partial_q_snap = bot['dog_fill_qty']
                     if _cancel_oid:
-                        threading.Thread(target=lambda oid=_cancel_oid: _safe_cancel(oid, f'partial_fill_{bot_id}'), daemon=True).start()
+                        # Cancel-race handler: if the dog order filled more between partial-hedge
+                        # and cancel (classic KUKRIE/ATLTIG race), amend the resting fav hedge
+                        # to cover the extra qty at the ORIGINAL fav price instead of letting
+                        # the late reconcile post a supplemental at a worse price.
+                        def _cancel_and_reconcile(oid, bot_id_ref=bot_id, partial_q=_partial_q_snap, qty_bot_ref=qty_bot):
+                            _result = _safe_cancel(oid, f'partial_fill_{bot_id_ref}')
+                            if not (isinstance(_result, tuple) and _result[0] == 'filled'):
+                                return
+                            _actual = _result[1]
+                            _extra = _actual - partial_q
+                            if _extra <= 0:
+                                return
+                            _b = active_bots.get(bot_id_ref)
+                            if not _b:
+                                return
+                            _dog_side = _b.get('dog_side', 'no')
+                            _b['dog_fill_qty'] = max(_b.get('dog_fill_qty', 0), _actual)
+                            _b[f'{_dog_side}_fill_qty'] = _b['dog_fill_qty']
+                            _fav_oid = _b.get('fav_order_id')
+                            _fav_filled = _b.get('fav_fill_qty') or 0
+                            # Amend path: fav still has resting qty — bump count at original price.
+                            # If fav already fully filled, fall through to existing reconcile-supplemental at completion.
+                            if _fav_oid and _fav_filled < partial_q:
+                                _fav_side = _b.get('fav_side', 'no')
+                                _fav_price = _b.get('fav_price')
+                                try:
+                                    api_rate_limiter.wait(priority=True)
+                                    _amend_kw = {f'{_fav_side}_price': _fav_price}
+                                    _amend_resp = kalshi_client.amend_order(
+                                        _fav_oid, ticker=_b.get('hedge_ticker') or _b.get('ticker'),
+                                        side=_fav_side, count=_actual, **_amend_kw
+                                    )
+                                    _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
+                                    _new_oid = _amend_ord.get('order_id', '')
+                                    if _new_oid and _new_oid != _fav_oid:
+                                        _b.setdefault('_all_hedge_order_ids', []).append(_fav_oid)
+                                        _b['fav_order_id'] = _new_oid
+                                        if _fav_side == 'yes': _b['yes_order_id'] = _new_oid
+                                        else: _b['no_order_id'] = _new_oid
+                                    _b['_partial_hedge_qty'] = _actual
+                                    _b['_active_fav_qty'] = _actual
+                                    print(f'✅ CANCEL-RACE AMEND: {bot_id_ref} hedge qty {partial_q}→{_actual} @{_fav_price}¢ (extra {_extra} absorbed)')
+                                    bot_log('PHANTOM_CANCEL_RACE_AMEND', bot_id_ref, {
+                                        'old_qty': partial_q, 'new_qty': _actual, 'extra': _extra, 'fav_price': _fav_price,
+                                    })
+                                except Exception as _e:
+                                    print(f'⚠ CANCEL-RACE AMEND FAILED: {bot_id_ref} {_e} — reconcile will supplemental later')
+                                    bot_log('PHANTOM_CANCEL_RACE_AMEND_FAIL', bot_id_ref, {
+                                        'old_qty': partial_q, 'new_qty': _actual, 'error': str(_e)[:200],
+                                    }, level='WARN')
+                        threading.Thread(target=_cancel_and_reconcile, args=(_cancel_oid,), daemon=True).start()
                     print(f'⚡ WS PHANTOM PARTIAL HEDGE: {bot_id} {bot["dog_fill_qty"]}/{qty_bot} filled → hedging now, cancelling rest async')
                     # Skip save_state — deferred to hedge fn (line 3508)
                     break

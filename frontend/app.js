@@ -3612,26 +3612,26 @@ function displayOrderbookLadder(orderbook) {
     // Hedge room display (informational only — not used in score)
     const hedgeRoom = (dogBidPrice && favBidPrice) ? 100 - dogBidPrice - favBidPrice : 0;
 
-    // ── PHANTOM PRECISION INDEX (PPI v7) — 0-100, pure market physics ──
+    // ── PHANTOM PRECISION INDEX (PPI v7.1) — 0-100, pure market physics ──
     // Three pillars in score: Density, Spread, Time. Gaps drive depth-override only.
     const _favPL = favAnalysis.perLevel;
     const _obTk = ob._ticker || orderbook?.ticker || '';
     const _scoreSport = detectSport(_obTk);
 
-    // 1. DENSITY SCORE (30pts) [v7: 40→30] — avg contracts per penny in fav first 10 levels
+    // 1. DENSITY SCORE (35pts) [v7.1: 30→35, walk back from over-weighted S]
     const _densityRaw = _favPL >= 100000 ? 100 : _favPL >= 50000 ? 95 : _favPL >= 10000 ? 90
         : _favPL >= 5000 ? 85 : _favPL >= 1000 ? 80 : _favPL >= 500 ? 70
         : _favPL >= 200 ? 60 : _favPL >= 100 ? 50 : _favPL >= 50 ? 40
         : _favPL >= 20 ? 30 : _favPL >= 10 ? 20 : _favPL >= 5 ? 10 : 0;
-    const densityPts = Math.round(_densityRaw * 0.3);
+    const densityPts = Math.round(_densityRaw * 0.35);
 
     // 2. GAP COUNT — kept for telemetry + depth override only [v7: dropped from score]
     const _favGapCount = favAnalysis.gaps;
     const gapPenalty = Math.min(25, _favGapCount * 5);
 
-    // 3. SPREAD (30pts) [v7: 20→30] — strongest predictor of WR + slippage
+    // 3. SPREAD (25pts) [v7.1: 30→25 — was over-launching tight-spread tiny-cushion plays]
     const _spread = (dogBidPrice && favBidPrice) ? Math.max(0, 100 - dogBidPrice - favBidPrice) : 5;
-    const spreadPts = _spread <= 1 ? 30 : _spread === 2 ? 27 : _spread === 3 ? 22 : _spread === 4 ? 18 : _spread <= 6 ? 12 : _spread <= 8 ? 6 : 0;
+    const spreadPts = _spread <= 1 ? 25 : _spread === 2 ? 22 : _spread === 3 ? 18 : _spread === 4 ? 15 : _spread <= 6 ? 10 : _spread <= 8 ? 5 : 0;
 
     // 4. TIME-TO-BUZZER (10pts) [v7: 15→10] — death zone is the actual time guardrail
     const _gameScoreData = window._latestGameScores || {};
@@ -3716,8 +3716,8 @@ function displayOrderbookLadder(orderbook) {
         _updateGhostPill(tk, catchScore);
     }
 
-    // Score breakdown tooltip (v7: G shown for context, not in score)
-    const _scoreBreakdown = `PPI: D=${densityPts}pts (${_favPL}/lvl) · S=${spreadPts}pts (${_spread}¢ spread) · T=${timePts}pts · gaps=${_favGapCount} (depth-only)`;
+    // Score breakdown tooltip (v7.1: D=35 / S=25 / T=10 / G=depth-only)
+    const _scoreBreakdown = `PPI: D=${densityPts}/35 (${_favPL}/lvl) · S=${spreadPts}/25 (${_spread}¢) · T=${timePts}/10 · gaps=${_favGapCount} (depth-only)`;
 
     // ── Verdict: plain-language summary of whether this market is good for phantom ──
     const roomCol = hedgeRoom >= 4 ? '#00ff88' : hedgeRoom >= 2 ? '#ffaa00' : '#ff4444';
@@ -3809,7 +3809,7 @@ function displayOrderbookLadder(orderbook) {
             <div style="color:${verdictCol};font-size:10px;font-weight:700;">${verdict}</div>
         </div>
         <div style="font-size:8px;color:#5a6484;text-align:center;letter-spacing:0.3px;margin-bottom:4px;">
-            PPI v7: <span style="color:#00ccff;">S 30</span> + <span style="color:#00ff88;">D 30</span> + <span style="color:#ffaa00;">T 10</span> · <span style="color:#ff8800;">gaps</span> bump depth (1→5¢, 2→6¢, 3→7¢, 4+→8¢)
+            PPI v7.1: <span style="color:#00ff88;">D 35</span> + <span style="color:#00ccff;">S 25</span> + <span style="color:#ffaa00;">T 10</span> · <span style="color:#ff8800;">gaps</span> bump depth (1→5¢, 2→6¢, 3→7¢, 4+→8¢)
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:4px 5px;margin-bottom:6px;font-size:9px;font-weight:700;justify-content:center;">
             <span style="color:#00ff88;background:#00ff8815;padding:2px 6px;border-radius:4px;">85+ WALL 4¢</span>

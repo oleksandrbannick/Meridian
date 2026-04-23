@@ -7546,16 +7546,16 @@ def _calculate_ppi(ticker, fav_side, dog_side):
     fpl = fav_analysis['perLevel']
     fg = fav_analysis['gaps']
 
-    # 1. Density (30pts) — fav contracts/level [v7: 40→30]
+    # 1. Density (35pts) — fav contracts/level [v7.1: 30→35, walk back from over-weighted S]
     _dr = 100 if fpl >= 100000 else 95 if fpl >= 50000 else 90 if fpl >= 10000 else 85 if fpl >= 5000 else 80 if fpl >= 1000 else 70 if fpl >= 500 else 60 if fpl >= 200 else 50 if fpl >= 100 else 40 if fpl >= 50 else 30 if fpl >= 20 else 20 if fpl >= 10 else 10 if fpl >= 5 else 0
-    d_pts = round(_dr * 0.3)
+    d_pts = round(_dr * 0.35)
 
     # 2. Gap count — kept for telemetry + depth override only [v7: dropped from score, was double-counting with depth-override floor]
     g_pts = min(25, fg * 5)
 
-    # 3. Spread (30pts) [v7: 20→30 — strongest predictor of WR + slippage in 7d data]
+    # 3. Spread (25pts) [v7.1: 30→25 — was over-launching tight-spread tiny-cushion plays, $/trade collapsed in first 4h]
     spread = max(0, 100 - (dog_bid or 0) - (fav_bid or 0)) if dog_bid and fav_bid else 5
-    s_pts = 30 if spread <= 1 else 27 if spread == 2 else 22 if spread == 3 else 18 if spread == 4 else 12 if spread <= 6 else 6 if spread <= 8 else 0
+    s_pts = 25 if spread <= 1 else 22 if spread == 2 else 18 if spread == 3 else 15 if spread == 4 else 10 if spread <= 6 else 5 if spread <= 8 else 0
 
     # 4. Time (10pts) — game phase [v7: 15→10, death zone is the actual time guardrail]
     t_pts = 10
@@ -7578,10 +7578,10 @@ def _calculate_ppi(ticker, fav_side, dog_side):
         # No score data = Challenger/small tournament not covered by API Tennis
         t_pts = 3
 
-    _raw = d_pts + s_pts + t_pts                       # v7: G removed from score
-    ppi = max(0, min(100, round(_raw * 100 / 70)))     # v7: divisor 75→70 (max raw = 30+30+10)
+    _raw = d_pts + s_pts + t_pts                       # v7.1: G still excluded
+    ppi = max(0, min(100, round(_raw * 100 / 70)))     # divisor 70 (max raw = 35+25+10)
 
-    # PPI → depth rec (v7 — same tier thresholds, validated by 7d phantom data)
+    # PPI → depth rec (v7.1 — same tier thresholds)
     if ppi >= 85: rec = 4                              # WALL: pristine book only
     elif ppi >= 55: rec = 5                            # PRIME/SNIPER: money zone workhorse
     elif ppi >= 45: rec = 7                            # TRAP: caution zone → post 7c for adverse-selection cushion

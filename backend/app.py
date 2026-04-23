@@ -13730,24 +13730,13 @@ def _handle_phantom(bot_id, bot, actions):
                 save_state()
                 return
 
-        # ── Tennis blowout pull ──
-        # Completed set 6-0/6-1/6-2 on the side bot's dog is betting on.
-        # Losing player rarely comes back from that; dog is a falling knife.
-        if dog_filled == 0 and dog_order_id and not bot.get('_blowout_pulled'):
-            _bl_hit, _bl_reason, _bl_loser, _bl_set_idx = _is_tennis_blowout(ticker, bot)
-            if _bl_hit:
-                print(f'🎾 BLOWOUT PULL: {bot_id} {_bl_reason} — pulling dog')
-                _bl_rc = _safe_cancel(dog_order_id, f'blowout_pull_{bot_id}')
-                if _bl_rc is not False:
-                    bot['dog_order_id'] = None
-                bot['_price_floor_pulled'] = True
-                bot['_blowout_pulled'] = True
-                bot['_blowout_reason'] = _bl_reason
-                bot['_blowout_loser_code'] = _bl_loser
-                bot['_blowout_set_idx'] = _bl_set_idx
-                bot_log('PHANTOM_BLOWOUT_PULL', bot_id, {'reason': _bl_reason, 'loser': _bl_loser, 'set_idx': _bl_set_idx, 'dog_side': bot.get('dog_side')})
-                save_state()
-                return
+        # ── Tennis blowout pull — DISABLED 2026-04-23 ──
+        # Was killing tradeable post-blowout swings (e.g. McKennon vs Legout: set 1
+        # 6-2 to McKennon, set 2 6-2 to Legout, set 3 in progress = competitive
+        # match with violent price swings = exactly when phantom catches fills,
+        # but blowout guard pulled the dog right when opportunity peaked).
+        # Keep the helper functions in place (still used by reversal recovery to
+        # unstick legacy blowout-pulled bots). No new pulls fire.
         # ── Stale _ppi_pulled recovery ──
         # If a bot has _ppi_pulled=True but already has an active dog order (slipped
         # through the old broken recovery gate), re-enable PPI protection so the
@@ -24204,6 +24193,25 @@ def _run_startup():
 
     load_state()
     run_migrations()
+
+    # One-shot cleanup: blowout guard disabled 2026-04-23. Clear stale
+    # _blowout_pulled flags so currently-pulled bots resume on next monitor cycle.
+    # _price_floor_pulled stays — that's a separate guard.
+    _blowout_cleared = 0
+    for _b_clean in active_bots.values():
+        if _b_clean.get('_blowout_pulled'):
+            _b_clean['_blowout_pulled'] = False
+            _b_clean['_blowout_reason'] = None
+            _b_clean['_blowout_loser_code'] = None
+            _b_clean['_blowout_set_idx'] = None
+            # Clear price_floor_pulled too IF blowout was the only reason it was set.
+            # The blowout PULL site set both flags together; clearing both lets
+            # the bot fully resume rather than getting stuck on price_floor.
+            if _b_clean.get('_pull_reason') is None:
+                _b_clean['_price_floor_pulled'] = False
+            _blowout_cleared += 1
+    if _blowout_cleared:
+        print(f'🧹 BLOWOUT CLEANUP: cleared stale flags on {_blowout_cleared} bot(s) — guard disabled')
 
     # ── Auto-login at startup if config.json exists ──
     try:

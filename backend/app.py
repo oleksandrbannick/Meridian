@@ -5328,7 +5328,9 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
             best_combined = min(buy_opp, sell_held)
 
             width = bot.get('start_gap', 4) * 2
-            stop = 100 + max(width, 6)  # floor: 6c above 100 minimum, prevents W2 from insta-SL
+            # Stop = 100 + width (symmetric with edge). min_sl_margin defaults to 0
+            # so SL=width; user can raise per-bot for noisy sports to restore old 6c floor.
+            stop = 100 + max(width, bot.get('min_sl_margin', 0))
 
             if best_combined >= stop and best_combined < 999:
                 _hm = _apex_mm_hard_margin(width)
@@ -5921,7 +5923,10 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                         bot['_velocity_gated'] = True
                         bot['_velocity_gated_side'] = matched_side
                         bot['_velocity_gated_at'] = _vf_now
-                        print(f'🚨 APEX MM VELOCITY GATE: {bot_id} {matched_side.upper()} — {_vg_count} fills in 500ms, cancelling entry orders')
+                        # Shock cooldown: enter 'Wide Mode' for 15s — 2x gap, 0.5x qty
+                        # Capture fat-tail fills without getting steamrolled by momentum.
+                        bot['_shock_until'] = _vf_now + 15
+                        print(f'🚨 APEX MM VELOCITY GATE: {bot_id} {matched_side.upper()} — {_vg_count} fills in 500ms, cancelling entry orders + 15s WIDE MODE')
                         bot_log('APEX_MM_VELOCITY_GATE', bot_id, {
                             'side': matched_side, 'fills_in_window': _vg_count,
                             'net_yes': bot.get('net_yes', 0), 'net_no': bot.get('net_no', 0),
@@ -8818,9 +8823,163 @@ def _apex_mm_midpoint(ticker):
     return round((yes_bid + (100 - no_bid)) / 2)
 
 
-def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, scale=True, inv_limit=0):
+def _apex_mm_target_start_gap(bot):
+    """Compute target start_gap based on current room.
+    Target width = room/2 → target gap = room/4. Floored at user's start_gap (their min).
+    Capped at start_gap + 6 to avoid runaway widening on huge spreads."""
+    user_min = bot.get('start_gap', 2)
+    ticker = bot.get('ticker', '')
+    lob = _local_orderbooks.get(ticker)
+    if not lob or lob.last_update_ts <= 0:
+        return user_min
+    yes_bid = lob.get_best_bid('yes') or 0
+    no_bid = lob.get_best_bid('no') or 0
+    if yes_bid <= 0 or no_bid <= 0:
+        return user_min
+    room = 100 - yes_bid - no_bid
+    if room <= 0:
+        return user_min
+    target = max(user_min, int(room / 4))
+    cap = bot.get('max_start_gap', user_min + 6)
+    return min(target, cap)
+
+
+def _apex_mm_shock_active(bot):
+    """True while inside the post-velocity 'Wide Mode' window."""
+    return time.time() < bot.get('_shock_until', 0)
+
+
+def _apex_mm_effective_gap_qty(bot, base_qty):
+    """Apply runtime adaptations to start_gap and base_qty:
+       - Dynamic width: widen when room allows (room/4 target, capped).
+       - Shock cooldown: 2x gap, 0.5x qty for 15s after a velocity event.
+    Returns (effective_gap, effective_qty)."""
+    eff_gap = _apex_mm_target_start_gap(bot)
+    eff_qty = max(1, int(base_qty))
+    if _apex_mm_shock_active(bot):
+        eff_gap = int(eff_gap * 2)
+        eff_qty = max(1, int(eff_qty * 0.5))
+    return eff_gap, eff_qty
+
+
+def _apex_mm_skewed_midpoint(bot, raw_midpoint):
+    """Inventory-aware midpoint skew (Avellaneda-Stoikov style).
+    Long YES → lower midpoint (cheaper YES bids, pricier NO bids → encourage NO fills).
+    Long NO → raise midpoint. Linear in net_position / inventory_limit, capped by skew_k.
+    Returns int cents."""
+    inv_limit = bot.get('inventory_limit', 0)
+    if inv_limit <= 0:
+        return raw_midpoint
+    net_pos = bot.get('net_yes', 0) - bot.get('net_no', 0)
+    if net_pos == 0:
+        return raw_midpoint
+    skew_k = bot.get('skew_k', 4)  # max cents of skew at full inventory
+    ratio = max(-1.0, min(1.0, net_pos / inv_limit))
+    skew = int(round(-skew_k * ratio))
+    return max(1, min(99, raw_midpoint + skew))
+
+
+def _apex_mm_reconcile_inventory(bot_id, bot):
+    """REST-based inventory reconcile. Compare bot's net_yes/net_no with Kalshi truth.
+    UPWARD mismatch (Kalshi has more): infer cost from posted ladder, add to inventory, post exit.
+    DOWNWARD mismatch (bot has phantom): clamp to Kalshi.
+    Returns True if reconcile ran successfully (used or skipped for valid reason)."""
+    ticker = bot.get('ticker', '')
+    if not ticker:
+        return False
+    if not api_read_limiter.try_wait():
+        return False  # rate-limited; skip this tick
+    try:
+        _pos = kalshi_client.get_positions(ticker=ticker)
+        _pos_list = _pos.get('market_positions', _pos.get('positions', []))
+        _kalshi_net = 0
+        for _p in _pos_list:
+            if _p.get('ticker') == ticker:
+                _kalshi_net = _parse_position_qty(_p)
+                break
+    except Exception as _e:
+        print(f'⚠ APEX MM RECONCILE FAIL: {bot_id} {_e}')
+        return False
+
+    _ky = max(0, _kalshi_net)
+    _kn = max(0, -_kalshi_net)
+    _bot_yes = bot.get('net_yes', 0)
+    _bot_no = bot.get('net_no', 0)
+    if _ky == _bot_yes and _kn == _bot_no:
+        return True  # in sync, nothing to do
+
+    # Infer missing-inventory cost from posted ladder rungs (sweep top→bottom).
+    def _infer_orphan_cost(posted, missing_qty, fallback_price):
+        remaining = missing_qty
+        total = 0.0
+        consumed = 0
+        try:
+            rungs = sorted(
+                [(int(p), int(o.get('qty', 0) or 0)) for p, o in (posted or {}).items()],
+                key=lambda x: x[0], reverse=True
+            )
+        except Exception:
+            rungs = []
+        for price, qty in rungs:
+            if remaining <= 0:
+                break
+            take = min(qty, remaining)
+            if take <= 0:
+                continue
+            total += price * take
+            consumed += take
+            remaining -= take
+        if remaining > 0:
+            total += fallback_price * remaining
+            consumed += remaining
+        return (total / consumed) if consumed > 0 else fallback_price
+
+    if _ky > _bot_yes:
+        _m = _ky - _bot_yes
+        _fl = [f for f in bot.get('_fill_log', []) if f.get('side') == 'yes' and not f.get('is_exit')]
+        _fb = _fl[-1]['price'] if _fl else bot.get('midpoint', 50)
+        _ec = _infer_orphan_cost(bot.get('yes_orders', {}), _m, _fb)
+        bot['net_yes'] = _ky
+        bot['total_yes_cost'] = bot.get('total_yes_cost', 0) + (_ec * _m)
+        bot['avg_yes_cost'] = round(bot['total_yes_cost'] / _ky) if _ky > 0 else 0
+    if _kn > _bot_no:
+        _m = _kn - _bot_no
+        _fl = [f for f in bot.get('_fill_log', []) if f.get('side') == 'no' and not f.get('is_exit')]
+        _fb = _fl[-1]['price'] if _fl else (100 - bot.get('midpoint', 50))
+        _ec = _infer_orphan_cost(bot.get('no_orders', {}), _m, _fb)
+        bot['net_no'] = _kn
+        bot['total_no_cost'] = bot.get('total_no_cost', 0) + (_ec * _m)
+        bot['avg_no_cost'] = round(bot['total_no_cost'] / _kn) if _kn > 0 else 0
+    if _ky < _bot_yes:
+        print(f'🛡️ RECONCILE CLAMP DOWN: {bot_id} YES {_bot_yes}→{_ky} (Kalshi authoritative)')
+        bot['net_yes'] = _ky
+        if _ky > 0:
+            bot['total_yes_cost'] = bot.get('avg_yes_cost', 0) * _ky
+        else:
+            bot['avg_yes_cost'] = 0
+            bot['total_yes_cost'] = 0
+    if _kn < _bot_no:
+        print(f'🛡️ RECONCILE CLAMP DOWN: {bot_id} NO {_bot_no}→{_kn} (Kalshi authoritative)')
+        bot['net_no'] = _kn
+        if _kn > 0:
+            bot['total_no_cost'] = bot.get('avg_no_cost', 0) * _kn
+        else:
+            bot['avg_no_cost'] = 0
+            bot['total_no_cost'] = 0
+    bot_log('APEX_MM_RECONCILE', bot_id, {
+        'kalshi_yes': _ky, 'kalshi_no': _kn,
+        'old_yes': _bot_yes, 'old_no': _bot_no,
+    })
+    if _ky > 0 or _kn > 0:
+        _held = 'yes' if _ky > _kn else 'no'
+        print(f'🚨 RECONCILE FOUND INVENTORY: {bot_id} {_ky}Y/{_kn}N — posting exit')
+        threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _held), daemon=True).start()
+    return True
+
+
+def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, inv_limit=0):
     """Generate YES and NO bid prices + quantities for the ladder.
-    Flat sizing: every rung gets base_qty (no scaling).
+    Flat sizing: every rung gets base_qty (per v2 blueprint — predictable sweep damage).
     If inv_limit > 0, total qty per side is capped at that limit.
     Returns (yes_levels: list[(price, qty)], no_levels: list[(price, qty)]) sorted descending by price."""
     yes_levels = []
@@ -9156,7 +9315,9 @@ def _apex_mm_repost_ladder(bot_id, bot):
     else:
         # Sweep orphaned orders before posting fresh ladder
         _apex_mm_sweep_orphans(bot_id, bot)
-        yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, scale=bot.get('auto_scale', False), inv_limit=bot.get('inventory_limit', 0))
+        _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
+        _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
+        yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, bot['levels'], bot['spacing'], base_qty=_eff_qty, inv_limit=bot.get('inventory_limit', 0))
         if not yes_levels and not no_levels:
             return
         success = _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
@@ -9503,8 +9664,15 @@ def _apex_mm_walk_up(bot_id, bot):
     live_combined = avg_held + live_exit_bid
 
     # ── SOAK: hold at target for queue priority ──
-    SOAK_SECONDS = 25
-    MAX_SOAK_SECONDS = 35  # hard cap — no infinite waiting
+    # Velocity-scaled: fast market = short soak (don't sit while price runs).
+    # Calm market = full 25s for queue priority.
+    _vfills = bot.get('_velocity_fills', [])
+    if _vfills:
+        _recent = sum(1 for f in _vfills if now - f.get('ts', 0) <= 5)
+        SOAK_SECONDS = max(5, int(25 - (_recent / 5.0) * 5))
+    else:
+        SOAK_SECONDS = 25
+    MAX_SOAK_SECONDS = max(SOAK_SECONDS + 5, 35)  # hard cap — no infinite waiting
     soak_start = bot.get('_exit_soak_start') or bot.get('_exit_posted_at', now)
     if not bot.get('_exit_soak_start'):
         bot['_exit_soak_start'] = soak_start
@@ -9957,7 +10125,9 @@ def _apex_mm_cycle_reset(bot_id, bot):
         for _lv in bot.get(_sk, {}).values():
             _lv['fill_qty'] = 0
             _lv['oid'] = None
-    yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, scale=bot.get('auto_scale', False), inv_limit=bot.get('inventory_limit', 0))
+    _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
+    _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
+    yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, bot['levels'], bot['spacing'], base_qty=_eff_qty, inv_limit=bot.get('inventory_limit', 0))
     _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
     bot['midpoint'] = midpoint
     bot['_skew_active'] = False
@@ -10073,7 +10243,9 @@ def _apex_mm_fresh_ladder(bot_id, bot):
     # Sweep orphaned orders from previous cycles before posting fresh ladder
     _apex_mm_sweep_orphans(bot_id, bot)
 
-    yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, scale=bot.get('auto_scale', False), inv_limit=bot.get('inventory_limit', 0))
+    _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
+    _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
+    yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, bot['levels'], bot['spacing'], base_qty=_eff_qty, inv_limit=bot.get('inventory_limit', 0))
     _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
     bot['midpoint'] = midpoint
     bot['_skew_active'] = False
@@ -10337,9 +10509,11 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
     bot['_refill_in_progress'] = True
     try:
         base_qty = bot.get('base_qty', bot.get('qty_per_level', 10))
+        _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
+        _eff_mid = _apex_mm_skewed_midpoint(bot, stored_midpoint)
         yes_levels, no_levels = _apex_mm_levels(
-            stored_midpoint, bot['start_gap'], bot['levels'], bot['spacing'],
-            base_qty=base_qty, scale=bot.get('auto_scale', False),
+            _eff_mid, _eff_gap, bot['levels'], bot['spacing'],
+            base_qty=_eff_qty,
             inv_limit=bot.get('inventory_limit', 0)
         )
 
@@ -10746,6 +10920,8 @@ def _apex_mm_exit_tick(bot_id, bot):
     # In wide markets (50c+ spread) a sell-held at the ask waits for someone to cross the whole
     # spread. Meanwhile buy-opposite at the opposite bid (maker) completes the arb immediately
     # at a profitable combined. Cancel the sell, post buy-opp at bid, always maker.
+    # Bidirectional: both sell→buy AND buy→sell flips supported (with 2c hysteresis to prevent
+    # ping-pong when costs are within a tick of each other).
     _net_y = bot.get('net_yes', 0)
     _net_n = bot.get('net_no', 0)
     if _net_y or _net_n:
@@ -10753,8 +10929,43 @@ def _apex_mm_exit_tick(bot_id, bot):
         _opp_side_f = 'no' if _held_side_f == 'yes' else 'yes'
         _held_avg_f = bot.get(f'avg_{_held_side_f}_cost', 0)
         _opp_bid_f = bot.get(f'live_{_opp_side_f}_bid', 0)
+        _held_ask_f = bot.get(f'live_{_held_side_f}_ask', 0)
         _sell_info_f = bot.get('_exit_sell_oids', {}).get(_held_side_f)
+        _buy_info_f = bot.get('_exit_sell_oids', {}).get(_opp_side_f)
         _has_sell_held = bool(_sell_info_f and _sell_info_f.get('oid') and _sell_info_f.get('action') == 'sell')
+        _has_buy_opp = bool(_buy_info_f and _buy_info_f.get('oid') and _buy_info_f.get('action') == 'buy')
+        # Cost of each path (lower = better)
+        _cost_buy_opp_f = (_held_avg_f + _opp_bid_f - 100) if _opp_bid_f > 0 else 999
+        _cost_sell_held_f = (_held_avg_f - _held_ask_f) if _held_ask_f > 0 else 999
+        # Reverse flip: buy_opp posted but sell_held now cheaper by 2c+ → flip back
+        if _has_buy_opp and _held_avg_f > 0 and _held_ask_f > 0 and _cost_sell_held_f < _cost_buy_opp_f - 2:
+            _cr_rf = _safe_cancel(_buy_info_f['oid'], f'apex_mm_rflip_{bot_id}')
+            if isinstance(_cr_rf, tuple) and _cr_rf[0] == 'filled':
+                print(f'⚡ APEX MM REVERSE-FLIP CANCEL-RACE: {bot_id} buy-opp filled {_cr_rf[1]} during flip')
+                _buy_info_f['oid'] = None
+                return
+            _buy_info_f['oid'] = None
+            _qty_rf = _net_y if _held_side_f == 'yes' else _net_n
+            try:
+                _resp_rf, _actual_rf = create_order_maker(ticker, _held_side_f, 'sell', _qty_rf, _held_ask_f)
+                _oid_rf = _resp_rf.get('order', {}).get('order_id', '') if isinstance(_resp_rf, dict) else ''
+                if _oid_rf:
+                    bot['_exit_sell_oids'].pop(_opp_side_f, None)
+                    bot['_exit_sell_oids'][_held_side_f] = {
+                        'oid': _oid_rf, 'qty': _qty_rf, 'price': _actual_rf, 'posted_at': time.time(),
+                        'action': 'sell', 'shadow_mode': True,
+                    }
+                    bot.setdefault('_all_placed_order_ids', []).append(_oid_rf)
+                    print(f'🔁 APEX MM REVERSE-FLIP TO SELL-HELD: {bot_id} buy {_opp_side_f.upper()}@{_opp_bid_f}c → sell {_held_side_f.upper()} {_qty_rf}x @{_actual_rf}c (sellback cost {_cost_sell_held_f}c < arb cost {_cost_buy_opp_f}c)')
+                    bot_log('APEX_MM_EXIT_FLIP', bot_id, {
+                        'from': 'buy_opp', 'to': 'sell_held',
+                        'held_side': _held_side_f, 'held_avg': _held_avg_f,
+                        'cost_sell': _cost_sell_held_f, 'cost_buy_opp': _cost_buy_opp_f, 'qty': _qty_rf,
+                    })
+                    save_state()
+                    return
+            except Exception as _rfe:
+                print(f'⚠ APEX MM REVERSE-FLIP FAILED: {bot_id}: {_rfe}')
         _buy_opp_combined_f = (_held_avg_f + _opp_bid_f) if _opp_bid_f > 0 else 999
         if _has_sell_held and _held_avg_f > 0 and _opp_bid_f > 0 and _buy_opp_combined_f < 100:
             _cr_f = _safe_cancel(_sell_info_f['oid'], f'apex_mm_flip_{bot_id}')
@@ -11396,9 +11607,9 @@ def create_ladder_arb_bot():
         if drift_max >= 80:
             return jsonify({'error': f'Drift guard: max side {drift_max}c — market too decided'}), 400
 
-        # Calculate midpoint and generate levels with auto-scale qty
+        # Calculate midpoint and generate levels (flat sizing — scale param removed)
         midpoint = round((live_yes_bid + (100 - live_no_bid)) / 2)
-        yes_levels, no_levels = _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=qty_per_level, scale=auto_scale, inv_limit=0)
+        yes_levels, no_levels = _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=qty_per_level, inv_limit=0)
         # Auto-compute inventory limit from ladder total (max contracts per side)
         inventory_limit = max(sum(q for _, q in yes_levels), sum(q for _, q in no_levels)) if yes_levels or no_levels else 50
 
@@ -16519,102 +16730,19 @@ def _handle_apex(bot_id, bot, actions):
     except Exception:
         pass
 
+    # ── HEARTBEAT RECONCILE: 60s cadence regardless of state ──
+    # Catches WS dropouts / Cloudflare hiccups while actively quoting (was
+    # only firing while pulled — invisible inventory drift caused orphans).
+    if now - bot.get('_last_reconcile', 0) >= 60:
+        bot['_last_reconcile'] = now
+        _apex_mm_reconcile_inventory(bot_id, bot)
+
     # ── STATUS: mm_depth_pulled — check recovery ──
     if status == 'mm_depth_pulled':
-        # CRITICAL: reconcile even while depth-pulled — catches orphaned positions
-        # that accumulated during pull (bot thinks flat but Kalshi has contracts)
-        _dp_net_yes = bot.get('net_yes', 0)
-        _dp_net_no = bot.get('net_no', 0)
+        # Extra reconcile while pulled (30s cadence) — orphan-prone state
         if now - bot.get('_last_reconcile', 0) >= 30:
             bot['_last_reconcile'] = now
-            try:
-                if api_read_limiter.try_wait():
-                    _dp_pos = kalshi_client.get_positions(ticker=ticker)
-                    _dp_pos_list = _dp_pos.get('market_positions', _dp_pos.get('positions', []))
-                    _dp_kalshi_net = 0
-                    for _dp in _dp_pos_list:
-                        if _dp.get('ticker') == ticker:
-                            _dp_kalshi_net = _parse_position_qty(_dp)
-                            break
-                    _dp_ky = max(0, _dp_kalshi_net)
-                    _dp_kn = max(0, -_dp_kalshi_net)
-                    if _dp_ky != _dp_net_yes or _dp_kn != _dp_net_no:
-                        # Infer missing-inventory cost from posted ladder rungs.
-                        # Takers cross best bid first, so fills sweep price DESC top→bottom.
-                        def _infer_orphan_cost(posted, missing_qty, fallback_price):
-                            remaining = missing_qty
-                            total = 0.0
-                            consumed = 0
-                            try:
-                                rungs = sorted(
-                                    [(int(p), int(o.get('qty', 0) or 0)) for p, o in (posted or {}).items()],
-                                    key=lambda x: x[0], reverse=True
-                                )
-                            except Exception:
-                                rungs = []
-                            for price, qty in rungs:
-                                if remaining <= 0:
-                                    break
-                                take = min(qty, remaining)
-                                if take <= 0:
-                                    continue
-                                total += price * take
-                                consumed += take
-                                remaining -= take
-                            if remaining > 0:
-                                total += fallback_price * remaining
-                                consumed += remaining
-                            return (total / consumed) if consumed > 0 else fallback_price
-                        # UPWARD: Kalshi has more than bot tracks — add missing inventory
-                        if _dp_ky > _dp_net_yes:
-                            _m = _dp_ky - _dp_net_yes
-                            _fl = [f for f in bot.get('_fill_log', []) if f.get('side') == 'yes' and not f.get('is_exit')]
-                            _fallback = _fl[-1]['price'] if _fl else bot.get('midpoint', 50)
-                            _ec = _infer_orphan_cost(bot.get('yes_orders', {}), _m, _fallback)
-                            bot['net_yes'] = _dp_ky
-                            bot['total_yes_cost'] = bot.get('total_yes_cost', 0) + (_ec * _m)
-                            bot['avg_yes_cost'] = round(bot['total_yes_cost'] / _dp_ky) if _dp_ky > 0 else 0
-                        if _dp_kn > _dp_net_no:
-                            _m = _dp_kn - _dp_net_no
-                            _fl = [f for f in bot.get('_fill_log', []) if f.get('side') == 'no' and not f.get('is_exit')]
-                            _fallback = _fl[-1]['price'] if _fl else (100 - bot.get('midpoint', 50))
-                            _ec = _infer_orphan_cost(bot.get('no_orders', {}), _m, _fallback)
-                            bot['net_no'] = _dp_kn
-                            bot['total_no_cost'] = bot.get('total_no_cost', 0) + (_ec * _m)
-                            bot['avg_no_cost'] = round(bot['total_no_cost'] / _dp_kn) if _dp_kn > 0 else 0
-                        # DOWNWARD: bot tracks more than Kalshi — clamp phantom inventory
-                        if _dp_ky < _dp_net_yes:
-                            print(f'🛡️ RECONCILE CLAMP DOWN: {bot_id} YES {_dp_net_yes}→{_dp_ky} (Kalshi authoritative)')
-                            bot['net_yes'] = _dp_ky
-                            if _dp_ky > 0:
-                                bot['total_yes_cost'] = bot.get('avg_yes_cost', 0) * _dp_ky
-                            else:
-                                bot['avg_yes_cost'] = 0
-                                bot['total_yes_cost'] = 0
-                        if _dp_kn < _dp_net_no:
-                            print(f'🛡️ RECONCILE CLAMP DOWN: {bot_id} NO {_dp_net_no}→{_dp_kn} (Kalshi authoritative)')
-                            bot['net_no'] = _dp_kn
-                            if _dp_kn > 0:
-                                bot['total_no_cost'] = bot.get('avg_no_cost', 0) * _dp_kn
-                            else:
-                                bot['avg_no_cost'] = 0
-                                bot['total_no_cost'] = 0
-                        bot_log('APEX_MM_RECONCILE', bot_id, {
-                            'kalshi_yes': _dp_ky, 'kalshi_no': _dp_kn,
-                            'old_yes': _dp_net_yes, 'old_no': _dp_net_no,
-                        })
-                        if _dp_ky > 0 or _dp_kn > 0:
-                            _held = 'yes' if _dp_ky > _dp_kn else 'no'
-                            print(f'🚨 DEPTH_PULLED RECONCILE: {bot_id} found {_dp_ky}Y/{_dp_kn}N on Kalshi — posting exit')
-                            bot_log('APEX_MM_DEPTH_PULLED_RECONCILE', bot_id, {
-                                'kalshi_yes': _dp_ky, 'kalshi_no': _dp_kn,
-                                'bot_yes': _dp_net_yes, 'bot_no': _dp_net_no,
-                            }, level='WARN')
-                            threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _held), daemon=True).start()
-                        _dp_net_yes = bot.get('net_yes', 0)
-                        _dp_net_no = bot.get('net_no', 0)
-            except Exception as _dpe:
-                print(f'⚠ DEPTH_PULLED RECONCILE FAIL: {bot_id} {_dpe}')
+            _apex_mm_reconcile_inventory(bot_id, bot)
 
         if bot.get('_pull_count', 0) >= APEX_MM_MAX_PULL_CYCLES:
             _apex_mm_begin_exit(bot_id, bot, 'max_pull_cycles')
@@ -16814,7 +16942,9 @@ def _handle_apex(bot_id, bot, actions):
           _sell_held_combined = _held_avg + (100 - _held_ask) if _held_ask > 0 else 999
           _best_combined = min(_buy_opp_combined, _sell_held_combined)
           _width = bot.get('start_gap', 4) * 2
-          _stop = 100 + max(_width, 6)  # floor: 6c minimum SL buffer
+          # Stop = 100 + width (symmetric with edge). min_sl_margin defaults to 0
+          # so SL=width; user can raise per-bot for noisy sports to restore old 6c floor.
+          _stop = 100 + max(_width, bot.get('min_sl_margin', 0))
           # Drift stop: dual-threshold matrix (soft breach = timer, hard breach = instant)
           # Use >= to match WS handler — prevents monitor from resetting WS breach timer at exact boundary
           if _best_combined >= _stop and _best_combined < 999:
@@ -17046,7 +17176,9 @@ def _handle_apex(bot_id, bot, actions):
                 midpoint = _apex_mm_midpoint(ticker)
                 if midpoint:
                     base_qty = bot.get('base_qty', bot.get('qty_per_level', 1))
-                    yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, scale=bot.get('auto_scale', False), inv_limit=bot.get('inventory_limit', 0))
+                    _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
+                    _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
+                    yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, bot['levels'], bot['spacing'], base_qty=_eff_qty, inv_limit=bot.get('inventory_limit', 0))
                     _entry_levels = yes_levels if _entry_side == 'yes' else no_levels
                     _reposted = 0
                     for _ep, _eq in _entry_levels:
@@ -23000,7 +23132,9 @@ def apex_mm_edit(bot_id):
         midpoint = _apex_mm_midpoint(ticker)
         if midpoint:
             base_qty = bot.get('base_qty', bot.get('qty_per_level', 1))
-            yes_levels, no_levels = _apex_mm_levels(midpoint, bot['start_gap'], bot['levels'], bot['spacing'], base_qty=base_qty, scale=bot.get('auto_scale', False), inv_limit=bot.get('inventory_limit', 0))
+            _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
+            _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
+            yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, bot['levels'], bot['spacing'], base_qty=_eff_qty, inv_limit=bot.get('inventory_limit', 0))
             _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
             bot['midpoint'] = midpoint
             bot['status'] = 'market_making_active'

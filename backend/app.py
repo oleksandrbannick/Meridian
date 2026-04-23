@@ -1598,11 +1598,11 @@ def get_depth_rec(ticker):
     ppi, rd, ppi_det = _calculate_ppi(ticker, fav_side, dog_side)
     if ppi is None:
         ppi, rd, ppi_det = 0, 0, {}
-    tier = 'WALL' if ppi >= 85 else 'PRIME' if ppi >= 55 else 'TRAP' if ppi >= 45 else 'DEEP' if ppi >= 40 else 'FLOOR' if ppi >= 35 else 'KILL'
-    # Base depth before gap overrides
-    _base_rd = 4 if ppi >= 85 else 5 if ppi >= 55 else 6 if ppi >= 45 else 7 if ppi >= 40 else 8 if ppi >= 35 else 0
+    tier = 'WALL' if ppi >= 90 else 'PRIME' if ppi >= 55 else 'TRAP' if ppi >= 45 else 'DEEP' if ppi >= 40 else 'FLOOR' if ppi >= 35 else 'KILL'
+    # Base depth before gap overrides (v8: WALL threshold 85→90, TRAP/DEEP=7c)
+    _base_rd = 4 if ppi >= 90 else 5 if ppi >= 55 else 7 if ppi >= 45 else 7 if ppi >= 40 else 8 if ppi >= 35 else 0
     _gap_bumped = rd > _base_rd and rd > 0
-    reasons = [f'PPI {ppi} {tier}: D={ppi_det.get("d",0)} G=-{ppi_det.get("g",0)} S={ppi_det.get("s",0)} T={ppi_det.get("t",0)}']
+    reasons = [f'PPI {ppi} {tier}: D={ppi_det.get("d",0)} S={ppi_det.get("s",0)} T={ppi_det.get("t",0)} (gaps={ppi_det.get("fg",0)})']
     if _gap_bumped:
         reasons.append(f'{ppi_det.get("fg",0)} fav gaps → {_base_rd}→{rd}¢')
     return jsonify({
@@ -7601,7 +7601,7 @@ def _calculate_ppi(ticker, fav_side, dog_side):
     _dr = 100 if fpl >= 100000 else 95 if fpl >= 50000 else 90 if fpl >= 10000 else 85 if fpl >= 5000 else 80 if fpl >= 1000 else 70 if fpl >= 500 else 60 if fpl >= 200 else 50 if fpl >= 100 else 40 if fpl >= 50 else 30 if fpl >= 20 else 20 if fpl >= 10 else 10 if fpl >= 5 else 0
     d_pts = round(_dr * 0.4)
 
-    # 2. Gap penalty (-25pts max) — each fav gap subtracts 5
+    # 2. Gap count — kept for telemetry + depth-override only [v8: dropped from score, was wrong-signed in 7d data: G≥10 buckets +$60, G=0,5 buckets flat-to-loss]
     g_pts = min(25, fg * 5)
 
     # 3. Spread (20pts)
@@ -7630,11 +7630,11 @@ def _calculate_ppi(ticker, fav_side, dog_side):
         # Penalize: can't detect game phase, flying blind
         t_pts = 5
 
-    _raw = d_pts - g_pts + s_pts + t_pts
-    ppi = max(0, min(100, round(_raw * 100 / 75)))
+    _raw = d_pts + s_pts + t_pts                       # v8: G removed from score (depth-override carries gap protection)
+    ppi = max(0, min(100, round(_raw * 100 / 75)))     # divisor 75 (max raw = 40+20+15)
 
-    # PPI → depth rec (v6c — TRAP merged to 7c depth, 2026-04-20: 6c was 57% WR vs 7c 65% on last-4-day sample)
-    if ppi >= 85: rec = 4                              # WALL: pristine book only
+    # PPI → depth rec (v8 — WALL threshold 85→90 since dropping G shifts scores up; WALL was the only losing tier in 7d data)
+    if ppi >= 90: rec = 4                              # WALL: pristine book only (raised from 85, was 59% WR / -$7.81 net)
     elif ppi >= 55: rec = 5                            # PRIME: money zone workhorse
     elif ppi >= 45: rec = 7                            # TRAP: caution zone → post 7c for adverse-selection cushion
     elif ppi >= 40: rec = 7                            # DEEP: recovery buffer

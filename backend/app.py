@@ -8899,9 +8899,10 @@ def _apex_mm_target_start_gap(bot):
     if room <= 0:
         return user_min
     if bot.get('_auto_width'):
-        # Pure room-driven: width = room/2 → gap = room/4, bounds [1, 20].
-        # Drift guard catches bid>80c before this hits the upper bound in practice.
-        return max(1, min(20, room // 4))
+        # Goldilocks: sit just inside market (BBO by ~2c each side = 4c total margin).
+        # width = room - 4, start_gap = (room - 4) / 2. Bounds [1, 20] = width [2, 40].
+        # Deep rungs (width << room) only fill on extreme events = pure adverse selection.
+        return max(1, min(20, (room - 4) // 2))
     target = max(user_min, int(room / 4))
     cap = bot.get('max_start_gap', user_min + 6)
     return min(target, cap)
@@ -8933,7 +8934,7 @@ def _apex_mm_sync_auto_width(bot_id, bot):
     room = 100 - yes_bid - no_bid
     if room <= 0:
         return
-    new_gap = max(1, min(20, room // 4))
+    new_gap = max(1, min(20, (room - 4) // 2))
     old_gap = bot.get('start_gap', 2)
     if new_gap != old_gap:
         bot['start_gap'] = new_gap
@@ -11708,9 +11709,9 @@ def create_ladder_arb_bot():
         # Runtime _apex_mm_target_start_gap will keep recomputing this each cycle.
         if auto_width:
             _room = 100 - live_yes_bid - live_no_bid
-            if _room < 4:
-                return jsonify({'error': f'Room {_room}c too tight for Apex MM (need >= 4c) — use Phantom'}), 400
-            start_gap = max(1, min(20, _room // 4))
+            if _room < 6:
+                return jsonify({'error': f'Room {_room}c too tight for Apex MM (need >= 6c) — use Phantom'}), 400
+            start_gap = max(1, min(20, (_room - 4) // 2))
         yes_levels, no_levels = _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=qty_per_level, inv_limit=0)
         # Auto-compute inventory limit from ladder total (max contracts per side)
         inventory_limit = max(sum(q for _, q in yes_levels), sum(q for _, q in no_levels)) if yes_levels or no_levels else 50

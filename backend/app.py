@@ -6129,23 +6129,6 @@ def _execute_phantom_hedge(bot_id):
         fav_side = bot['fav_side']
         dog_side = bot['dog_side']
 
-        # Snapshot live PPI at fill time — _ppi_launch_score is bot-lifetime (set once at
-        # bot creation, never updated). After many repeat cycles on a market that drifted,
-        # the launch score is stale and misleads trade-analytics bucketing. This captures
-        # the PPI that actually caught this specific fill. First fill of this cycle wins.
-        if bot.get('_ppi_at_fill') is None:
-            try:
-                _pf, _pfr, _pfd = _calculate_ppi(ticker, fav_side, dog_side)
-                bot['_ppi_at_fill'] = _pf
-                bot['_ppi_at_fill_rec'] = _pfr
-                if _pfd:
-                    bot['_ppi_at_fill_fg'] = _pfd.get('fg')
-                    bot['_ppi_at_fill_d'] = _pfd.get('d')
-                    bot['_ppi_at_fill_s'] = _pfd.get('s')
-                    bot['_ppi_at_fill_t'] = _pfd.get('t')
-                    bot['_ppi_at_fill_spread'] = _pfd.get('spread')
-            except Exception:
-                pass
         qty = bot.get('_partial_hedge_qty') or bot.get('quantity', 1)
         dog_price = bot['dog_price']
 
@@ -6244,6 +6227,27 @@ def _execute_phantom_hedge(bot_id):
             bot['no_price'] = actual_fav_price
             bot['no_order_id'] = fav_order_id
         save_state()  # deferred from WS handler — save after hedge is posted
+
+        # PPI-at-fill snapshot — analytics only, never on hot path. Background thread
+        # so the orderbook scan + score calc can't add latency to the hedge cycle.
+        if bot.get('_ppi_at_fill') is None:
+            def _snapshot_ppi_at_fill(_bid=bot_id, _ticker=ticker, _fav=fav_side, _dog=dog_side):
+                try:
+                    _b = active_bots.get(_bid)
+                    if not _b or _b.get('_ppi_at_fill') is not None:
+                        return
+                    _pf, _pfr, _pfd = _calculate_ppi(_ticker, _fav, _dog)
+                    _b['_ppi_at_fill'] = _pf
+                    _b['_ppi_at_fill_rec'] = _pfr
+                    if _pfd:
+                        _b['_ppi_at_fill_fg'] = _pfd.get('fg')
+                        _b['_ppi_at_fill_d'] = _pfd.get('d')
+                        _b['_ppi_at_fill_s'] = _pfd.get('s')
+                        _b['_ppi_at_fill_t'] = _pfd.get('t')
+                        _b['_ppi_at_fill_spread'] = _pfd.get('spread')
+                except Exception:
+                    pass
+            threading.Thread(target=_snapshot_ppi_at_fill, daemon=True).start()
 
         print(f'👻 PHANTOM HEDGE: {bot_id} {fav_side.upper()} @{actual_fav_price}¢ | raw={round(_raw_ms, 1) if _raw_fill_at else "?"}ms rt={round(_rt_ms, 1) if _rt_ms else "?"}ms')
         _obi_at_hedge = _obi_snapshot(bot)

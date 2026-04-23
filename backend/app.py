@@ -24500,6 +24500,16 @@ def _run_startup():
             _bst = _bot.get('status', '')
 
             if _bcat == 'anchor_dog' and _bst in ('dog_anchor_posted', 'waiting_repeat'):
+                # Skip re-post if bot was in a pulled state — re-posting strands the
+                # pull flag (frontend shows stale "PULLED" while dog is live, sympathy
+                # guard blocked, recovery branch blocked because it requires no dog_oid).
+                # Let the in-place recovery flow re-anchor when the pull condition clears.
+                if _bot.get('_sympathy_pulled') or _bot.get('_price_floor_pulled') or _bot.get('_blowout_pulled') or _bot.get('_ppi_pulled'):
+                    _pull_kind = ('sympathy' if _bot.get('_sympathy_pulled') else
+                                  'price_floor' if _bot.get('_price_floor_pulled') else
+                                  'blowout' if _bot.get('_blowout_pulled') else 'ppi')
+                    print(f'⏸ RESTART RESUME SKIP: {_bid} was {_pull_kind}-pulled — leaving in pulled state, recovery flow will re-anchor')
+                    continue
                 # Re-post dog order at saved price
                 try:
                     _ticker = _bot['ticker']

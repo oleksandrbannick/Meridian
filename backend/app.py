@@ -8924,6 +8924,80 @@ def _apex_mm_shock_active(bot):
     return time.time() < bot.get('_shock_until', 0)
 
 
+def _apex_mm_held_side(bot):
+    """Returns 'yes' or 'no' if net inventory held, else None (flat).
+    Net direction: larger side wins. Ties or zeros → flat."""
+    ny = bot.get('net_yes', 0)
+    nn = bot.get('net_no', 0)
+    if ny > nn and ny > 0:
+        return 'yes'
+    if nn > ny and nn > 0:
+        return 'no'
+    return None
+
+
+def _apex_mm_filter_close_side(bot, yes_levels, no_levels):
+    """Strip close-side ladder when holding inventory.
+
+    The single exit order (at or above the closing rungs' prices) will ALWAYS
+    fill before any deeper close-side rung due to price priority on Kalshi's
+    book. Posting extra close-side rungs is purely wasted order slots + rate
+    limit — they cannot opportunistically fill first.
+
+    Held YES → close side is NO → drop NO ladder, keep YES ladder (DCA).
+    Held NO  → close side is YES → drop YES ladder, keep NO ladder (DCA)."""
+    held = _apex_mm_held_side(bot)
+    if held == 'yes':
+        return yes_levels, []
+    if held == 'no':
+        return [], no_levels
+    return yes_levels, no_levels
+
+
+def _apex_mm_cancel_close_side_orders(bot_id, bot):
+    """Cancel any live orders on the close side when holding inventory.
+    Leftover rungs from flat-state posting must be cleaned up — they can't
+    fill (price-priority blocked by exit) and eat order slots.
+    Safe to call every tick; no-op when nothing to cancel."""
+    held = _apex_mm_held_side(bot)
+    if not held:
+        return 0
+    close_side = 'no' if held == 'yes' else 'yes'
+    close_dict_key = f'{close_side}_orders'
+    cancelled = 0
+    for price_str, level in list(bot.get(close_dict_key, {}).items()):
+        oid = level.get('oid')
+        if not oid:
+            continue
+        if level.get('fill_qty', 0) >= level.get('qty', 1):
+            level['oid'] = None  # already filled, just clear
+            continue
+        try:
+            _cr = _safe_cancel(oid, f'close_side_cleanup_{bot_id}')
+            if isinstance(_cr, tuple) and _cr[0] == 'filled':
+                _kf = _cr[1]
+                _ws = max(level.get('fill_qty', 0), bot.get('_counted_order_fills', {}).get(oid, 0))
+                _nf = max(0, _kf - _ws)
+                if _nf > 0:
+                    _pr = int(price_str)
+                    bot[f'net_{close_side}'] = bot.get(f'net_{close_side}', 0) + _nf
+                    bot[f'total_{close_side}_cost'] = bot.get(f'total_{close_side}_cost', 0) + (_pr * _nf)
+                    _n = bot[f'net_{close_side}']
+                    bot[f'avg_{close_side}_cost'] = round(bot[f'total_{close_side}_cost'] / _n) if _n > 0 else 0
+                    bot.setdefault('_counted_order_fills', {})[oid] = _kf
+                    print(f'🚨 CLOSE-SIDE CLEAN LATE FILL: {bot_id} {close_side.upper()} +{_nf}x @{_pr}c')
+            level['oid'] = None
+            cancelled += 1
+        except Exception:
+            pass
+    if cancelled > 0:
+        bot_log('APEX_MM_CLOSE_SIDE_CLEAN', bot_id, {
+            'held': held, 'close_side': close_side, 'cancelled': cancelled,
+        })
+        print(f'🧹 APEX MM CLOSE-SIDE CLEAN: {bot_id} held {held.upper()} — cancelled {cancelled} {close_side.upper()} entries (price-priority blocked by exit)')
+    return cancelled
+
+
 def _apex_mm_sync_auto_width(bot_id, bot):
     """In auto mode + flat, mutate bot['start_gap'] to current room-derived target.
     SL and exit-target read bot['start_gap'] directly, so syncing here keeps all
@@ -9422,6 +9496,7 @@ def _apex_mm_repost_ladder(bot_id, bot):
         _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
         _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
         yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, bot['levels'], bot['spacing'], base_qty=_eff_qty, inv_limit=bot.get('inventory_limit', 0))
+        yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
         if not yes_levels and not no_levels:
             return
         success = _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
@@ -10233,6 +10308,7 @@ def _apex_mm_cycle_reset(bot_id, bot):
     _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
     _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
     yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, bot['levels'], bot['spacing'], base_qty=_eff_qty, inv_limit=bot.get('inventory_limit', 0))
+    yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
     _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
     bot['midpoint'] = midpoint
     bot['_skew_active'] = False
@@ -10352,6 +10428,7 @@ def _apex_mm_fresh_ladder(bot_id, bot):
     _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
     _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
     yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, bot['levels'], bot['spacing'], base_qty=_eff_qty, inv_limit=bot.get('inventory_limit', 0))
+    yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
     _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
     bot['midpoint'] = midpoint
     bot['_skew_active'] = False
@@ -10623,6 +10700,7 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
             base_qty=_eff_qty,
             inv_limit=bot.get('inventory_limit', 0)
         )
+        yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
 
         _refilled = 0
         for side, expected_levels in [('yes', yes_levels), ('no', no_levels)]:
@@ -15724,6 +15802,11 @@ def _handle_apex(bot_id, bot, actions):
     # value at pull time). Guarded to flat-only inside the helper.
     _apex_mm_sync_auto_width(bot_id, bot)
 
+    # ── CLOSE-SIDE CLEANUP: cancel any leftover orders on the side opposite
+    # to held inventory. Those rungs can never fill first (price-priority
+    # blocked by exit) and just waste order slots + rate limit. No-op when flat.
+    _apex_mm_cancel_close_side_orders(bot_id, bot)
+
     # ── STATUS: mm_depth_pulled — check recovery ──
     if status == 'mm_depth_pulled':
         # Extra reconcile while pulled (30s cadence) — orphan-prone state
@@ -16166,6 +16249,7 @@ def _handle_apex(bot_id, bot, actions):
                     _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
                     _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
                     yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, bot['levels'], bot['spacing'], base_qty=_eff_qty, inv_limit=bot.get('inventory_limit', 0))
+                    yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
                     _entry_levels = yes_levels if _entry_side == 'yes' else no_levels
                     _reposted = 0
                     for _ep, _eq in _entry_levels:
@@ -22122,6 +22206,7 @@ def apex_mm_edit(bot_id):
             _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
             _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
             yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, bot['levels'], bot['spacing'], base_qty=_eff_qty, inv_limit=bot.get('inventory_limit', 0))
+            yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
             _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
             bot['midpoint'] = midpoint
             bot['status'] = 'market_making_active'

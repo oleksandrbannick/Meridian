@@ -6983,18 +6983,31 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         </div>`;
     };
 
-    const yesIsExitSide = hasInv && skewActive && skewDirection === 'exit_yes';
-    const noIsExitSide = hasInv && skewActive && skewDirection === 'exit_no';
+    // Held side: the side where bot accumulated inventory.
+    // Close side: the OPPOSITE side (where the single exit order sits).
+    // Backend no longer posts close-side ladder when holding inventory — those
+    // rungs can never fill first (price-priority blocked by exit).
+    const heldSide = (netYes > netNo && netYes > 0) ? 'yes' : (netNo > netYes && netNo > 0 ? 'no' : null);
+    const closeSide = heldSide === 'yes' ? 'no' : (heldSide === 'no' ? 'yes' : null);
+
+    const yesIsExitSide = closeSide === 'yes';
+    const noIsExitSide = closeSide === 'no';
     let yesLadder = '', noLadder = '';
-    for (const [price, level] of sortedYes) yesLadder += _rungHtml(price, level, '#00d4ff', yesIsExitSide);
-    for (const [price, level] of sortedNo) noLadder += _rungHtml(price, level, '#ff7043', noIsExitSide);
+    // Don't render ladder rungs on the close side — backend won't post them.
+    // The exit order shows up in the position/exit panel above instead.
+    if (closeSide !== 'yes') {
+        for (const [price, level] of sortedYes) yesLadder += _rungHtml(price, level, '#00d4ff', false);
+    }
+    if (closeSide !== 'no') {
+        for (const [price, level] of sortedNo) noLadder += _rungHtml(price, level, '#ff7043', false);
+    }
 
     const yesPaused = bot._yes_side_paused;
     const noPaused = bot._no_side_paused;
-    const yesIsExit = hasInv && skewActive && skewDirection === 'exit_yes';
-    const noIsExit = hasInv && skewActive && skewDirection === 'exit_no';
-    const yesLabel = yesIsExit ? 'YES EXIT' : (hasInv && noIsExit) ? 'YES ENTRY' : 'YES';
-    const noLabel = noIsExit ? 'NO EXIT' : (hasInv && yesIsExit) ? 'NO ENTRY' : 'NO';
+    // Labels: "ENTRY" always for ladders (they're entry orders). "EXIT ACTIVE" badge
+    // shows on the side where the single exit order sits (close side = opposite of held).
+    const yesLabel = closeSide === 'yes' ? 'YES · EXIT ACTIVE' : (hasInv ? 'YES ENTRY' : 'YES');
+    const noLabel = closeSide === 'no' ? 'NO · EXIT ACTIVE' : (hasInv ? 'NO ENTRY' : 'NO');
 
     // Exit panel replaces ladder column when exiting
     // Exit panel removed — position boxes above + normal ladder below is cleaner
@@ -7108,14 +7121,14 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     <span style="color:#00d4ff;font-size:8px;font-weight:800;letter-spacing:.06em;">${yesLabel}${yesPaused ? ' <span style="color:#ffaa00;">PAUSED</span>' : ''}</span>
                     <span style="font-size:8px;"><span style="color:#00ff88;font-weight:700;">${liveYesBid || '?'}</span><span style="color:#334;"> / </span><span style="color:#ff4444;font-weight:700;">${liveYesAsk || '?'}</span></span>
                 </div>
-                ${yesLadder || '<div style="color:#1a2530;font-size:9px;padding:4px 0;">No orders</div>'}
+                ${yesLadder || (closeSide === 'yes' ? '<div style="color:#8892a6;font-size:9px;padding:6px 0;text-align:center;">↑ single exit order above</div>' : '<div style="color:#1a2530;font-size:9px;padding:4px 0;">No orders</div>')}
             </div>
             <div style="background:#060a12;border:1px solid #ff704315;border-radius:6px;padding:6px 8px;">
                 <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:4px;margin-bottom:4px;border-bottom:1px solid #ff704320;">
                     <span style="color:#ff7043;font-size:8px;font-weight:800;letter-spacing:.06em;">${noLabel}${noPaused ? ' <span style="color:#ffaa00;">PAUSED</span>' : ''}</span>
                     <span style="font-size:8px;"><span style="color:#00ff88;font-weight:700;">${liveNoBid || '?'}</span><span style="color:#334;"> / </span><span style="color:#ff4444;font-weight:700;">${liveNoAsk || '?'}</span></span>
                 </div>
-                ${noLadder || '<div style="color:#1a2530;font-size:9px;padding:4px 0;">No orders</div>'}
+                ${noLadder || (closeSide === 'no' ? '<div style="color:#8892a6;font-size:9px;padding:6px 0;text-align:center;">↑ single exit order above</div>' : '<div style="color:#1a2530;font-size:9px;padding:4px 0;">No orders</div>')}
             </div>
         </div>` : ''}
 

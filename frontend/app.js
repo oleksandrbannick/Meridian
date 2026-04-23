@@ -6101,7 +6101,6 @@ async function deployMarketMaker() {
                 ticker, start_gap: startGap, levels, spacing,
                 qty_per_level: qtyPerLevel,
                 inventory_limit: invLimit,
-                auto_scale: false,
                 loss_limit_cents: lossLimitCents,
                 smart_mode: lossLimitCents > 0 ? true : false,
             }),
@@ -7095,7 +7094,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         <div style="display:flex;gap:6px;flex-wrap:wrap;padding-top:4px;font-size:9px;color:#334;">
             <span style="color:#00d4ff;">W:${width}</span>
             <span style="color:#e0e0e0;">Mid:${midpoint}</span>
-            <span style="color:#ff7043;">${bot.base_qty || bot.qty_per_level || '?'}x${bot.levels || '?'}${bot.auto_scale !== false ? ' scaled' : ''}</span>
+            <span style="color:#ff7043;">${bot.base_qty || bot.qty_per_level || '?'}x${bot.levels || '?'}</span>
             ${room >= 0 ? `<span style="color:${roomCol};font-weight:${room < width ? 700 : 400};">Room:${room}${roomTag}</span>` : ''}
             ${obiLabel}
             ${pullCount > 0 ? `<span style="color:#ffaa00;">Pulls:${pullCount}</span>` : ''}
@@ -9394,7 +9393,6 @@ async function showBotDetail(botId) {
             const apexQtyPerLevel = bot.base_qty || bot.qty_per_level || '?';
             const apexSmartMode = bot.smart_mode ? (typeof bot.smart_mode === 'number' ? bot.smart_mode : 2) : 0;
             const apexInvLimit = bot.inventory_limit || 0;
-            const apexAutoScale = bot.auto_scale !== false;
             const apexRoundTrips = bot.round_trips_completed || 0;
 
             html += `<div style="background:#0a0e1a;border:1px solid ${_sectionBorder};border-radius:10px;padding:10px 14px;margin-bottom:12px;">`;
@@ -9402,7 +9400,7 @@ async function showBotDetail(botId) {
             html += `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:10px;">`;
             html += `<div><span style="color:#8892a6;">Width:</span> <strong style="color:#00d4ff;">${apexWidth}¢</strong></div>`;
             html += `<div><span style="color:#8892a6;">Levels:</span> <strong style="color:#00d4ff;">${apexLevels}</strong></div>`;
-            html += `<div><span style="color:#8892a6;">Qty/lvl:</span> <strong style="color:#00d4ff;">${apexQtyPerLevel}${apexAutoScale ? ' <span style="color:#ff7043;font-size:8px;">SCALED</span>' : ''}</strong></div>`;
+            html += `<div><span style="color:#8892a6;">Qty/lvl:</span> <strong style="color:#00d4ff;">${apexQtyPerLevel}</strong></div>`;
             if (apexSmartMode > 0) html += `<div><span style="color:#8892a6;">Smart:</span> <strong style="color:#00e5ff;">${apexSmartMode} loss limit</strong></div>`;
             if (apexInvLimit > 0) html += `<div><span style="color:#8892a6;">Inv limit:</span> <strong style="color:#ff7043;">${apexInvLimit}</strong></div>`;
             if (apexRoundTrips > 0) html += `<div><span style="color:#8892a6;">Round trips:</span> <strong style="color:#00ff88;">${apexRoundTrips}</strong></div>`;
@@ -11560,7 +11558,6 @@ async function quickApexMM(ticker, startGap, room) {
                 levels,
                 spacing: 1,
                 qty_per_level: qty,
-                auto_scale: true,
                 loss_limit_cents: 500,
             }),
         });

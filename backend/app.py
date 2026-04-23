@@ -11526,7 +11526,6 @@ def create_ladder_arb_bot():
         qty_per_level = int(data.get('qty_per_level', 10))
         loss_limit_cents = int(data.get('loss_limit_cents', 500))
         smart_mode = bool(data.get('smart_mode', False))
-        auto_scale = bool(data.get('auto_scale', False))
 
         if not ticker:
             return jsonify({'error': 'Missing ticker'}), 400
@@ -11649,7 +11648,6 @@ def create_ladder_arb_bot():
             'spacing': spacing,
             'qty_per_level': qty_per_level,
             'base_qty': qty_per_level,
-            'auto_scale': auto_scale,
             'inventory_limit': inventory_limit,
             'loss_limit_cents': loss_limit_cents,
             'smart_mode': smart_mode,

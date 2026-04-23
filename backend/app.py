@@ -14913,45 +14913,47 @@ def _handle_phantom(bot_id, bot, actions):
                     save_state()
                     actions.append({'bot_id': bot_id, 'action': 'anchor_settled', 'won': dog_won, 'pnl': profit})
                     return
-                # Market closed + game over = hedge won't fill, transition to awaiting settlement
-                if mkt_status == 'closed':
-                    _sc = _get_game_score_for_ticker(ticker)
-                    _sc_done = _sc and _sc.get('status') in ('post', 'final', 'finished')
-                    _yb = bot.get('live_yes_bid', 0)
-                    _nb = bot.get('live_no_bid', 0)
-                    if _game_over or _sc_done or (_yb <= 0 and _nb <= 0):
-                        # Cancel unfilled fav
-                        try:
-                            api_rate_limiter.wait()
-                            kalshi_client.cancel_order(fav_order_id)
-                        except Exception:
-                            pass
-                        # Store info for P&L calc when market settles
-                        bot['_needs_settlement_pnl'] = True
-                        bot['_settlement_dog_price'] = bot['dog_price']
-                        bot['_settlement_dog_side'] = dog_side
-                        bot['_settlement_fav_fills'] = bot.get('fav_fill_qty', 0)
-                        bot['_settlement_fav_price'] = bot.get('fav_price', 0)
-                        bot['_settlement_qty'] = qty
-                        # Set awaiting qty for UI display
-                        _dog_qty = qty
-                        if dog_side == 'yes':
-                            bot['awaiting_qty_yes'] = _dog_qty
-                            bot['awaiting_qty_no'] = 0
-                        else:
-                            bot['awaiting_qty_yes'] = 0
-                            bot['awaiting_qty_no'] = _dog_qty
-                        bot['status'] = 'awaiting_settlement'
-                        bot['awaiting_since'] = now
-                        bot['_death_zone_stopped'] = True
-                        print(f'⏳ PHANTOM → AWAITING SETTLEMENT: {bot_id} game over + market closed, fav {bot.get("fav_fill_qty", 0)}/{qty} filled')
-                        bot_log('PHANTOM_GAME_OVER_AWAITING', bot_id, {
-                            'mkt_status': mkt_status, 'dog_price': bot['dog_price'],
-                            'fav_fill_qty': bot.get('fav_fill_qty', 0), 'qty': qty,
-                        })
-                        save_state()
-                        actions.append({'bot_id': bot_id, 'action': 'phantom_awaiting_settlement'})
-                        return
+                # Match definitively over → awaiting settlement, regardless of mkt_status or bid state.
+                # CRITICAL: do NOT trigger from "no bids" alone. Tennis between sets can show
+                # bids=0 + mkt closed temporarily; bot must keep hedge posted so it can fill on
+                # recovery (e.g. dog rebounds 9¢→20¢, fav drops 99¢→80¢, still profitable).
+                # Only the cached match-over signals (_game_over, _sc_done) are trustworthy.
+                _sc = _get_game_score_for_ticker(ticker)
+                _sc_done = _sc and _sc.get('status') in ('post', 'final', 'finished')
+                if _game_over or _sc_done:
+                    # Cancel unfilled fav
+                    try:
+                        api_rate_limiter.wait()
+                        kalshi_client.cancel_order(fav_order_id)
+                    except Exception:
+                        pass
+                    # Store info for P&L calc when market settles
+                    bot['_needs_settlement_pnl'] = True
+                    bot['_settlement_dog_price'] = bot['dog_price']
+                    bot['_settlement_dog_side'] = dog_side
+                    bot['_settlement_fav_fills'] = bot.get('fav_fill_qty', 0)
+                    bot['_settlement_fav_price'] = bot.get('fav_price', 0)
+                    bot['_settlement_qty'] = qty
+                    # Set awaiting qty for UI display
+                    _dog_qty = qty
+                    if dog_side == 'yes':
+                        bot['awaiting_qty_yes'] = _dog_qty
+                        bot['awaiting_qty_no'] = 0
+                    else:
+                        bot['awaiting_qty_yes'] = 0
+                        bot['awaiting_qty_no'] = _dog_qty
+                    bot['status'] = 'awaiting_settlement'
+                    bot['awaiting_since'] = now
+                    bot['_death_zone_stopped'] = True
+                    print(f'⏳ PHANTOM → AWAITING SETTLEMENT: {bot_id} match over (game_over={_game_over}, sc_done={_sc_done}), fav {bot.get("fav_fill_qty", 0)}/{qty} filled')
+                    bot_log('PHANTOM_MATCH_OVER_AWAITING', bot_id, {
+                        'mkt_status': mkt_status, 'dog_price': bot['dog_price'],
+                        'fav_fill_qty': bot.get('fav_fill_qty', 0), 'qty': qty,
+                        'game_over': _game_over, 'sc_done': _sc_done,
+                    })
+                    save_state()
+                    actions.append({'bot_id': bot_id, 'action': 'phantom_awaiting_settlement'})
+                    return
             except Exception as _settle_err:
                 bot_log('PHANTOM_SETTLE_CHECK_ERR', bot_id, {'error': str(_settle_err)[:200]}, level='WARN')
 

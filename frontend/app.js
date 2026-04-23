@@ -3762,11 +3762,11 @@ function displayOrderbookLadder(orderbook) {
         verdictCol = '#00ccff';
     } else if (catchScore >= 55) {
         if (_favGappy) {
-            verdict = `SNIPER — ${favAnalysis.gaps} fav gaps, hedge may slip. ${_recDepth}¢+ depth`;
+            verdict = `PRIME — ${favAnalysis.gaps} fav gaps, hedge may slip. ${_recDepth}¢+ depth`;
         } else if (_tightRoom) {
-            verdict = `SNIPER — only ${hedgeRoom}¢ room, thin margin. ${_recDepth}¢+ depth`;
+            verdict = `PRIME — only ${hedgeRoom}¢ room, thin margin. ${_recDepth}¢+ depth`;
         } else {
-            verdict = `SNIPER — ${_favPL}/lvl fav, ${_recDepth}¢+ depth`;
+            verdict = `PRIME — ${_favPL}/lvl fav, ${_recDepth}¢+ depth`;
         }
         verdictCol = '#ffaa00';
     } else if (catchScore >= 30) {

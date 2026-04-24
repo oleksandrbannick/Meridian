@@ -7633,6 +7633,11 @@ function _renderWatchBotCard(bot, botId, container, gameScores) {
 
 function setBotsTab(mode) {
     botsTabMode = mode;
+    // Reset the status filter on tab change — Phantom and Apex use different
+    // status labels (e.g. "Active" vs "Settling" vs "Hedging"). A filter set
+    // on one tab can hide ALL bots on the other tab if that label doesn't
+    // exist there. Clearing keeps the default "show all" behavior per-tab.
+    _botsActiveState = null;
     const arbBtn    = document.getElementById('bots-tab-arb');
     const midBtn    = document.getElementById('bots-tab-middle');
     const dogBtn    = document.getElementById('bots-tab-dog');

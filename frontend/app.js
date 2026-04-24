@@ -6748,7 +6748,9 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const skewActive = bot._skew_active || false;
     const skewDirection = bot._skew_direction || '';
     const invLimit = bot.inventory_limit || 0;
-    const hasInv = netYes > 0 || netNo > 0;
+    // Treat fractional residues (<1 contract) as flat — Kalshi positions are
+    // integer-only, so any sub-1 value is corruption, not real inventory.
+    const hasInv = netYes >= 1 || netNo >= 1;
 
     const pnlColor = totalPnl >= 0 ? '#00d4ff' : '#ff4444';
     const pnlSign = totalPnl >= 0 ? '+' : '';
@@ -6987,7 +6989,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     // Close side: the OPPOSITE side (where the single exit order sits).
     // Backend no longer posts close-side ladder when holding inventory — those
     // rungs can never fill first (price-priority blocked by exit).
-    const heldSide = (netYes > netNo && netYes > 0) ? 'yes' : (netNo > netYes && netNo > 0 ? 'no' : null);
+    // Same >=1 threshold as hasInv — ignore sub-integer residues.
+    const heldSide = (netYes > netNo && netYes >= 1) ? 'yes' : (netNo > netYes && netNo >= 1 ? 'no' : null);
     const closeSide = heldSide === 'yes' ? 'no' : (heldSide === 'no' ? 'yes' : null);
 
     const yesIsExitSide = closeSide === 'yes';

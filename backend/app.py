@@ -15831,6 +15831,36 @@ def _handle_apex(bot_id, bot, actions):
         save_state()
         return
 
+    # ── INVENTORY SANITIZE: floor fractional residues to int ──
+    # Contracts are integer-only on Kalshi. Any fractional net_yes/net_no is a
+    # data-corruption residue (seen: 0.38 held after a round-trip). Floor it so
+    # < 1 contract → 0, preventing stuck exit orders + UI bar rendering when
+    # bot is effectively flat. Also zero the avg cost if net went to 0.
+    for _s in ('yes', 'no'):
+        _net = bot.get(f'net_{_s}', 0) or 0
+        if _net != int(_net) or (0 < _net < 1):
+            _floored = int(_net) if _net >= 1 else 0
+            if _floored != _net:
+                print(f'🧹 APEX MM INV SANITIZE: {bot_id} net_{_s} {_net}→{_floored}')
+                bot[f'net_{_s}'] = _floored
+                if _floored == 0:
+                    bot[f'avg_{_s}_cost'] = 0
+                    bot[f'total_{_s}_cost'] = 0
+                    # Clear any stale exit order tied to this side going flat
+                    _stale_oid = bot.get(f'_{_s}_exit_oid')
+                    if _stale_oid:
+                        try:
+                            _safe_cancel(_stale_oid, f'apex_mm_flat_cleanup_{bot_id}')
+                        except Exception:
+                            pass
+                        bot[f'_{_s}_exit_oid'] = None
+                        print(f'🧹 APEX MM: cleared stale {_s} exit OID (inventory sanitized to 0)')
+    # If fully flat now, clear skew state so UI stops rendering exit artifacts
+    if bot.get('net_yes', 0) == 0 and bot.get('net_no', 0) == 0:
+        if bot.get('_skew_active') or bot.get('_skew_direction'):
+            bot['_skew_active'] = False
+            bot['_skew_direction'] = ''
+
     # Update live bid/ask from WS cache
     try:
         ws_p = ws_manager.get_price(ticker) if ws_manager else None

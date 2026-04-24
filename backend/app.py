@@ -3804,6 +3804,14 @@ class LocalOrderbook:
             top = self._yes_top3 if side == 'yes' else self._no_top3
             return list(top[:n])
 
+    def get_all_bids(self, side, n=20):
+        """Return top N bid levels from the FULL book (not just cached top-3).
+        Needed for 'exclude my own orders' room calculations — caller walks
+        levels top-down and filters by known bot contribution."""
+        with self._lock:
+            book = self.yes if side == 'yes' else self.no
+            return sorted(book.items(), key=lambda x: -x[0])[:n]
+
     def get_total_depth(self, side, n=3):
         """Sum of quantity across top N levels."""
         return sum(q for _, q in self.get_depth_at_levels(side, n))
@@ -8962,18 +8970,59 @@ def _apex_mm_midpoint(ticker):
     return round((yes_bid + (100 - no_bid)) / 2)
 
 
+def _apex_mm_market_best_bid(bot, side):
+    """Return best bid on this side EXCLUDING the bot's own orders.
+
+    Critical for room computation: the LocalOrderbook's best bid includes our
+    resting orders. If we use that, our own bids inflate the "market" best bid,
+    shrinking perceived room, which causes sync to tighten width, which lets us
+    repost even tighter — a self-collapsing loop that drives width to 2c in
+    markets that started with 30c+ room.
+
+    Walks bid levels top-down, subtracts our known unfilled contribution at each
+    price, returns the highest price where others also bid. Returns 0 if we're
+    the only participant on this side (book has no real market)."""
+    ticker = bot.get('ticker', '')
+    lob = _local_orderbooks.get(ticker)
+    if not lob or lob.last_update_ts <= 0:
+        return 0
+    # Our unfilled contribution per price
+    our_contrib = {}
+    for price_str, level in bot.get(f'{side}_orders', {}).items():
+        if not level.get('oid'):
+            continue
+        try:
+            p = int(price_str)
+        except Exception:
+            continue
+        remaining = max(0, (level.get('qty', 0) or 0) - (level.get('fill_qty', 0) or 0))
+        if remaining > 0:
+            our_contrib[p] = our_contrib.get(p, 0) + remaining
+    # Also subtract the single exit order if it sits on this side
+    exit_oid = bot.get(f'_{side}_exit_oid')
+    if exit_oid:
+        exit_price = bot.get('_exit_price', 0) or 0
+        exit_qty = bot.get('_exit_total_qty', 0) or 0
+        exit_filled = bot.get('_exit_fill_qty', 0) or 0
+        remaining = max(0, exit_qty - exit_filled)
+        if exit_price > 0 and remaining > 0:
+            our_contrib[exit_price] = our_contrib.get(exit_price, 0) + remaining
+    # Walk the book top-down, find highest price where OTHERS have depth
+    for price, total_qty in lob.get_all_bids(side, n=20):
+        others = total_qty - our_contrib.get(price, 0)
+        if others > 0.5:  # float tolerance; 0.5 = clearly "real other participant"
+            return price
+    return 0
+
+
 def _apex_mm_target_start_gap(bot):
-    """Compute target start_gap based on current room.
+    """Compute target start_gap based on current room (excluding our own orders).
     Target width = room/2 → target gap = room/4.
     Auto mode (_auto_width=True): no user floor, bounds [1, 20] (width 2-40c).
     Manual mode: user's start_gap acts as floor; cap at start_gap + 6."""
     user_min = bot.get('start_gap', 2)
-    ticker = bot.get('ticker', '')
-    lob = _local_orderbooks.get(ticker)
-    if not lob or lob.last_update_ts <= 0:
-        return user_min
-    yes_bid = lob.get_best_bid('yes') or 0
-    no_bid = lob.get_best_bid('no') or 0
+    yes_bid = _apex_mm_market_best_bid(bot, 'yes')
+    no_bid = _apex_mm_market_best_bid(bot, 'no')
     if yes_bid <= 0 or no_bid <= 0:
         return user_min
     room = 100 - yes_bid - no_bid
@@ -9070,20 +9119,17 @@ def _apex_mm_cancel_close_side_orders(bot_id, bot):
 
 def _apex_mm_sync_auto_width(bot_id, bot):
     """In auto mode + flat, mutate bot['start_gap'] to current room-derived target.
-    SL and exit-target read bot['start_gap'] directly, so syncing here keeps all
-    downstream code consistent without threading 'effective_width' through every call site.
+    Uses market best bid (excluding our own orders) to avoid the self-inflation
+    loop where our bids shrink perceived room → width tightens → we repost
+    tighter → perceived room shrinks more → width=2 death spiral.
     Never mutates while holding inventory — avoids SL band shifting under held positions.
     No-op when _auto_width is False."""
     if not bot.get('_auto_width'):
         return
     if bot.get('net_yes', 0) != 0 or bot.get('net_no', 0) != 0:
         return
-    ticker = bot.get('ticker', '')
-    lob = _local_orderbooks.get(ticker)
-    if not lob or lob.last_update_ts <= 0:
-        return
-    yes_bid = lob.get_best_bid('yes') or 0
-    no_bid = lob.get_best_bid('no') or 0
+    yes_bid = _apex_mm_market_best_bid(bot, 'yes')
+    no_bid = _apex_mm_market_best_bid(bot, 'no')
     if yes_bid <= 0 or no_bid <= 0:
         return
     room = 100 - yes_bid - no_bid
@@ -9093,7 +9139,7 @@ def _apex_mm_sync_auto_width(bot_id, bot):
     old_gap = bot.get('start_gap', 2)
     if new_gap != old_gap:
         bot['start_gap'] = new_gap
-        print(f'📏 APEX MM AUTO-WIDTH: {bot_id} gap {old_gap}→{new_gap} (room={room}c, width={new_gap*2}c)')
+        print(f'📏 APEX MM AUTO-WIDTH: {bot_id} gap {old_gap}→{new_gap} (market_room={room}c, width={new_gap*2}c)')
         bot_log('APEX_MM_AUTO_WIDTH', bot_id, {'old_gap': old_gap, 'new_gap': new_gap, 'room': room})
 
 

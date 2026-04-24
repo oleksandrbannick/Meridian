@@ -13798,6 +13798,20 @@ def _handle_phantom(bot_id, bot, actions):
             bot.pop('_ppi_recovery_ts', None)
             print(f'🔧 PPI FLAG CLEAR: {bot_id} had stale _ppi_pulled with live dog order — re-enabled PPI protection')
 
+        # ── Stale _sympathy_pulled recovery ──
+        # Same shape as _ppi_pulled stale recovery. If a bot has a live dog order,
+        # the sympathy-pull state is by definition stale (dog can't be both pulled
+        # and posted). Clear the flag so future sympathy traps can re-pull and the
+        # frontend stops showing a stale "SYMPATHY PULL" label on a trading bot.
+        if bot.get('_sympathy_pulled') and dog_order_id and dog_filled == 0:
+            bot['_sympathy_pulled'] = False
+            bot['_sympathy_pulled_at'] = None
+            bot['_fav_bid_at_pull'] = None
+            bot['_fav_ask_at_pull'] = None
+            bot['_dog_bid_at_pull'] = None
+            bot['_sympathy_combined_at_pull'] = None
+            print(f'🔧 SYMPATHY FLAG CLEAR: {bot_id} had stale _sympathy_pulled with live dog order — re-armed sympathy guard')
+
         # Game ending: cancel to free capital
         if bot.get('game_phase') == 'live' and _is_game_ending(ticker):
             print(f'🏁 PHANTOM ENDING: {bot_id} game ending, dog unfilled — cancelling')
@@ -15606,6 +15620,20 @@ def _handle_phantom(bot_id, bot, actions):
             bot.pop('_ppi_at_fill_s', None)
             bot.pop('_ppi_at_fill_t', None)
             bot.pop('_ppi_at_fill_spread', None)
+            # Clear stale pull flags from prior cycle. The bot was just re-anchored
+            # with a fresh dog at fresh prices, so any sympathy/price-floor/blowout
+            # state from earlier cycles is no longer applicable. Without this, the
+            # frontend shows stale "SYMPATHY PULL" / "PULLED" labels on a live bot
+            # and the relevant guards stay armed against re-firing.
+            bot['_sympathy_pulled'] = False
+            bot['_sympathy_pulled_at'] = None
+            bot['_fav_bid_at_pull'] = None
+            bot['_fav_ask_at_pull'] = None
+            bot['_dog_bid_at_pull'] = None
+            bot['_sympathy_combined_at_pull'] = None
+            bot['_price_floor_pulled'] = False
+            bot['_pull_reason'] = None
+            bot['_drift_pull_logged'] = False
             bot['fav_order_id'] = None
             bot['fav_price'] = None
             bot['fav_walk_count'] = 0

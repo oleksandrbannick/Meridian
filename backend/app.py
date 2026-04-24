@@ -1856,13 +1856,17 @@ def reconcile_positions():
             if _ht and _ht != t and _ht not in expected:
                 expected[_ht] = {'yes': 0, 'no': 0, 'bots': []}
 
-        # Find discrepancies
+        # Find discrepancies — round to int + require whole-contract diffs.
+        # Sub-contract residues (0 < x < 1) are Kalshi fractional rollout
+        # artifacts, not real orphans; don't alert on them.
         all_tickers = set(list(actual.keys()) + list(expected.keys()))
         discrepancies = []
         for t in sorted(all_tickers):
             a = actual.get(t, {'yes': 0, 'no': 0})
             e = expected.get(t, {'yes': 0, 'no': 0, 'bots': []})
-            if a['yes'] != e['yes'] or a['no'] != e['no']:
+            _ay, _an = int(a['yes']), int(a['no'])
+            _ey, _en = int(e['yes']), int(e['no'])
+            if abs(_ay - _ey) >= 1 or abs(_an - _en) >= 1:
                 discrepancies.append({
                     'ticker': t,
                     'kalshi_yes': a['yes'],
@@ -24061,11 +24065,15 @@ def get_orphaned_positions():
             pos_fp = float(pos.get('position_fp') or 0)
             if not ticker or pos_fp == 0:
                 continue
+            # Skip sub-contract fractional residues (Kalshi Mar 2026 rollout artifact).
+            # Only full-contract orphans are actionable.
+            if abs(pos_fp) < 1:
+                continue
             side = 'yes' if pos_fp > 0 else 'no'
             total_qty = int(abs(pos_fp))
             managed = _managed_qty.get((ticker, side), 0)
             orphan_qty = max(0, total_qty - managed)
-            if orphan_qty > 0:
+            if orphan_qty >= 1:
                 exposure = float(pos.get('market_exposure_dollars') or 0)
                 orphans.append({
                     'ticker': ticker, 'side': side,

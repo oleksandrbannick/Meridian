@@ -7309,13 +7309,23 @@ def _get_all_ticker_team_candidates(ticker: str):
     return list(dict.fromkeys(candidates))  # dedupe preserving order
 
 
+_is_game_live_cache = {}  # ticker -> (result_bool, cached_ts)
+_IS_GAME_LIVE_TTL = 30   # seconds — cache the Kalshi REST fallback result
+
 def _is_game_live(ticker: str) -> bool:
     """Check if the game referenced by a Kalshi ticker is currently live.
 
     Tennis: Kalshi milestones (authoritative — details.status == 'live').
     Other sports: ESPN scoreboard cache (authoritative for NBA/NHL/MLB etc).
-    Fallback: Kalshi expected_expiration_time window.
+    Fallback: Kalshi expected_expiration_time window (CACHED 30s — without
+    this, pregame tennis ITF/Challenger bots that miss every cache layer
+    hammer Kalshi /markets/{ticker} every monitor tick → 429 storm).
     """
+    # Cache hit short-circuit (only for the expensive REST fallback path —
+    # ESPN/milestones lookups are already cheap memory lookups).
+    _cached = _is_game_live_cache.get(ticker)
+    if _cached and (time.time() - _cached[1]) < _IS_GAME_LIVE_TTL:
+        return _cached[0]
     # ── TENNIS: Use Kalshi milestones, then API Tennis scoreboard ──
     is_tennis = ticker.startswith('KXATP') or ticker.startswith('KXWTA')
     if is_tennis:
@@ -7361,6 +7371,8 @@ def _is_game_live(ticker: str) -> bool:
             pass  # ESPN failed, fall through to Kalshi check
 
     # ── FALLBACK: Check Kalshi expected_expiration_time ──
+    # CACHE the result for _IS_GAME_LIVE_TTL seconds — without this, every
+    # pregame monitor cycle hits Kalshi REST and triggers 429s.
     try:
         if kalshi_client:
             api_read_limiter.wait()
@@ -7371,6 +7383,7 @@ def _is_game_live(ticker: str) -> bool:
 
             # Already settled → not live
             if result and result != '':
+                _is_game_live_cache[ticker] = (False, time.time())
                 return False
 
             if exp_str:
@@ -7380,9 +7393,15 @@ def _is_game_live(ticker: str) -> bool:
 
                 max_hours = 3.5
                 if -0.5 < hours_until_exp < max_hours:
+                    _is_game_live_cache[ticker] = (True, time.time())
                     return True
+                _is_game_live_cache[ticker] = (False, time.time())
                 return False
     except Exception as e:
+        # Cache the failure too — prevents storming Kalshi when it's already
+        # rate-limiting us. Better to skip live-detection for 30s than to keep
+        # hammering and getting 429s on hedge-critical reads.
+        _is_game_live_cache[ticker] = (False, time.time())
         print(f'⚠ Kalshi live check failed for {ticker}: {e}')
 
     # ── Last resort: ESPN fallback for non-sports tickers ──

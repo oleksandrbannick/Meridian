@@ -1780,13 +1780,22 @@ def close_position():
 
 def _parse_position_qty(pos_entry):
     """Parse position quantity from Kalshi API response, handling both 'position' and
-    'position_fp' fields. Returns float — fractional contracts (Mar 2026 rollout) are
-    preserved; downstream math uses Python numeric promotion. Prefer position_fp since
-    Kalshi may truncate the legacy 'position' field on fractional-enabled markets."""
+    'position_fp' fields. Returns float.
+
+    Sub-contract residues (|val| < 1) are treated as 0 — Kalshi's Mar 2026 fractional
+    rollout occasionally leaves 0.xx residues server-side after round-trips. These
+    aren't real positions: we can't exit them at maker prices, they create reconcile
+    loops (sanitize → reconcile reads fractional → writes it back), and they lock
+    bots out of fresh_ladder with 'kalshi has 0.38x NO' errors. Floor to 0.
+
+    If/when real sub-contract trading becomes operational, revisit this threshold."""
     fp = pos_entry.get('position_fp')
     if fp is not None:
         try:
             val = float(str(fp))
+            if 0 < abs(val) < 1:
+                print(f'🧹 FRACTIONAL POS IGNORED: raw={fp!r} → 0 (sub-1 residue)')
+                return 0.0
             if abs(val - round(val)) > 1e-9:
                 print(f'⚠ FRACTIONAL POSITION_FP: raw={fp!r} → {val}')
             return val
@@ -1795,7 +1804,13 @@ def _parse_position_qty(pos_entry):
     qty_raw = pos_entry.get('position', None)
     if qty_raw is None:
         return 0.0
-    return float(str(qty_raw))
+    try:
+        val = float(str(qty_raw))
+        if 0 < abs(val) < 1:
+            return 0.0
+        return val
+    except Exception:
+        return 0.0
 
 
 @app.route('/api/positions/reconcile', methods=['GET'])

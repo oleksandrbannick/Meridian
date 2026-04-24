@@ -4530,6 +4530,13 @@ def _ws_phantom_retreat(ticker, yes_bid, no_bid):
                         else:
                             bot_ref['no_price'] = _new_price
                         bot_ref['_last_retreat_at'] = time.time()
+                        # Refresh _bid_at_post so the gap-based repost knows where bid was
+                        # when the dog was last positioned. Without this, bid_at_post stays
+                        # at launch value forever, and a bid that crashed-then-recovered
+                        # never trips gap_triggered (e.g. bid 35→5 retreats dog 30→1, then
+                        # bid bounces to 19 — gap = 19-35 = 0, no repost, dog stranded
+                        # 18¢ below bid).
+                        bot_ref['_bid_at_post'] = _dog_bid
                         # Recalculate precalc hedge for new dog price
                         _tw = bot_ref.get('target_width', 5)
                         bot_ref['_precalc_hedge_price'] = _precalc_phantom_hedge(_new_price, _tw, _dog_side, _qty)

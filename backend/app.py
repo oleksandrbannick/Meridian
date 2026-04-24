@@ -11449,8 +11449,9 @@ def _apex_mm_exit_tick(bot_id, bot):
                     bot.setdefault('_exit_log', []).append({
                         'type': 'arb_complete', 'held_side': held_side, 'held_avg': held_avg,
                         'exit_side': side, 'exit_price': actual_price,
-                        'combined': held_avg + actual_price, 'qty': target,
-                        'fee': total_fee, 'pnl': pnl, 'reason': bot.get('_exit_reason', ''),
+                        'combined': held_avg + actual_price, 'qty': round(float(target or 0), 2),
+                        'fee': round(float(total_fee or 0), 2), 'pnl': round(float(pnl or 0), 2),
+                        'reason': bot.get('_exit_reason', ''),
                         'ts': now,
                     })
                     print(f'✅ APEX MM ARB EXIT: {bot_id} bought {side.upper()} {target}x @{actual_price}c + held {held_side.upper()} avg@{held_avg}c → pnl={pnl}c (fee={total_fee}c)')
@@ -11465,12 +11466,12 @@ def _apex_mm_exit_tick(bot_id, bot):
                         print(f'🛡️ APEX MM SELLBACK COST GUARD: {bot_id} {side.upper()} avg_cost={avg_cost}c looks wrong (sell={actual_price}c) → using sell price (zero P&L)')
                         avg_cost = actual_price
                     gross_pnl_per = actual_price - avg_cost
-                    gross_pnl = gross_pnl_per * target
+                    gross_pnl = round(gross_pnl_per * target, 2)
                     fee_entry = _kalshi_side_fee_cents(avg_cost, target, _rung_ticker)
                     fee_sell = _kalshi_side_fee_cents(actual_price, target, _rung_ticker)
-                    total_fee = fee_entry + fee_sell
-                    pnl = gross_pnl - total_fee
-                    bot['realized_pnl_cents'] = bot.get('realized_pnl_cents', 0) + pnl
+                    total_fee = round(fee_entry + fee_sell, 2)
+                    pnl = round(gross_pnl - total_fee, 2)
+                    bot['realized_pnl_cents'] = round(bot.get('realized_pnl_cents', 0) + pnl, 2)
                     bot[f'net_{side}'] = 0
                     bot[f'avg_{side}_cost'] = 0
                     bot[f'total_{side}_cost'] = 0
@@ -11492,8 +11493,9 @@ def _apex_mm_exit_tick(bot_id, bot):
                     })
                     bot.setdefault('_exit_log', []).append({
                         'type': 'sellback', 'held_side': side, 'held_avg': avg_cost,
-                        'sell_price': actual_price, 'qty': target,
-                        'fee': total_fee, 'pnl': pnl, 'reason': bot.get('_exit_reason', ''),
+                        'sell_price': actual_price, 'qty': round(float(target or 0), 2),
+                        'fee': round(float(total_fee or 0), 2), 'pnl': round(float(pnl or 0), 2),
+                        'reason': bot.get('_exit_reason', ''),
                         'ts': now,
                     })
                     print(f'✅ APEX MM SOLD: {bot_id} {side.upper()} {target}x @{actual_price}c (avg_cost={avg_cost}c, pnl={pnl}c, fee={total_fee}c)')
@@ -11715,20 +11717,22 @@ def _apex_mm_record_round_trip(bot_id, bot, fill_side, fill_price, close_qty):
     opposite = 'no' if fill_side == 'yes' else 'yes'
     opp_avg = bot.get(f'avg_{opposite}_cost', 0)
     ticker = bot.get('ticker', '')
+    # Round qty to 2dp — kills float precision residues like 1.0700000000000003
+    close_qty = round(float(close_qty or 0), 2)
 
     # P&L: 100 - cost_of_opposite - cost_of_this_fill
     gross_pnl_per = 100 - opp_avg - fill_price
-    gross_pnl = gross_pnl_per * close_qty
+    gross_pnl = round(gross_pnl_per * close_qty, 2)
 
     # Fees
     fee_opp = _kalshi_side_fee_cents(opp_avg, close_qty, ticker)
     fee_this = _kalshi_side_fee_cents(fill_price, close_qty, ticker)
-    total_fee = fee_opp + fee_this
+    total_fee = round(fee_opp + fee_this, 2)
 
-    net_pnl = gross_pnl - total_fee
+    net_pnl = round(gross_pnl - total_fee, 2)
 
     # Update bot
-    bot['realized_pnl_cents'] = bot.get('realized_pnl_cents', 0) + net_pnl
+    bot['realized_pnl_cents'] = round(bot.get('realized_pnl_cents', 0) + net_pnl, 2)
     bot['round_trips_completed'] = bot.get('round_trips_completed', 0) + 1
 
     # Smart mode tracking — for non-MM bots, track consecutive losses per round trip.
@@ -15925,6 +15929,88 @@ def _handle_apex(bot_id, bot, actions):
         if bot.get('_skew_active') or bot.get('_skew_direction'):
             bot['_skew_active'] = False
             bot['_skew_direction'] = ''
+
+    # ── FLOAT PRECISION CLEANUP: round stored P&L + log qtys to 2 decimals ──
+    # Kalshi fractional positions + float arithmetic produce values like
+    # 14.659999999999997 and 1.0700000000000003. Round existing stored state
+    # so UI doesn't show raw float junk. Write-time rounding covers new entries;
+    # this handles state from before the fix.
+    _rpl = bot.get('realized_pnl_cents', 0)
+    if isinstance(_rpl, float) and _rpl != round(_rpl, 2):
+        bot['realized_pnl_cents'] = round(_rpl, 2)
+    for _log_key in ('_rt_log', '_exit_log'):
+        for _entry in bot.get(_log_key, []):
+            for _fld in ('qty', 'pnl', 'gross', 'fee', 'held_avg', 'combined'):
+                _v = _entry.get(_fld)
+                if isinstance(_v, float) and _v != round(_v, 2):
+                    _entry[_fld] = round(_v, 2)
+    for _side_key in ('yes', 'no'):
+        _info = bot.get('_exit_sell_oids', {}).get(_side_key)
+        if _info:
+            _q = _info.get('qty')
+            if isinstance(_q, float) and _q != round(_q, 2):
+                _info['qty'] = round(_q, 2)
+
+    # ── STRANDED INVENTORY SETTLEMENT (all statuses) ──
+    # If bot has held inventory and market has settled with a result, record
+    # settlement P&L retroactively. Handles bots that status'd to completed /
+    # awaiting_settlement with unresolved inventory (exit never filled before
+    # market close). Runs before reconcile so reconcile sees 0/0 after settle.
+    _ny_raw = bot.get('net_yes', 0) or 0
+    _nn_raw = bot.get('net_no', 0) or 0
+    if (_ny_raw >= 1 or _nn_raw >= 1) and now - bot.get('_last_stranded_check', 0) >= 60:
+        bot['_last_stranded_check'] = now
+        try:
+            if api_read_limiter.try_wait():
+                _smkt = kalshi_client.get_market(ticker)
+                _smkt_data = _smkt.get('market', _smkt) if isinstance(_smkt, dict) else {}
+                _smkt_result = (_smkt_data.get('result', '') or '').lower()
+                if _smkt_result in ('yes', 'no'):
+                    for _side, _qty, _avg in [
+                        ('yes', _ny_raw, bot.get('avg_yes_cost', 0)),
+                        ('no',  _nn_raw, bot.get('avg_no_cost', 0)),
+                    ]:
+                        if _qty < 1 or _avg <= 0:
+                            continue
+                        if _smkt_result == _side:
+                            _spnl = round((100 - _avg) * _qty, 2)
+                            _rtag = f'mm_settlement_win_{_side}'
+                        else:
+                            _spnl = round(-_avg * _qty, 2)
+                            _rtag = f'mm_settlement_loss_{_side}'
+                        bot['realized_pnl_cents'] = round(bot.get('realized_pnl_cents', 0) + _spnl, 2)
+                        bot.setdefault('_exit_log', []).append({
+                            'type': _rtag, 'held_side': _side, 'held_avg': _avg,
+                            'settlement_result': _smkt_result,
+                            'qty': round(float(_qty), 2), 'pnl': _spnl,
+                            'reason': f'market settled {_smkt_result}',
+                            'ts': now,
+                        })
+                        try:
+                            _record_trade({
+                                'bot_id': bot_id, 'ticker': ticker, 'bot_category': 'ladder_arb',
+                                'result': _rtag, f'{_side}_price': _avg,
+                                'quantity': _qty, 'net_pnl': _spnl,
+                                'profit_cents': max(0, _spnl), 'loss_cents': abs(min(0, _spnl)),
+                                'timestamp': now, 'fill_source': 'apex_mm_stranded_settlement',
+                                'game_phase': bot.get('game_phase', ''),
+                            })
+                        except Exception:
+                            pass
+                        bot[f'net_{_side}'] = 0
+                        bot[f'avg_{_side}_cost'] = 0
+                        bot[f'total_{_side}_cost'] = 0
+                        bot_log('APEX_MM_STRANDED_SETTLED', bot_id, {
+                            'side': _side, 'qty': _qty, 'avg': _avg,
+                            'market_result': _smkt_result, 'pnl': _spnl,
+                        })
+                        print(f'🏁 APEX MM STRANDED SETTLED: {bot_id} {_side.upper()} {_qty}x @ avg {_avg}c, market={_smkt_result.upper()} → pnl={_spnl}c')
+                    if bot.get('status') != 'completed':
+                        bot['status'] = 'completed'
+                        bot['completed_at'] = now
+                        bot['_market_settled_at'] = now
+        except Exception as _sse:
+            pass  # non-critical
 
     # Update live bid/ask from WS cache
     try:

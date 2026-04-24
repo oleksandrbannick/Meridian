@@ -131,6 +131,27 @@ function fmtDollars(cents, opts) {
     const sign = dollars < 0 ? '-' : (showSign ? '+' : '');
     return sign + '$' + Math.abs(dollars).toFixed(2);
 }
+// Format a numeric value compactly: integers show as-is, floats rounded to 2dp
+// with trailing zeros trimmed. Kills float precision junk like 0.07000000000003.
+function _fmtN(n) {
+    if (n == null) return '?';
+    const f = Number(n);
+    if (!isFinite(f)) return '?';
+    if (f === Math.floor(f)) return String(f);
+    const s = f.toFixed(2);
+    return s.replace(/\.?0+$/, '') || '0';
+}
+// Format cents for inline display (e.g. "+14.66c"). Rounds to 2dp, trims trailing zeros.
+function _fmtC(cents, opts) {
+    if (cents == null) return '0c';
+    const n = Number(cents);
+    if (!isFinite(n)) return '0c';
+    const showSign = opts && opts.sign;
+    const sign = n < 0 ? '-' : (showSign ? '+' : '');
+    const abs = Math.abs(n);
+    const s = abs === Math.floor(abs) ? String(abs) : abs.toFixed(2).replace(/\.?0+$/, '');
+    return sign + s + 'c';
+}
 let allMarkets = [];
 let autoMonitorInterval = null;
 let _tabRefreshInterval = null; // Auto-refresh for history/positions tabs
@@ -6913,8 +6934,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const anchorFp = entryTotal > 0 ? Math.min(100, Math.round(entryFills / entryTotal * 100)) : 0;
         const entryBidAsk = longSide === 'YES' ? [liveYesBid, liveYesAsk] : [liveNoBid, liveNoAsk];
         const exitBidAsk = exitSide === 'YES' ? [liveYesBid, liveYesAsk] : [liveNoBid, liveNoAsk];
-        const entryBox = _sideBox('ENTRY', entryBoxSide, `${avgCost}c`, `${netHeld}x held`, anchorFp, `${entryFills}/${entryTotal}`, entryCol, entryBidAsk);
-        const exitBox = _sideBox('EXIT', exitBoxSide, exitPrice > 0 ? `${exitPrice}c` : '--', exitPrice > 0 ? `${exitFillQty}/${exitTotalQty} filled` : 'pending', hedgeFp, `${exitFillQty}/${exitTotalQty}`, exitCol, exitBidAsk);
+        const entryBox = _sideBox('ENTRY', entryBoxSide, `${avgCost}c`, `${_fmtN(netHeld)}x held`, anchorFp, `${_fmtN(entryFills)}/${_fmtN(entryTotal)}`, entryCol, entryBidAsk);
+        const exitBox = _sideBox('EXIT', exitBoxSide, exitPrice > 0 ? `${exitPrice}c` : '--', exitPrice > 0 ? `${_fmtN(exitFillQty)}/${_fmtN(exitTotalQty)} filled` : 'pending', hedgeFp, `${_fmtN(exitFillQty)}/${_fmtN(exitTotalQty)}`, exitCol, exitBidAsk);
         // Order: YES always on left
         const leftBox = longSide === 'YES' ? entryBox : exitBox;
         const rightBox = longSide === 'YES' ? exitBox : entryBox;
@@ -7027,8 +7048,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         historyHtml = `<div style="border-top:1px solid #1a2540;margin-top:4px;padding-top:4px;">
             <div onclick="const el=document.getElementById('${historyId}');el.style.display=el.style.display==='none'?'block':'none';this.querySelector('.arr').textContent=el.style.display==='none'?'\\u25B6':'\\u25BC';" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;padding:2px 0;">
                 <div style="display:flex;gap:10px;font-size:10px;">
-                    <span style="color:#8892a6;">Realized: <strong style="color:${realizedPnl >= 0 ? '#00ff88' : '#ff4444'};">${realizedPnl >= 0 ? '+' : ''}${realizedPnl}c</strong></span>
-                    ${unrealizedPnl !== 0 ? `<span style="color:#8892a6;">Unreal: <strong style="color:${unrealizedPnl >= 0 ? '#00ff88' : '#ff4444'};">${unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl}c</strong></span>` : ''}
+                    <span style="color:#8892a6;">Realized: <strong style="color:${realizedPnl >= 0 ? '#00ff88' : '#ff4444'};">${_fmtC(realizedPnl, {sign:true})}</strong></span>
+                    ${unrealizedPnl !== 0 ? `<span style="color:#8892a6;">Unreal: <strong style="color:${unrealizedPnl >= 0 ? '#00ff88' : '#ff4444'};">${_fmtC(unrealizedPnl, {sign:true})}</strong></span>` : ''}
                     <span style="color:#ff7043;">${roundTrips} RTs</span>
                 </div>
                 <span class="arr" style="color:#445;font-size:8px;">&#9660;</span>
@@ -7043,7 +7064,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                         <span style="color:#00d4ff;text-align:right;">${rt.entry_price}c</span>
                         <span style="color:#ff7043;text-align:right;">${rt.exit_price}c</span>
                         <span style="color:${combCol};font-weight:700;text-align:right;">${rt.combined}c</span>
-                        <span style="color:#b2ff59;text-align:right;">x${rt.qty}</span>
+                        <span style="color:#b2ff59;text-align:right;">x${_fmtN(rt.qty)}</span>
                         <span style="color:${pCol};font-weight:700;text-align:right;">${fmtDollars(rt.pnl, {sign:true})}</span>
                     </div>`;
                 }).join('') : ''}
@@ -7062,7 +7083,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                             <span style="color:${heldCol};text-align:right;">${ex.held_avg}c</span>
                             <span style="color:${exitCol};text-align:right;">${sellPrice}c</span>
                             <span style="text-align:right;">${combPrice > 0 ? `<span style="color:${combCol};font-weight:700;">${combPrice}c</span>` : ''}</span>
-                            <span style="color:#b2ff59;text-align:right;">x${ex.qty}</span>
+                            <span style="color:#b2ff59;text-align:right;">x${_fmtN(ex.qty)}</span>
                             <span style="color:${pCol};font-weight:700;text-align:right;">${fmtDollars(ex.pnl, {sign:true})}</span>
                         </div>`;
                     }).join('') + '</div>' : ''}

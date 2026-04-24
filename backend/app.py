@@ -8762,6 +8762,31 @@ APEX_MM_SL_SOFT_PERSIST = {     # Soft breach persistence by game phase (seconds
     'default':  1.5,            # Unknown sport / no ESPN data
 }
 
+# ─── Regime-dependent exit walk (slow markets = long soak + slow walk) ────────
+# Pre-game player props can sit for 6+ hours with ~1 fill/hour. A 25s soak +
+# 2s/tick walk = hit breakeven wall in 30s and sit there for the next 60 min
+# at zero profit. Scale both the soak and walk interval by game phase so the
+# bot holds profitable target longer on slow markets.
+APEX_MM_SOAK_BY_PHASE = {       # Soak seconds — hold at target for queue priority
+    'ot':       10,             # Overtime: fast, short soak
+    'end':      15,             # Final 2min: fast
+    'late':     20,             # Late game
+    'mid':      25,             # Mid game (baseline)
+    'early':    25,             # Early game (baseline)
+    'default':  120,            # Pregame / no live data: hold 2min at target
+}
+APEX_MM_WALK_INTERVAL_BY_PHASE = {  # Seconds between 1c walk-up steps in GREEN zone
+    'ot':       2,              # Every tick (fastest erosion — volatile zone)
+    'end':      3,
+    'late':     5,
+    'mid':      8,
+    'early':    8,
+    'default':  30,             # Pregame: walk slowly to preserve profit
+}
+APEX_MM_SLOW_FILL_THRESHOLD_S = 60   # If no fill in this window, treat as slow
+APEX_MM_SLOW_VELOCITY_MULT_DEFAULT = 5.0  # Slow + pregame phase: 5x slower walk
+APEX_MM_SLOW_VELOCITY_MULT = 3.0          # Slow + live phase: 3x slower walk
+
 
 def _apex_mm_game_phase(ticker):
     """Return game phase for stop-loss persistence: 'early', 'mid', 'late', 'end', 'ot', or 'default'."""
@@ -9850,15 +9875,18 @@ def _apex_mm_walk_up(bot_id, bot):
     live_combined = avg_held + live_exit_bid
 
     # ── SOAK: hold at target for queue priority ──
-    # Velocity-scaled: fast market = short soak (don't sit while price runs).
-    # Calm market = full 25s for queue priority.
+    # Regime-dependent: pregame/slow markets hold much longer; live/fast markets
+    # are short to avoid sitting while price runs. On top, velocity-scale down
+    # when the bot is getting hit frequently (visible activity → no need to soak).
+    _phase = _apex_mm_game_phase(ticker)
+    _base_soak = APEX_MM_SOAK_BY_PHASE.get(_phase, 25)
     _vfills = bot.get('_velocity_fills', [])
     if _vfills:
         _recent = sum(1 for f in _vfills if now - f.get('ts', 0) <= 5)
-        SOAK_SECONDS = max(5, int(25 - (_recent / 5.0) * 5))
+        SOAK_SECONDS = max(5, int(_base_soak - (_recent / 5.0) * 5))
     else:
-        SOAK_SECONDS = 25
-    MAX_SOAK_SECONDS = max(SOAK_SECONDS + 5, 35)  # hard cap — no infinite waiting
+        SOAK_SECONDS = _base_soak
+    MAX_SOAK_SECONDS = max(SOAK_SECONDS + 5, 35)  # hard cap — allows one breathing-guard extension
     soak_start = bot.get('_exit_soak_start') or bot.get('_exit_posted_at', now)
     if not bot.get('_exit_soak_start'):
         bot['_exit_soak_start'] = soak_start
@@ -9929,11 +9957,25 @@ def _apex_mm_walk_up(bot_id, bot):
                 bot[f'_{exit_side}_exit_oid'] = None
         return
 
-    # ── GREEN ZONE: combined <= 99c → walk 1c at a time toward bid ──
-    # Soak already protected target for 15-25s. After soak, walk toward bid
-    # one cent per tick — don't jump straight to bid.
+    # ── GREEN ZONE: combined <= 99c → walk 1c toward bid on regime-gated interval ──
+    # Walk interval scales by game phase and by recent fill activity on this bot.
+    # Pregame / no-fills-in-60s → wait 150s between 1c steps (preserves profit).
+    # Live mid-game → 8s. Overtime → 2s (every tick, volatile zone).
     _green_snap = min(current_price + 1, live_exit_bid)  # walk 1c, cap at bid
     if live_combined <= 99 and _green_snap > current_price:
+        _base_walk_iv = APEX_MM_WALK_INTERVAL_BY_PHASE.get(_phase, 10)
+        _last_yes_fill = bot.get('_last_yes_fill_at', 0) or 0
+        _last_no_fill = bot.get('_last_no_fill_at', 0) or 0
+        _last_fill_t = max(_last_yes_fill, _last_no_fill)
+        _since_fill = (now - _last_fill_t) if _last_fill_t > 0 else 9999
+        if _since_fill > APEX_MM_SLOW_FILL_THRESHOLD_S:
+            _mult = APEX_MM_SLOW_VELOCITY_MULT_DEFAULT if _phase == 'default' else APEX_MM_SLOW_VELOCITY_MULT
+            _walk_iv = _base_walk_iv * _mult
+        else:
+            _walk_iv = _base_walk_iv
+        _last_walk = bot.get('_last_walk_at', 0) or bot.get('_exit_soak_start', now)
+        if now - _last_walk < _walk_iv:
+            return  # not yet time for next 1c step
         try:
             price_kwarg = {f'{exit_side}_price': _green_snap}
             api_rate_limiter.wait()
@@ -9947,12 +9989,13 @@ def _apex_mm_walk_up(bot_id, bot):
             bot['_exit_price'] = _green_snap
             bot['_wall_parked'] = False
             bot['_exit_walk_count'] = bot.get('_exit_walk_count', 0) + (_green_snap - old_price)
+            bot['_last_walk_at'] = now  # gate next step by regime interval
             _snap_combined = avg_held + _green_snap
-            print(f'💚 APEX MM SNAP-PROFIT: {bot_id} {exit_side.upper()} {old_price}→{_green_snap}c (combined={_snap_combined}c, +{100 - _snap_combined}c profit, bid={live_exit_bid}c, target={target_price}c)')
+            print(f'💚 APEX MM SNAP-PROFIT: {bot_id} {exit_side.upper()} {old_price}→{_green_snap}c (combined={_snap_combined}c, +{100 - _snap_combined}c profit, bid={live_exit_bid}c, phase={_phase}, iv={_walk_iv:.0f}s)')
             bot_log('APEX_MM_SNAP_PROFIT', bot_id, {
                 'old': old_price, 'new': _green_snap, 'bid': live_exit_bid,
                 'combined': _snap_combined, 'profit': 100 - _snap_combined,
-                'target': target_price,
+                'target': target_price, 'phase': _phase, 'walk_iv': _walk_iv,
             })
         except Exception as e:
             if 'filled' in str(e).lower():

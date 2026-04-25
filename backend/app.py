@@ -13859,6 +13859,31 @@ def _handle_phantom(bot_id, bot, actions):
             if _kill_ppi is not None and _kill_rec == 0:
                 print(f'⚠ PPI KILL PULL: {bot_id} PPI={_kill_ppi} < 35 — pulling dog')
                 _kill_rc = _safe_cancel(dog_order_id, f'ppi_kill_pull_{bot_id}')
+                # Cancel-race: order filled in-flight → credit fills and fire hedge
+                # (mirrors the _is_game_ending pattern below).
+                _kill_race_fills = _kill_rc[1] if isinstance(_kill_rc, tuple) and _kill_rc[0] == 'filled' else 0
+                if _kill_race_fills > 0:
+                    with ws_fill_lock:
+                        if bot.get('_hedge_fired'):
+                            save_state()
+                            return
+                        bot['_hedge_fired'] = True
+                    bot['dog_fill_qty'] = max(bot.get('dog_fill_qty', 0), _kill_race_fills)
+                    _ds = bot.get('dog_side', 'no')
+                    bot[f'{_ds}_fill_qty'] = bot['dog_fill_qty']
+                    bot['status'] = 'dog_filled'
+                    bot['dog_filled_at'] = now
+                    bot['dog_order_id'] = None
+                    if _kill_race_fills < qty:
+                        bot['_original_qty'] = qty
+                        bot['_partial_hedge_qty'] = _kill_race_fills
+                    _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
+                    print(f'⚡ PPI KILL FILL CATCH: {bot_id} {_kill_race_fills}x fills during cancel — hedge fired')
+                    bot_log('PHANTOM_PPI_KILL_FILL_CATCH', bot_id, {
+                        'fills': _kill_race_fills, 'ppi': _kill_ppi, 'original_qty': qty,
+                    }, level='WARN')
+                    save_state()
+                    return
                 if _kill_rc is not False:
                     bot['dog_order_id'] = None
                 bot['_price_floor_pulled'] = True
@@ -14075,6 +14100,30 @@ def _handle_phantom(bot_id, bot, actions):
                             print(f'⚠ AUTO DEPTH PULL: {bot_id} PPI={_ppi_now} < 35 — pulling dog')
                             if dog_order_id:
                                 _ppi_rc = _safe_cancel(dog_order_id, f'ppi_pull_{bot_id}')
+                                # Cancel-race: order filled in-flight → credit fills, fire hedge
+                                _ppi_race_fills = _ppi_rc[1] if isinstance(_ppi_rc, tuple) and _ppi_rc[0] == 'filled' else 0
+                                if _ppi_race_fills > 0:
+                                    with ws_fill_lock:
+                                        if bot.get('_hedge_fired'):
+                                            save_state()
+                                            return
+                                        bot['_hedge_fired'] = True
+                                    bot['dog_fill_qty'] = max(bot.get('dog_fill_qty', 0), _ppi_race_fills)
+                                    _ds = bot.get('dog_side', 'no')
+                                    bot[f'{_ds}_fill_qty'] = bot['dog_fill_qty']
+                                    bot['status'] = 'dog_filled'
+                                    bot['dog_filled_at'] = now
+                                    bot['dog_order_id'] = None
+                                    if _ppi_race_fills < qty:
+                                        bot['_original_qty'] = qty
+                                        bot['_partial_hedge_qty'] = _ppi_race_fills
+                                    _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
+                                    print(f'⚡ AUTO DEPTH PULL FILL CATCH: {bot_id} {_ppi_race_fills}x fills during cancel — hedge fired')
+                                    bot_log('PHANTOM_AUTO_DEPTH_FILL_CATCH', bot_id, {
+                                        'fills': _ppi_race_fills, 'ppi': _ppi_now, 'original_qty': qty,
+                                    }, level='WARN')
+                                    save_state()
+                                    return
                                 if _ppi_rc is not False:
                                     bot['dog_order_id'] = None
                             bot['_last_ppi'] = _ppi_now

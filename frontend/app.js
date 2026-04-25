@@ -6886,23 +6886,36 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             const orderCol = merged ? '#00ff88' : '#00d4ff';
             const liveCol = merged ? '#00ff88' : '#ff7043';
             const glowStyle = merged ? 'box-shadow:0 0 8px #00ff8880,0 0 16px #00ff8840;' : '';
-            // When not merged: order dot extends ABOVE the bar, live dot extends
-            // BELOW it. Vertical offset visually separates them even when their
-            // horizontal positions are within 1c (≈1.25% on a wide width=40 bar
-            // where they'd otherwise overlap entirely).
-            zoneBarHtml = `<div style="margin-top:6px;padding:5px 0;">
-                <div style="position:relative;height:6px;background:#0a1018;border-radius:3px;overflow:visible;">
-                    <div style="position:absolute;left:0;width:50%;height:100%;background:linear-gradient(90deg,#00ff8818,#00ff8808);border-radius:3px 0 0 3px;"></div>
-                    <div style="position:absolute;left:50%;width:50%;height:100%;background:linear-gradient(90deg,#ff444410,#ff444420);border-radius:0 3px 3px 0;"></div>
+            // Enforce minimum visual gap between the two dots — on a wide width=40
+            // bar a real 1c gap is only ~1.25% of width, so 8px dots overlap
+            // entirely. Push them apart symmetrically around their midpoint to
+            // a minimum visual separation. Tooltips + header still show truth.
+            const MIN_VISUAL_GAP_PCT = 10;
+            let _orderRendered = orderPct;
+            let _liveRendered = livePct;
+            if (!merged) {
+                const _gap = Math.abs(orderPct - livePct);
+                if (_gap < MIN_VISUAL_GAP_PCT) {
+                    const _mid = (orderPct + livePct) / 2;
+                    const _half = MIN_VISUAL_GAP_PCT / 2;
+                    const _orderIsLeft = orderPct <= livePct;
+                    _orderRendered = Math.max(0, Math.min(100, _mid + (_orderIsLeft ? -_half : _half)));
+                    _liveRendered  = Math.max(0, Math.min(100, _mid + (_orderIsLeft ?  _half : -_half)));
+                }
+            }
+            zoneBarHtml = `<div style="margin-top:6px;">
+                <div style="position:relative;height:6px;background:#0a1018;border-radius:3px;overflow:hidden;">
+                    <div style="position:absolute;left:0;width:50%;height:100%;background:linear-gradient(90deg,#00ff8818,#00ff8808);"></div>
+                    <div style="position:absolute;left:50%;width:50%;height:100%;background:linear-gradient(90deg,#ff444410,#ff444420);"></div>
                     <div style="position:absolute;left:50%;width:2px;height:100%;background:#ffaa00;z-index:2;"></div>
                     ${merged ? `
-                        <div style="position:absolute;left:${orderPct}%;top:-2px;width:10px;height:10px;background:#00ff88;border-radius:50%;z-index:4;transform:translateX(-5px);${glowStyle}" title="Order/Bid aligned: ${combined}c"></div>
+                        <div style="position:absolute;left:${orderPct}%;width:10px;height:100%;background:#00ff88;border-radius:5px;z-index:4;transform:translateX(-5px);${glowStyle}" title="Order/Bid aligned: ${combined}c"></div>
                     ` : `
-                        <div style="position:absolute;left:${orderPct}%;top:-5px;width:6px;height:14px;background:${orderCol};border-radius:3px;z-index:3;transform:translateX(-3px);box-shadow:0 0 4px ${orderCol}aa;" title="My order: ${combined}c"></div>
-                        <div style="position:absolute;left:${livePct}%;bottom:-5px;width:6px;height:14px;background:${liveCol};border-radius:3px;z-index:4;transform:translateX(-3px);box-shadow:0 0 4px ${liveCol}aa;" title="Live bid: ${liveCombined < 999 ? liveCombined : '?'}c"></div>
+                        <div style="position:absolute;left:${_orderRendered}%;width:8px;height:100%;background:${orderCol};border-radius:4px;z-index:3;transform:translateX(-4px);box-shadow:0 0 6px ${orderCol}60;" title="My order: ${combined}c"></div>
+                        <div style="position:absolute;left:${_liveRendered}%;width:8px;height:100%;background:${liveCol};border-radius:4px;z-index:4;transform:translateX(-4px);box-shadow:0 0 6px ${liveCol}60;" title="Live bid: ${liveCombined < 999 ? liveCombined : '?'}c"></div>
                     `}
                 </div>
-                <div style="position:relative;height:12px;margin-top:6px;font-size:7px;font-weight:700;">
+                <div style="position:relative;height:12px;margin-top:2px;font-size:7px;font-weight:700;">
                     <span style="position:absolute;left:0;color:#00ff88;">${origTargetCombined}c</span>
                     <span style="position:absolute;left:50%;transform:translateX(-50%);color:#ffaa00;">100c</span>
                     <span style="position:absolute;right:0;color:#ff4444;">${stopLoss}c</span>

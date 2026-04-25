@@ -4639,8 +4639,10 @@ def _ws_maker_sell_follow(ticker, yes_ask, no_ask):
             try:
                 _amend_kw = {f'{_side}_price': _current_ask}
                 api_rate_limiter.wait()
+                # action='sell' required — amend_order defaults to 'buy' which Kalshi rejects
+                # for sell orders, leaving posted_price stuck at the original ask forever.
                 _sell_resp = kalshi_client.amend_order(_sv['oid'], ticker=ticker, side=_side,
-                                         count=_sv.get('qty', 1), **_amend_kw)
+                                         count=_sv.get('qty', 1), action='sell', **_amend_kw)
                 # Kalshi amend can return a new order ID — track it
                 _sell_ord = _sell_resp.get('order', _sell_resp) if isinstance(_sell_resp, dict) else {}
                 _sell_new_oid = _sell_ord.get('order_id', '')
@@ -4652,6 +4654,8 @@ def _ws_maker_sell_follow(ticker, yes_ask, no_ask):
             except Exception as _e:
                 if '404' in str(_e) or 'not found' in str(_e).lower():
                     print(f'⚠ WS MAKER SELL SNAP: order gone for {_sv["reason"]} — will repost on next monitor tick')
+                else:
+                    print(f'⚠ WS MAKER SELL SNAP failed: {_sv["reason"]} {_side} {ticker} {_posted}→{_current_ask}¢: {_e}')
     finally:
         _maker_sell_follow_lock.release()
 
@@ -16948,7 +16952,8 @@ def _run_monitor():
                         try:
                             _amend_kw = {f'{_s_side}_price': _new_price}
                             api_rate_limiter.wait()
-                            _amend_resp = kalshi_client.amend_order(_s_oid, ticker=_s_ticker, side=_s_side, count=_s_qty, **_amend_kw)
+                            # action='sell' required — amend_order defaults to 'buy'.
+                            _amend_resp = kalshi_client.amend_order(_s_oid, ticker=_s_ticker, side=_s_side, count=_s_qty, action='sell', **_amend_kw)
                             # Capture new order ID from amend
                             _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
                             _amend_new_oid = _amend_ord.get('order_id', '')
@@ -16962,6 +16967,8 @@ def _run_monitor():
                                 # Order gone — repost
                                 del _pending_maker_sells[_sk]
                                 execute_maker_sell(_s_ticker, _s_side, _s_qty - _s_fills, reason=_sv['reason'])
+                            else:
+                                print(f'⚠ MAKER SELL AMEND failed: {_sv["reason"]} {_s_side} {_s_ticker} {_sv["posted_price"]}→{_new_price}¢: {_ae}')
                 # Timeout: after 5 min, cancel and repost fresh
                 if _s_age > 300:
                     try:

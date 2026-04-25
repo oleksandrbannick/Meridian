@@ -2242,7 +2242,7 @@ def _fetch_api_tennis_scoreboard(tour_filter):
 # Strategy: cache aggressively, gate by "any active intl bot OR recent scanner ping".
 _BASKETBALL_API_KEY = os.environ.get('BASKETBALL_API_KEY', 'b7d73ee21537b6de04e1933a3ef99df4')
 _basketball_api_cache = {'data': {}, 'ts': 0, 'raw_games': []}
-_BASKETBALL_API_TTL_NORMAL = 900   # 15 min normal — fits 4 refreshes/hour in 100/day cap
+_BASKETBALL_API_TTL_NORMAL = 600   # 10 min normal — ~6 refreshes/hour, fits 100/day cap during typical game windows
 _BASKETBALL_API_TTL_HOT = 120      # 2 min when a covered-league bot is hedging
 _basketball_browse_ts = 0           # last time someone hit /api/markets — refresh while active
 _BASKETBALL_CACHE_PATH = '/root/meridian/backend/basketball_api_cache.json'

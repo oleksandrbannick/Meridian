@@ -732,7 +732,8 @@ const SPORT_FILTER_CONFIG = {
 
 // Sports that lack any public live-score provider — UI shows "Kalshi-reported" instead
 // of "Score unavailable" so users know it's a data-source gap, not a bug.
-const NO_SCORE_SPORTS = new Set(['KBO','NPB','WBC','KBL','CBA','EuroLeague','BBL','GBL','ACB','JBLeague','LNBElite','VTB','BSL','ABA','UFC','F1','Cricket']);
+// Intl basketball leagues are covered by api-sports.io and excluded from this set.
+const NO_SCORE_SPORTS = new Set(['KBO','NPB','WBC','UFC','F1','Cricket']);
 
 // Rank order for cross-sport grid sort (smaller = earlier)
 const _SPORT_RANK = (() => {

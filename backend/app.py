@@ -783,10 +783,10 @@ def get_markets():
         # but tournaments span multiple days. Use events API to find missing events, then
         # fetch their markets individually.
         _tennis_series_in_fetch = [s for s in series_to_fetch
-                                   if s.startswith(('KXATP', 'KXWTA'))]
+                                   if s.startswith(('KXATP', 'KXWTA', 'KXITF'))]
         if _tennis_series_in_fetch:
             _existing_events = {m.get('event_ticker', '') for m in all_markets
-                                if m.get('event_ticker', '').startswith(('KXATP', 'KXWTA'))}
+                                if m.get('event_ticker', '').startswith(('KXATP', 'KXWTA', 'KXITF'))}
             _missing_events = []
             for series in _tennis_series_in_fetch:
                 try:
@@ -13603,7 +13603,7 @@ def _handle_phantom(bot_id, bot, actions):
             _mkt_status = _mkt_data.get('status', '').lower()
             _settled = _mkt_status in ('settled', 'finalized')
             if not _settled and _mkt_status == 'closed':
-                _is_tennis = ticker.startswith(('KXATP', 'KXWTA'))
+                _is_tennis = ticker.startswith(('KXATP', 'KXWTA', 'KXITF'))
                 if _is_tennis:
                     _settled = False  # Tennis 'closed' = between sets, not settled
                 else:
@@ -13637,7 +13637,7 @@ def _handle_phantom(bot_id, bot, actions):
             _is_settled = _mkt_st in ('settled', 'finalized')
             if not _is_settled and _mkt_st == 'closed':
                 # Tennis: 'closed' just means between sets or interrupted — NOT settled
-                _is_tennis = ticker.startswith(('KXATP', 'KXWTA'))
+                _is_tennis = ticker.startswith(('KXATP', 'KXWTA', 'KXITF'))
                 if _is_tennis:
                     _is_settled = False  # Never treat closed tennis as settled — wait for finalized/settled
                 else:
@@ -13673,7 +13673,7 @@ def _handle_phantom(bot_id, bot, actions):
     if status == 'dog_anchor_posted':
         # Death zone flagged — check if still active (tennis match points get saved)
         if bot.get('_death_zone_stopped'):
-            _is_tennis_dz2 = ticker.startswith(('KXATP', 'KXWTA'))
+            _is_tennis_dz2 = ticker.startswith(('KXATP', 'KXWTA', 'KXITF'))
             if _is_tennis_dz2:
                 _dz_still2, _ = _is_phantom_death_zone(ticker, bot)
                 if not _dz_still2:
@@ -17538,7 +17538,7 @@ def _run_monitor():
             if not bot.get('_death_zone_stopped') or bot.get('_market_settled_at'):
                 continue
             _dz_ticker = bot.get('ticker', '')
-            if not _dz_ticker.startswith(('KXATP', 'KXWTA')):
+            if not _dz_ticker.startswith(('KXATP', 'KXWTA', 'KXITF')):
                 continue
             try:
                 _dz_still, _ = _is_phantom_death_zone(_dz_ticker, bot)
@@ -20643,7 +20643,7 @@ def list_bots():
     for bid, bot in active_bots.items():
         if bot.get('game_phase') == 'pregame' and bot.get('status') not in ('completed', 'cancelled', 'error'):
             ticker = bot.get('ticker', '')
-            if ticker.startswith(('KXATP', 'KXWTA')) and _is_game_live(ticker):
+            if ticker.startswith(('KXATP', 'KXWTA', 'KXITF')) and _is_game_live(ticker):
                 bot['game_phase'] = 'live'
 
     return jsonify({'bots': active_bots, 'game_scores': game_scores})

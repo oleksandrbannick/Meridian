@@ -16104,9 +16104,11 @@ def _handle_apex(bot_id, bot, actions):
                 _held = 'no' if _exit_side == 'yes' else 'yes'
                 threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _held), daemon=True).start()
         if _apex_depth_recovered(ticker, bot, obi_threshold=APEX_MM_RECOVER_OBI, depth_min=APEX_MM_RECOVER_MIN):
-            # Room guard: don't repost if room < width + 1 (need buffer above width)
-            _rc_yb = bot.get('live_yes_bid', 0)
-            _rc_nb = bot.get('live_no_bid', 0)
+            # Room guard: don't repost if MARKET room < width + 1 (need buffer above width).
+            # Use market_best_bid for consistency with the active room_guard — bot is pulled
+            # here so live = market in practice, but stay defensive against partial-cancel races.
+            _rc_yb = _apex_mm_market_best_bid(bot, 'yes')
+            _rc_nb = _apex_mm_market_best_bid(bot, 'no')
             _rc_w = bot.get('start_gap', 4) * 2
             _rc_room = (100 - _rc_yb - _rc_nb) if (_rc_yb > 0 and _rc_nb > 0) else 99
             if _rc_room < _rc_w + 1:
@@ -16305,9 +16307,12 @@ def _handle_apex(bot_id, bot, actions):
         print(f'🛡️ APEX MM ACTIVE DRIFT GUARD: {bot_id} max_bid={_active_max_bid}c — pulling/exiting')
         return
 
-    # 0.7. Room guard — pull if room < width (no profit space, behind the book)
-    _yb = bot.get('live_yes_bid', 0)
-    _nb = bot.get('live_no_bid', 0)
+    # 0.7. Room guard — pull if MARKET room < width (no profit space, behind the book).
+    # Must use market_best_bid (excludes our own ladder), otherwise our just-posted
+    # rungs become top-of-book and shrink live_room to ≈width every cycle, triggering
+    # a pull→repost→pull loop in tight markets at Goldilocks width.
+    _yb = _apex_mm_market_best_bid(bot, 'yes')
+    _nb = _apex_mm_market_best_bid(bot, 'no')
     _width = bot.get('start_gap', 4) * 2
     _room = (100 - _yb - _nb) if (_yb > 0 and _nb > 0) else 99
     if _room < _width:

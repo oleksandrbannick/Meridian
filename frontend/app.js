@@ -6821,14 +6821,18 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         // Combined = where your order actually sits (avgCost + posted exit price)
         // liveCombined = what you'd get if filled at current bid
         // Display rule: cyan = my posted combined, coral = live bid combined,
-        // ONE green number when they match. Always show actual posted (not the
-        // original target — that was inconsistent: cards walked-better showed
-        // the worse target value, cards walked-worse showed actual.)
+        // ONE green number when they match.
+        // When mm_exiting with an active arb-buy order, the actual order price
+        // lives in _exit_sell_oids[side].price — NOT bot._exit_price (which is
+        // the older MM exit ladder price, stale once arb exit kicks in).
+        const _activeSellEntry = Object.values(bot._exit_sell_oids || {}).find(s => s && s.oid);
+        const _exitingArbBuy = status === 'mm_exiting' && _activeSellEntry && _activeSellEntry.action === 'buy';
+        const effExitPrice = _exitingArbBuy ? (_activeSellEntry.price || 0) : exitPrice;
         const liveCombined = (exitBidLive > 0) ? avgCost + exitBidLive : 999;
-        const origTarget = bot._exit_target_price || exitPrice;
+        const origTarget = bot._exit_target_price || effExitPrice;
         const origTargetCombined = avgCost + origTarget;
-        const postedCombined = avgCost + exitPrice;
-        const combined = exitPrice > 0 ? postedCombined : (liveCombined < 999 ? liveCombined : 0);
+        const postedCombined = avgCost + effExitPrice;
+        const combined = effExitPrice > 0 ? postedCombined : (liveCombined < 999 ? liveCombined : 0);
         const profit = 100 - combined;
         const combinedCol = combined > 100 ? '#ff4444' : combined >= 99 ? '#ffaa00' : '#00ff88';
         // Match backend Apex MM SL formula at app.py:16253 — `100 + max(width, 6)`.
@@ -6867,7 +6871,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         //   cyan = my posted combined; coral = live bid combined; both green when merged.
         let _zoneOrderPct = 0, _zoneLivePct = 0, _zoneMerged = false;
         let _zoneLeftEdge = 0, _zoneRightEdge = 0, _zoneClippedL = false, _zoneClippedR = false;
-        if (exitPrice > 0) {
+        if (effExitPrice > 0) {
             // Cap each side to ±10c so 1c gaps are visible on wide-width bots.
             // Without the cap, width=40 spans 60→140 (1c ≈ 1.25% of bar width) and
             // 8px dots overlap entirely. Capping to 90→110 makes 1c = 5%.
@@ -6886,12 +6890,12 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             _zoneOrderPct = _toPct(combined);
             _zoneLivePct = liveCombined < 999 ? _toPct(liveCombined) : _zoneOrderPct;
             // Merge only when actual cent prices match — dots at true positions.
-            _zoneMerged = exitPrice > 0 && exitBidLive > 0 && exitPrice === exitBidLive;
+            _zoneMerged = effExitPrice > 0 && exitBidLive > 0 && effExitPrice === exitBidLive;
         }
-        const headerOrderCol = exitPrice > 0 ? (_zoneMerged ? '#00ff88' : '#00d4ff') : combinedCol;
+        const headerOrderCol = effExitPrice > 0 ? (_zoneMerged ? '#00ff88' : '#00d4ff') : combinedCol;
         const headerLiveCol = _zoneMerged ? '#00ff88' : '#ff7043';
         let zoneBarHtml = '';
-        if (exitPrice > 0) {
+        if (effExitPrice > 0) {
             const orderPct = _zoneOrderPct;
             const livePct = _zoneLivePct;
             const merged = _zoneMerged;
@@ -6953,7 +6957,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const entryBidAsk = longSide === 'YES' ? [liveYesBid, liveYesAsk] : [liveNoBid, liveNoAsk];
         const exitBidAsk = exitSide === 'YES' ? [liveYesBid, liveYesAsk] : [liveNoBid, liveNoAsk];
         const entryBox = _sideBox('ENTRY', entryBoxSide, `${avgCost}c`, `${_fmtN(netHeld)}x held`, anchorFp, `${_fmtN(entryFills)}/${_fmtN(entryTotal)}`, entryCol, entryBidAsk);
-        const exitBox = _sideBox('EXIT', exitBoxSide, exitPrice > 0 ? `${exitPrice}c` : '--', exitPrice > 0 ? `${_fmtN(exitFillQty)}/${_fmtN(exitTotalQty)} filled` : 'pending', hedgeFp, `${_fmtN(exitFillQty)}/${_fmtN(exitTotalQty)}`, exitCol, exitBidAsk);
+        const exitBox = _sideBox('EXIT', exitBoxSide, effExitPrice > 0 ? `${effExitPrice}c` : '--', effExitPrice > 0 ? `${_fmtN(exitFillQty)}/${_fmtN(exitTotalQty)} filled` : 'pending', hedgeFp, `${_fmtN(exitFillQty)}/${_fmtN(exitTotalQty)}`, exitCol, exitBidAsk);
         // Order: YES always on left
         const leftBox = longSide === 'YES' ? entryBox : exitBox;
         const rightBox = longSide === 'YES' ? exitBox : entryBox;

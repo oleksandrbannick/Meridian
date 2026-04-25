@@ -5082,23 +5082,27 @@ def _ws_phantom_sympathy_guard(ticker, yes_bid, no_bid, yes_ask, no_ask):
         shadow_loose = (fav_ask_delta >= 1 and fav_bid_delta >= 1 and my_combined >= 96)
         shadow_medium = (fav_ask_delta >= 2 and fav_bid_delta >= 1 and my_combined >= 97)
 
-        # Runaway trigger — slow-grind detector independent of velocity window.
-        # If fav_bid has crept >= 8c above where it was when this dog was anchored,
-        # the move is real and structurally bad (loss-day median runaway was 15c,
-        # p75 was 23c — 8c catches them with 7c+ margin). NO depth-floor coupling:
-        # depth floor is the bot's profit margin, not the system's tolerance for
-        # fav-side runaway.
+        # Runaway trigger — DISABLED. The concept (pull when fav_bid runs Xc from
+        # anchor) ignored the dog_bid side. In binary markets, fav rising usually
+        # means dog falling (inverse correlation) — the PROFITABLE scenario where
+        # whales dump dog and fav rises in response. The runaway gate pulled those
+        # bots right before they filled cheap.
         #
-        # Threshold history: started at 5c (2026-04-25 19:04). Live data showed
-        # 77 pulls in 3 hours, 86% firing at exactly 5c without continuing —
-        # catching noise, not real moves. Bumped to 8c (2026-04-25 ~15:30 AZ)
-        # which would have eliminated 75 of 77 noise pulls while still catching
-        # both genuine runaways.
+        # Live data: 77 pulls in 3 hours at 5c threshold, 86% fired at exactly 5c
+        # with no continuation; bumping to 8c would have only kept 2 — most pulls
+        # were on natural inverse-correlation moves, not real momentum shifts.
+        # User feedback: "blocked profitable ones, let bad ones through."
+        #
+        # Textbook trigger remains — it has the right shape (dog_bid_delta <= 0
+        # required, so it only fires on genuinely asymmetric momentum). Runaway
+        # was a worse subset of textbook without that safety gate.
+        #
+        # Anchor field _fav_bid_at_anchor still set/cleared so it's available if
+        # we want to reintroduce a smarter gate later (e.g. fav_runaway > X AND
+        # dog_bid_drop < fav_runaway/2 = real asymmetric move).
         runaway_pull = False
         _fb_anchor = bot.get('_fav_bid_at_anchor', 0) or 0
         fav_runaway = (fav_bid - _fb_anchor) if _fb_anchor > 0 else 0
-        if _fb_anchor > 0 and fav_runaway >= 8:
-            runaway_pull = True
 
         # Rate-limit baseline snapshots (once per 2s per bot), always log signal events
         _last_snap = bot.get('_sympathy_last_snap', 0)

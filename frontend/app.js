@@ -2445,8 +2445,12 @@ function displayEventRow(eventData, container) {
     card.appendChild(header);
 
     // ── Scoreboard widget (live score / pregame time / final score) ──
-    if (gameScore && !(gameScore.state === 'pre' && kalshiLive)) {
-        // Show scoreboard unless ESPN says pregame but Kalshi market is already live
+    // Trust the score provider when available: if gameScore exists, render its
+    // state (pre/in/post). Only fall back to the Kalshi-live banner when we
+    // genuinely have no provider data — otherwise sports like JBLeague show
+    // "LIVE / no score feed" hours before tipoff.
+    const _hasReliableScoreSource = !NO_SCORE_SPORTS.has(sport);
+    if (gameScore && !(gameScore.state === 'pre' && kalshiLive && !_hasReliableScoreSource)) {
         const scoreboard = buildScoreboard(gameScore);
         if (scoreboard) card.appendChild(scoreboard);
     } else if (kalshiLive) {

@@ -2242,22 +2242,30 @@ def _fetch_api_tennis_scoreboard(tour_filter):
 # Strategy: cache aggressively, gate by "any active intl bot OR recent scanner ping".
 _BASKETBALL_API_KEY = os.environ.get('BASKETBALL_API_KEY', 'b7d73ee21537b6de04e1933a3ef99df4')
 _basketball_api_cache = {'data': {}, 'ts': 0, 'raw_games': []}
-_BASKETBALL_API_TTL_NORMAL = 600   # 10 min normal — ~6 refreshes/hour, fits 100/day cap during typical game windows
+_BASKETBALL_API_TTL_NORMAL = 900   # 15 min normal — fits 100/day cap (4 refreshes/hour)
 _BASKETBALL_API_TTL_HOT = 120      # 2 min when a covered-league bot is hedging
 _basketball_browse_ts = 0           # last time someone hit /api/markets — refresh while active
 _BASKETBALL_CACHE_PATH = '/root/meridian/backend/basketball_api_cache.json'
 _basketball_daily_limit_hit = False  # flip true when api-sports reports daily cap exhaustion
+_basketball_daily_limit_until = 0    # epoch ts when daily limit gate releases (next UTC midnight)
+_basketball_api_lock = threading.Lock()  # serializes fetch + disk save (was racing → corruption)
 
 
 def _load_basketball_cache_from_disk():
     """Seed the cache from disk on startup so restarts don't burn an API call.
-    Only trust entries < 30 min old."""
+    Only trust entries < 30 min old. Tolerates trailing-bytes corruption from
+    historical concurrent saves by extracting only the first valid JSON blob."""
     global _basketball_api_cache
     try:
         if not os.path.exists(_BASKETBALL_CACHE_PATH):
             return
         with open(_BASKETBALL_CACHE_PATH) as _f:
-            payload = json.load(_f)
+            raw = _f.read()
+        try:
+            payload, _ = json.JSONDecoder().raw_decode(raw)
+        except Exception as _pe:
+            print(f'⚠️ Intl basketball cache disk parse failed: {_pe}')
+            return
         ts = float(payload.get('ts') or 0)
         if time.time() - ts > 1800:
             return  # stale, let the next fetch populate
@@ -2270,6 +2278,9 @@ def _load_basketball_cache_from_disk():
 
 
 def _save_basketball_cache_to_disk():
+    """Snapshot in-memory cache to disk. Caller must hold _basketball_api_lock
+    (or be the only fetcher) — the fetch wrapper serializes saves via that
+    same lock, so no nested locking here (would deadlock)."""
     try:
         payload = {
             'ts': _basketball_api_cache.get('ts', 0),
@@ -2369,121 +2380,135 @@ def _intl_basketball_should_refresh():
 
 def _fetch_intl_basketball_scoreboard():
     """Fetch live intl basketball games and return team-keyed cache dict.
-    Returns the cache dict (possibly stale if not refreshed this call)."""
+    Returns the cache dict (possibly stale if not refreshed this call).
+    Lock-serialized — concurrent callers used to bypass the TTL gate by
+    racing past the age check, burning the 100/day quota."""
     if not _BASKETBALL_API_KEY:
         return {}
+    # Cap-respect gate: stop retrying until next UTC midnight when limit hit
+    global _basketball_daily_limit_hit, _basketball_daily_limit_until
+    if _basketball_daily_limit_hit and time.time() < _basketball_daily_limit_until:
+        return _basketball_api_cache.get('data', {})
     should_refresh, hot_mode = _intl_basketball_should_refresh()
     ttl = _BASKETBALL_API_TTL_HOT if hot_mode else _BASKETBALL_API_TTL_NORMAL
     age = time.time() - _basketball_api_cache['ts']
     if not should_refresh or age < ttl:
         return _basketball_api_cache.get('data', {})
-    # ?date=TODAY returns pregame/live/finished in one call. ?live=all is broken on
-    # this endpoint — returns 0 even when games are actively in Q1/Q2/Q4 etc.
-    import datetime as _dt
-    today_utc = _dt.datetime.utcnow().date().isoformat()
-    try:
-        url = f'https://v1.basketball.api-sports.io/games?date={today_utc}'
-        resp = requests.get(url, headers={'x-apisports-key': _BASKETBALL_API_KEY}, timeout=8)
-        resp.raise_for_status()
-        payload = resp.json()
-    except Exception as e:
-        print(f'⚠️ Intl basketball API fetch failed: {e}')
-        return _basketball_api_cache.get('data', {})
-
-    # Detect daily-cap exhaustion so we stop hammering the API
-    _errors = payload.get('errors')
-    if isinstance(_errors, dict) and _errors:
-        global _basketball_daily_limit_hit
-        _first_err = next(iter(_errors.values()), '')
-        if 'limit' in str(_first_err).lower() or 'reached' in str(_first_err).lower():
-            _basketball_daily_limit_hit = True
-            # Reserve cache ts so we stop retrying until the TTL rolls over at
-            # UTC midnight (the reset point). Bump ts so age < ttl for a while.
-            _basketball_api_cache['ts'] = time.time()
-            print(f'🚫 Intl basketball API daily cap hit: {_first_err}')
+    with _basketball_api_lock:
+        # Re-check inside lock — another thread may have just refreshed
+        if _basketball_daily_limit_hit and time.time() < _basketball_daily_limit_until:
             return _basketball_api_cache.get('data', {})
-        else:
-            print(f'⚠️ Intl basketball API errors: {_errors}')
-
-    games = payload.get('response', []) or []
-    wanted_ids = set(_INTL_BASKETBALL_LEAGUES.values())
-    team_info = {}
-    matched = 0
-    for g in games:
-        league = g.get('league') or {}
-        league_id = league.get('id')
-        if league_id not in wanted_ids:
-            continue
-        kalshi_prefix = _LEAGUE_ID_TO_PREFIX.get(league_id, '')
-        sport_key = kalshi_prefix.replace('KXAGAME', '').replace('KX', '').replace('GAME', '').lower() or 'intl'
-        home = (g.get('teams') or {}).get('home') or {}
-        away = (g.get('teams') or {}).get('away') or {}
-        home_name = home.get('name') or ''
-        away_name = away.get('name') or ''
-        scores = g.get('scores') or {}
+        age = time.time() - _basketball_api_cache['ts']
+        if age < ttl:
+            return _basketball_api_cache.get('data', {})
+        # ?date=TODAY returns pregame/live/finished in one call. ?live=all is broken on
+        # this endpoint — returns 0 even when games are actively in Q1/Q2/Q4 etc.
+        import datetime as _dt
+        today_utc = _dt.datetime.utcnow().date().isoformat()
         try:
-            home_total = int((scores.get('home') or {}).get('total') or 0)
-        except (ValueError, TypeError):
-            home_total = 0
-        try:
-            away_total = int((scores.get('away') or {}).get('total') or 0)
-        except (ValueError, TypeError):
-            away_total = 0
-        status_obj = g.get('status') or {}
-        short = (status_obj.get('short') or '').upper()
-        timer = status_obj.get('timer') or ''
-        # api-sports basketball status codes:
-        # NS=not_started, Q1/Q2/Q3/Q4=quarter, OT=overtime, BT=break, HT=halftime,
-        # FT=finished, AOT=after_overtime, POST=postponed, CANC=cancelled, AWD=awarded
-        live_codes = {'Q1','Q2','Q3','Q4','OT','BT','HT'}
-        finished_codes = {'FT','AOT'}
-        if short in live_codes:
-            state = 'in'
-        elif short in finished_codes:
-            state = 'post'
-        else:
-            state = 'pre'
-        period_map = {'Q1':1,'Q2':2,'Q3':3,'Q4':4,'OT':5,'HT':2,'BT':2,'FT':4,'AOT':5}
-        period = period_map.get(short, 0)
-        entry = {
-            'live': state == 'in',
-            'status': state,
-            'period': period,
-            'clock': timer,
-            'status_detail': short,
-            'home_score': home_total,
-            'away_score': away_total,
-            'score_diff': abs(home_total - away_total),
-            'team_score': home_total,
-            'opp_score': away_total,
-            'home_team': home_name,
-            'away_team': away_name,
-            'espn_sport': f'intl_{sport_key}',
-            'league_id': league_id,
-            'sport_prefix': kalshi_prefix,
-        }
-        for code in _basketball_team_codes(home_name):
-            team_info.setdefault(code, entry)
-            team_info[f'{sport_key}:{code}'] = entry
-        for code in _basketball_team_codes(away_name):
-            # away gets a flipped entry so team_score/opp_score work
-            away_entry = dict(entry)
-            away_entry['team_score'] = away_total
-            away_entry['opp_score'] = home_total
-            team_info.setdefault(code, away_entry)
-            team_info[f'{sport_key}:{code}'] = away_entry
-        matched += 1
+            url = f'https://v1.basketball.api-sports.io/games?date={today_utc}'
+            resp = requests.get(url, headers={'x-apisports-key': _BASKETBALL_API_KEY}, timeout=8)
+            resp.raise_for_status()
+            payload = resp.json()
+        except Exception as e:
+            print(f'⚠️ Intl basketball API fetch failed: {e}')
+            return _basketball_api_cache.get('data', {})
 
-    _basketball_api_cache['data'] = team_info
-    _basketball_api_cache['ts'] = time.time()
-    _basketball_api_cache['raw_games'] = games
-    _basketball_daily_limit_hit = False  # healthy fetch cleared any prior cap (global declared above at line ~2376)
-    _save_basketball_cache_to_disk()
-    if matched:
-        print(f'🏀 Intl basketball cache refreshed: {matched} games, {len(team_info)} team-code keys (mode={"hot" if hot_mode else "normal"})')
-    else:
-        print(f'🏀 Intl basketball fetch returned 0 games in our leagues (total in slate: {len(games)})')
-    return team_info
+        # Detect daily-cap exhaustion so we stop hammering the API
+        _errors = payload.get('errors')
+        if isinstance(_errors, dict) and _errors:
+            _first_err = next(iter(_errors.values()), '')
+            if 'limit' in str(_first_err).lower() or 'reached' in str(_first_err).lower():
+                _basketball_daily_limit_hit = True
+                # Lock out new fetches until next UTC midnight (cap reset)
+                _now_utc = _dt.datetime.utcnow()
+                _next_midnight = _dt.datetime.combine(_now_utc.date() + _dt.timedelta(days=1), _dt.time.min)
+                _basketball_daily_limit_until = _next_midnight.timestamp()
+                _basketball_api_cache['ts'] = time.time()
+                print(f'🚫 Intl basketball API daily cap hit: {_first_err} — gated until {_next_midnight.isoformat()} UTC')
+                return _basketball_api_cache.get('data', {})
+            else:
+                print(f'⚠️ Intl basketball API errors: {_errors}')
+
+        games = payload.get('response', []) or []
+        wanted_ids = set(_INTL_BASKETBALL_LEAGUES.values())
+        team_info = {}
+        matched = 0
+        for g in games:
+            league = g.get('league') or {}
+            league_id = league.get('id')
+            if league_id not in wanted_ids:
+                continue
+            kalshi_prefix = _LEAGUE_ID_TO_PREFIX.get(league_id, '')
+            sport_key = kalshi_prefix.replace('KXAGAME', '').replace('KX', '').replace('GAME', '').lower() or 'intl'
+            home = (g.get('teams') or {}).get('home') or {}
+            away = (g.get('teams') or {}).get('away') or {}
+            home_name = home.get('name') or ''
+            away_name = away.get('name') or ''
+            scores = g.get('scores') or {}
+            try:
+                home_total = int((scores.get('home') or {}).get('total') or 0)
+            except (ValueError, TypeError):
+                home_total = 0
+            try:
+                away_total = int((scores.get('away') or {}).get('total') or 0)
+            except (ValueError, TypeError):
+                away_total = 0
+            status_obj = g.get('status') or {}
+            short = (status_obj.get('short') or '').upper()
+            timer = status_obj.get('timer') or ''
+            # api-sports basketball status codes:
+            # NS=not_started, Q1/Q2/Q3/Q4=quarter, OT=overtime, BT=break, HT=halftime,
+            # FT=finished, AOT=after_overtime, POST=postponed, CANC=cancelled, AWD=awarded
+            live_codes = {'Q1','Q2','Q3','Q4','OT','BT','HT'}
+            finished_codes = {'FT','AOT'}
+            if short in live_codes:
+                state = 'in'
+            elif short in finished_codes:
+                state = 'post'
+            else:
+                state = 'pre'
+            period_map = {'Q1':1,'Q2':2,'Q3':3,'Q4':4,'OT':5,'HT':2,'BT':2,'FT':4,'AOT':5}
+            period = period_map.get(short, 0)
+            entry = {
+                'live': state == 'in',
+                'status': state,
+                'period': period,
+                'clock': timer,
+                'status_detail': short,
+                'home_score': home_total,
+                'away_score': away_total,
+                'score_diff': abs(home_total - away_total),
+                'team_score': home_total,
+                'opp_score': away_total,
+                'home_team': home_name,
+                'away_team': away_name,
+                'espn_sport': f'intl_{sport_key}',
+                'league_id': league_id,
+                'sport_prefix': kalshi_prefix,
+            }
+            for code in _basketball_team_codes(home_name):
+                team_info.setdefault(code, entry)
+                team_info[f'{sport_key}:{code}'] = entry
+            for code in _basketball_team_codes(away_name):
+                # away gets a flipped entry so team_score/opp_score work
+                away_entry = dict(entry)
+                away_entry['team_score'] = away_total
+                away_entry['opp_score'] = home_total
+                team_info.setdefault(code, away_entry)
+                team_info[f'{sport_key}:{code}'] = away_entry
+            matched += 1
+
+        _basketball_api_cache['data'] = team_info
+        _basketball_api_cache['ts'] = time.time()
+        _basketball_api_cache['raw_games'] = games
+        _basketball_daily_limit_hit = False  # healthy fetch cleared any prior cap
+        _save_basketball_cache_to_disk()
+        if matched:
+            print(f'🏀 Intl basketball cache refreshed: {matched} games, {len(team_info)} team-code keys (mode={"hot" if hot_mode else "normal"})')
+        else:
+            print(f'🏀 Intl basketball fetch returned 0 games in our leagues (total in slate: {len(games)})')
+        return team_info
 
 
 def _intl_basketball_event_shape(game: dict, sport_label: str) -> dict:

@@ -6863,16 +6863,26 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         // use the SAME merged flag / colors.
         //   cyan = my posted combined; coral = live bid combined; both green when merged.
         let _zoneOrderPct = 0, _zoneLivePct = 0, _zoneMerged = false;
+        let _zoneLeftEdge = 0, _zoneRightEdge = 0, _zoneClippedL = false, _zoneClippedR = false;
         if (exitPrice > 0) {
-            const _greenRange = Math.max(1, 100 - origTargetCombined);
-            const _redRange = Math.max(1, stopLoss - 100);
+            // Cap each side to ±10c so 1c gaps are visible on wide-width bots.
+            // Without the cap, width=40 spans 60→140 (1c ≈ 1.25% of bar width) and
+            // 8px dots overlap entirely. Capping to 90→110 makes 1c = 5%.
+            const _CAP = 10;
+            const _natGreen = Math.max(1, 100 - origTargetCombined);
+            const _natRed = Math.max(1, stopLoss - 100);
+            const _greenRange = Math.min(_CAP, _natGreen);
+            const _redRange = Math.min(_CAP, _natRed);
+            _zoneLeftEdge = 100 - _greenRange;
+            _zoneRightEdge = 100 + _redRange;
+            _zoneClippedL = _natGreen > _greenRange;
+            _zoneClippedR = _natRed > _redRange;
             const _toPct = (val) => val <= 100
-                ? Math.max(0, Math.min(50, Math.round((val - origTargetCombined) / _greenRange * 50)))
+                ? Math.max(0, Math.min(50, Math.round((val - _zoneLeftEdge) / _greenRange * 50)))
                 : Math.min(100, Math.round(50 + (val - 100) / _redRange * 50));
             _zoneOrderPct = _toPct(combined);
             _zoneLivePct = liveCombined < 999 ? _toPct(liveCombined) : _zoneOrderPct;
-            // Merge only when actual cent prices match — % tolerance hid 1c gaps
-            // because the bar can span 40+ cents (96→140 at width=40 => 2% ≈ 0.9c).
+            // Merge only when actual cent prices match — dots at true positions.
             _zoneMerged = exitPrice > 0 && exitBidLive > 0 && exitPrice === exitBidLive;
         }
         const headerOrderCol = exitPrice > 0 ? (_zoneMerged ? '#00ff88' : '#00d4ff') : combinedCol;
@@ -6886,23 +6896,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             const orderCol = merged ? '#00ff88' : '#00d4ff';
             const liveCol = merged ? '#00ff88' : '#ff7043';
             const glowStyle = merged ? 'box-shadow:0 0 8px #00ff8880,0 0 16px #00ff8840;' : '';
-            // Enforce minimum visual gap between the two dots — on a wide width=40
-            // bar a real 1c gap is only ~1.25% of width, so 8px dots overlap
-            // entirely. Push them apart symmetrically around their midpoint to
-            // a minimum visual separation. Tooltips + header still show truth.
-            const MIN_VISUAL_GAP_PCT = 10;
-            let _orderRendered = orderPct;
-            let _liveRendered = livePct;
-            if (!merged) {
-                const _gap = Math.abs(orderPct - livePct);
-                if (_gap < MIN_VISUAL_GAP_PCT) {
-                    const _mid = (orderPct + livePct) / 2;
-                    const _half = MIN_VISUAL_GAP_PCT / 2;
-                    const _orderIsLeft = orderPct <= livePct;
-                    _orderRendered = Math.max(0, Math.min(100, _mid + (_orderIsLeft ? -_half : _half)));
-                    _liveRendered  = Math.max(0, Math.min(100, _mid + (_orderIsLeft ?  _half : -_half)));
-                }
-            }
+            // Dots at TRUE positions on the (potentially capped) bar — no fudging.
+            // Bar range is capped to ±10c above so 1c gap = 5% of width visually.
             zoneBarHtml = `<div style="margin-top:6px;">
                 <div style="position:relative;height:6px;background:#0a1018;border-radius:3px;overflow:hidden;">
                     <div style="position:absolute;left:0;width:50%;height:100%;background:linear-gradient(90deg,#00ff8818,#00ff8808);"></div>
@@ -6911,14 +6906,14 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                     ${merged ? `
                         <div style="position:absolute;left:${orderPct}%;width:10px;height:100%;background:#00ff88;border-radius:5px;z-index:4;transform:translateX(-5px);${glowStyle}" title="Order/Bid aligned: ${combined}c"></div>
                     ` : `
-                        <div style="position:absolute;left:${_orderRendered}%;width:8px;height:100%;background:${orderCol};border-radius:4px;z-index:3;transform:translateX(-4px);box-shadow:0 0 6px ${orderCol}60;" title="My order: ${combined}c"></div>
-                        <div style="position:absolute;left:${_liveRendered}%;width:8px;height:100%;background:${liveCol};border-radius:4px;z-index:4;transform:translateX(-4px);box-shadow:0 0 6px ${liveCol}60;" title="Live bid: ${liveCombined < 999 ? liveCombined : '?'}c"></div>
+                        <div style="position:absolute;left:${orderPct}%;width:8px;height:100%;background:${orderCol};border-radius:4px;z-index:3;transform:translateX(-4px);box-shadow:0 0 6px ${orderCol}60;" title="My order: ${combined}c"></div>
+                        <div style="position:absolute;left:${livePct}%;width:8px;height:100%;background:${liveCol};border-radius:4px;z-index:4;transform:translateX(-4px);box-shadow:0 0 6px ${liveCol}60;" title="Live bid: ${liveCombined < 999 ? liveCombined : '?'}c"></div>
                     `}
                 </div>
                 <div style="position:relative;height:12px;margin-top:2px;font-size:7px;font-weight:700;">
-                    <span style="position:absolute;left:0;color:#00ff88;">${origTargetCombined}c</span>
+                    <span style="position:absolute;left:0;color:#00ff88;" title="Target combined: ${origTargetCombined}c">${_zoneLeftEdge}c${_zoneClippedL ? '◀' : ''}</span>
                     <span style="position:absolute;left:50%;transform:translateX(-50%);color:#ffaa00;">100c</span>
-                    <span style="position:absolute;right:0;color:#ff4444;">${stopLoss}c</span>
+                    <span style="position:absolute;right:0;color:#ff4444;" title="Stop loss combined: ${stopLoss}c">${_zoneRightEdge}c${_zoneClippedR ? '▶' : ''}</span>
                 </div>
             </div>`;
         }

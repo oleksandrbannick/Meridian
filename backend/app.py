@@ -16501,6 +16501,26 @@ def _handle_apex(bot_id, bot, actions):
                 _rc_bn = bot.get('net_no', 0)     # Bot NO
                 if _rc_ky != _rc_by or _rc_kn != _rc_bn:
                     _rc_changed = False
+                    # Stamp _counted_order_fills from actual Kalshi fills so cancel-race
+                    # handlers don't re-add fills that REST already credited via position diff.
+                    # Without this, the upward-add below + a subsequent cancel-race fill on
+                    # the same order_id double-counts inventory.
+                    if _rc_ky > _rc_by or _rc_kn > _rc_bn:
+                        try:
+                            _fills_resp = kalshi_client.get_fills(ticker=ticker, limit=50)
+                            _all_fills = _fills_resp.get('fills', []) or []
+                            _cof = bot.setdefault('_counted_order_fills', {})
+                            _per_oid = {}
+                            for _f in _all_fills:
+                                _oid_f = _f.get('order_id')
+                                if not _oid_f:
+                                    continue
+                                _cnt_f = float(_f.get('count_fp', _f.get('count', 0)) or 0)
+                                _per_oid[_oid_f] = _per_oid.get(_oid_f, 0) + _cnt_f
+                            for _oid_f, _cnt_f in _per_oid.items():
+                                _cof[_oid_f] = max(_cof.get(_oid_f, 0), _cnt_f)
+                        except Exception as _fe:
+                            print(f'⚠ RECONCILE FILLS STAMP FAIL: {bot_id} {_fe}')
                     # Upward: Kalshi has more than bot tracks — add missing inventory
                     if _rc_ky > _rc_by:
                         _m = _rc_ky - _rc_by
@@ -16518,19 +16538,45 @@ def _handle_apex(bot_id, bot, actions):
                         bot['avg_no_cost'] = round(bot['total_no_cost'] / _rc_kn) if _rc_kn > 0 else 0
                         _rc_changed = True
                         print(f'🔄 RECONCILE ACTIVE: {bot_id} NO {_rc_bn}→{_rc_kn} (+{_m} from Kalshi)')
-                    # Downward: bot tracks more than Kalshi — clamp to reality
+                    # Downward: bot tracks more than Kalshi — missed exit fills.
+                    # If we have exit-order context, reconstruct the round trip at the
+                    # last known exit price so P&L + RT count are credited. Otherwise
+                    # fall back to silent clamp.
+                    _exit_side_ctx = bot.get('_exit_side')
+                    _exit_held_ctx = bot.get('_exit_held_side')
+                    _exit_price_ctx = bot.get('_exit_price', 0) or 0
                     if _rc_ky < _rc_by:
-                        bot['net_yes'] = _rc_ky
-                        bot['total_yes_cost'] = (bot.get('avg_yes_cost', 0) * _rc_ky) if _rc_ky > 0 else 0
-                        if _rc_ky == 0: bot['avg_yes_cost'] = 0
+                        _delta_y = _rc_by - _rc_ky
+                        _rt_done = False
+                        if _exit_held_ctx == 'yes' and _exit_side_ctx == 'no' and _exit_price_ctx > 0:
+                            try:
+                                _apex_mm_record_round_trip(bot_id, bot, 'no', _exit_price_ctx, _delta_y)
+                                _rt_done = True
+                                print(f'🔄 RECONCILE RT REBUILD: {bot_id} YES -{_delta_y} via NO@{_exit_price_ctx}c (missed exit fills)')
+                            except Exception as _rte:
+                                print(f'⚠ RECONCILE RT REBUILD FAILED: {bot_id} {_rte}')
+                        if not _rt_done:
+                            bot['net_yes'] = _rc_ky
+                            bot['total_yes_cost'] = (bot.get('avg_yes_cost', 0) * _rc_ky) if _rc_ky > 0 else 0
+                            if _rc_ky == 0: bot['avg_yes_cost'] = 0
+                            print(f'🔄 RECONCILE CLAMP: {bot_id} YES {_rc_by}→{_rc_ky} (Kalshi authoritative, no RT ctx)')
                         _rc_changed = True
-                        print(f'🔄 RECONCILE CLAMP: {bot_id} YES {_rc_by}→{_rc_ky} (Kalshi authoritative)')
                     if _rc_kn < _rc_bn:
-                        bot['net_no'] = _rc_kn
-                        bot['total_no_cost'] = (bot.get('avg_no_cost', 0) * _rc_kn) if _rc_kn > 0 else 0
-                        if _rc_kn == 0: bot['avg_no_cost'] = 0
+                        _delta_n = _rc_bn - _rc_kn
+                        _rt_done = False
+                        if _exit_held_ctx == 'no' and _exit_side_ctx == 'yes' and _exit_price_ctx > 0:
+                            try:
+                                _apex_mm_record_round_trip(bot_id, bot, 'yes', _exit_price_ctx, _delta_n)
+                                _rt_done = True
+                                print(f'🔄 RECONCILE RT REBUILD: {bot_id} NO -{_delta_n} via YES@{_exit_price_ctx}c (missed exit fills)')
+                            except Exception as _rte:
+                                print(f'⚠ RECONCILE RT REBUILD FAILED: {bot_id} {_rte}')
+                        if not _rt_done:
+                            bot['net_no'] = _rc_kn
+                            bot['total_no_cost'] = (bot.get('avg_no_cost', 0) * _rc_kn) if _rc_kn > 0 else 0
+                            if _rc_kn == 0: bot['avg_no_cost'] = 0
+                            print(f'🔄 RECONCILE CLAMP: {bot_id} NO {_rc_bn}→{_rc_kn} (Kalshi authoritative, no RT ctx)')
                         _rc_changed = True
-                        print(f'🔄 RECONCILE CLAMP: {bot_id} NO {_rc_bn}→{_rc_kn} (Kalshi authoritative)')
                     if _rc_changed:
                         # Resize exit order to match corrected inventory
                         _rc_ny = bot.get('net_yes', 0)

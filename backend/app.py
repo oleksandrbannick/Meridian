@@ -5392,7 +5392,7 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
             sell_held = (held_avg + (100 - held_ask)) if held_ask > 0 else 999
             best_combined = min(buy_opp, sell_held)
 
-            width = bot.get('start_gap', 4) * 2
+            width = _apex_mm_exit_width(bot)
             # Stop = 100 + width (symmetric with edge). min_sl_margin defaults to 0
             # so SL=width; user can raise per-bot for noisy sports to restore old 6c floor.
             stop = 100 + max(width, bot.get('min_sl_margin', 0))
@@ -9098,6 +9098,14 @@ def _apex_mm_market_best_bid(bot, side):
     return 0
 
 
+def _apex_mm_exit_width(bot):
+    """Width used for exit pricing + SL band.
+    Locked at first inventory acquisition so entry-side auto-width can adapt to
+    collapsing room without shifting the exit target / SL band underneath a
+    held position. Falls back to current start_gap*2 when not locked (flat)."""
+    return bot.get('_exit_locked_width') or (bot.get('start_gap', 4) * 2)
+
+
 def _apex_mm_target_start_gap(bot):
     """Compute target start_gap based on current room (excluding our own orders).
     Target width = room/2 → target gap = room/4.
@@ -9201,15 +9209,15 @@ def _apex_mm_cancel_close_side_orders(bot_id, bot):
 
 
 def _apex_mm_sync_auto_width(bot_id, bot):
-    """In auto mode + flat, mutate bot['start_gap'] to current room-derived target.
+    """In auto mode, mutate bot['start_gap'] to current room-derived target.
     Uses market best bid (excluding our own orders) to avoid the self-inflation
     loop where our bids shrink perceived room → width tightens → we repost
     tighter → perceived room shrinks more → width=2 death spiral.
-    Never mutates while holding inventory — avoids SL band shifting under held positions.
+    Safe to run while holding inventory — _exit_locked_width pins exit/SL band so
+    entry rungs can adapt to collapsing room without shifting the held position's
+    target.
     No-op when _auto_width is False."""
     if not bot.get('_auto_width'):
-        return
-    if bot.get('net_yes', 0) != 0 or bot.get('net_no', 0) != 0:
         return
     yes_bid = _apex_mm_market_best_bid(bot, 'yes')
     no_bid = _apex_mm_market_best_bid(bot, 'no')
@@ -9906,10 +9914,12 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
         if net_held <= 0:
             return  # went flat during processing
 
-        # Calculate exit price: breakeven with profit target (half width)
-        # Post at the actual target — don't cap at bid. Being best bid is fine when exiting.
-        # Snap-to-profit in walk_exit handles snapping down if market improves.
-        width = bot.get('start_gap', 4) * 2
+        # Calculate exit price: breakeven with profit target (half width).
+        # Lock exit width on first acquisition so entry-side auto-width can shrink
+        # to track collapsing room without shifting this band under held inventory.
+        if not bot.get('_exit_locked_width'):
+            bot['_exit_locked_width'] = bot.get('start_gap', 4) * 2
+        width = bot['_exit_locked_width']
         exit_price = max(1, min(98, 100 - avg_held - width))
         exit_oid = bot.get(f'_{exit_side}_exit_oid')
         price_kwarg = {f'{exit_side}_price': exit_price}
@@ -10030,7 +10040,7 @@ def _apex_mm_walk_up(bot_id, bot):
     now = time.time()
     ticker = bot.get('ticker', '')
     current_price = bot.get('_exit_price', 0)
-    width = bot.get('start_gap', 4) * 2
+    width = _apex_mm_exit_width(bot)
     target_price = bot.get('_exit_target_price', max(1, 100 - avg_held - width))
     wall_price = max(target_price + 1, min(99, 100 - avg_held))  # 100c combined = breakeven
     net_held = abs(net_yes - net_no)
@@ -10570,6 +10580,7 @@ def _apex_mm_cycle_reset(bot_id, bot):
     bot['_skew_active'] = False
     bot['_skew_direction'] = ''
     bot['_exit_price'] = 0
+    bot['_exit_locked_width'] = 0
     bot['_exit_walk_count'] = 0
     bot['_exit_walk_started'] = 0
     bot['_exit_posted_at'] = 0
@@ -10690,6 +10701,7 @@ def _apex_mm_fresh_ladder(bot_id, bot):
     bot['_skew_active'] = False
     bot['_skew_direction'] = ''
     bot['_exit_price'] = 0
+    bot['_exit_locked_width'] = 0
     bot['_exit_walk_count'] = 0
     bot['_exit_walk_started'] = 0
     bot['_exit_posted_at'] = 0
@@ -11877,6 +11889,11 @@ def _apex_mm_record_round_trip(bot_id, bot, fill_side, fill_price, close_qty):
         bot[f'avg_{opposite}_cost'] = 0
         bot[f'total_{opposite}_cost'] = 0
 
+    # Flat after this RT — clear locked exit width so next round trip can
+    # snapshot fresh from current (auto-adapted) start_gap.
+    if bot.get('net_yes', 0) == 0 and bot.get('net_no', 0) == 0:
+        bot['_exit_locked_width'] = 0
+
     # Compute round-trip hold time (time opposite side inventory was held)
     _opp_inv_since = bot.get(f'_{opposite}_inv_since', 0)
     _rt_hold_ms = round((time.time() - _opp_inv_since) * 1000) if _opp_inv_since > 0 else None
@@ -12058,9 +12075,10 @@ def create_ladder_arb_bot():
         # Runtime _apex_mm_target_start_gap will keep recomputing this each cycle.
         if auto_width:
             _room = 100 - live_yes_bid - live_no_bid
-            if _room < 6:
-                return jsonify({'error': f'Room {_room}c too tight for Apex MM (need >= 6c) — use Phantom'}), 400
-            start_gap = max(1, min(20, (_room - 4) // 2))
+            if _room < 2:
+                return jsonify({'error': f'Room {_room}c — need >= 2c (no spread to capture)'}), 400
+            # Below 6c → BBO-tight (width=2), still valid; user knows what they're doing
+            start_gap = max(1, min(20, (_room - 4) // 2)) if _room >= 6 else 1
         yes_levels, no_levels = _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=qty_per_level, inv_limit=0)
         # Auto-compute inventory limit from ladder total (max contracts per side)
         inventory_limit = max(sum(q for _, q in yes_levels), sum(q for _, q in no_levels)) if yes_levels or no_levels else 50
@@ -12125,6 +12143,7 @@ def create_ladder_arb_bot():
             '_yes_exit_oid': None,
             '_no_exit_oid': None,
             '_exit_price': 0,
+            '_exit_locked_width': 0,
             '_exit_posted_at': 0,
             '_exit_walk_count': 0,
             '_exit_walk_started': 0,
@@ -16496,7 +16515,7 @@ def _handle_apex(bot_id, bot, actions):
           _buy_opp_combined = _held_avg + _exit_bid if _exit_bid > 0 else 999
           _sell_held_combined = _held_avg + (100 - _held_ask) if _held_ask > 0 else 999
           _best_combined = min(_buy_opp_combined, _sell_held_combined)
-          _width = bot.get('start_gap', 4) * 2
+          _width = _apex_mm_exit_width(bot)
           # Stop = 100 + width (symmetric with edge). min_sl_margin defaults to 0
           # so SL=width; user can raise per-bot for noisy sports to restore old 6c floor.
           _stop = 100 + max(_width, bot.get('min_sl_margin', 0))

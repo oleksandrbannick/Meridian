@@ -2655,16 +2655,22 @@ def _tennis_player_code(display_name: str) -> str:
 
 
 def _tennis_player_all_codes(display_name: str) -> list:
-    """Generate 3-letter codes from ALL name parts (>=3 chars).
-    Kalshi may use any part of compound surnames like 'Boscardin Dias' → BOS or DIA."""
+    """Generate codes from ALL name parts (>=3 chars).
+    Includes both 3-letter prefix AND full uppercase form for parts >=4 chars.
+    Kalshi may use a 3-char code (HSU) OR the full surname (KWON, HERNANDEZ).
+    Compound surnames like 'Boscardin Dias' yield BOS, BOSCARDIN, DIA, DIAS."""
     if not display_name:
         return []
     codes = []
     for part in display_name.strip().split():
         if len(part) >= 3:
-            code = part[:3].upper()
-            if code not in codes:
-                codes.append(code)
+            prefix = part[:3].upper()
+            if prefix not in codes:
+                codes.append(prefix)
+            if len(part) >= 4:
+                full = part.upper()
+                if full not in codes:
+                    codes.append(full)
     return codes
 
 
@@ -7358,7 +7364,7 @@ def _is_game_live(ticker: str) -> bool:
     if _cached and (time.time() - _cached[1]) < _IS_GAME_LIVE_TTL:
         return _cached[0]
     # ── TENNIS: Use Kalshi milestones, then API Tennis scoreboard ──
-    is_tennis = ticker.startswith('KXATP') or ticker.startswith('KXWTA')
+    is_tennis = ticker.startswith('KXATP') or ticker.startswith('KXWTA') or ticker.startswith('KXITF')
     if is_tennis:
         # Try milestones first (fast, cached)
         parts = ticker.split('-')
@@ -7471,7 +7477,7 @@ def _is_game_over_cached(ticker: str) -> bool:
     if not ticker:
         return True
     # Tennis: check milestones cache
-    is_tennis = ticker.startswith('KXATP') or ticker.startswith('KXWTA')
+    is_tennis = ticker.startswith('KXATP') or ticker.startswith('KXWTA') or ticker.startswith('KXITF')
     if is_tennis:
         parts = ticker.split('-')
         if len(parts) >= 2:
@@ -8102,7 +8108,7 @@ def _get_game_score_for_ticker(ticker: str) -> dict:
     Returns {home_team, away_team, home_score, away_score, period, clock, status_detail, status} or {}."""
     # Guard: skip if ticker date is in the future (avoids showing today's PHI game
     # on a bot whose ticker is for tomorrow's PHI vs CLE game)
-    is_tennis = ticker.startswith('KXATP') or ticker.startswith('KXWTA')
+    is_tennis = ticker.startswith('KXATP') or ticker.startswith('KXWTA') or ticker.startswith('KXITF')
     try:
         parts_chk = ticker.split('-')
         if len(parts_chk) >= 2:
@@ -25204,7 +25210,7 @@ def get_live_kalshi_markets_endpoint():
             is_live = False
 
             # Tennis: use Kalshi milestones (ESPN doesn't cover tennis)
-            is_tennis = ticker.startswith('KXATP') or ticker.startswith('KXWTA')
+            is_tennis = ticker.startswith('KXATP') or ticker.startswith('KXWTA') or ticker.startswith('KXITF')
             if is_tennis:
                 parts = ticker.split('-')
                 if len(parts) >= 2:

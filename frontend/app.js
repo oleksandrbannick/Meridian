@@ -6870,7 +6870,9 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 : Math.min(100, Math.round(50 + (val - 100) / _redRange * 50));
             _zoneOrderPct = _toPct(combined);
             _zoneLivePct = liveCombined < 999 ? _toPct(liveCombined) : _zoneOrderPct;
-            _zoneMerged = Math.abs(_zoneOrderPct - _zoneLivePct) <= 2;
+            // Merge only when actual cent prices match — % tolerance hid 1c gaps
+            // because the bar can span 40+ cents (96→140 at width=40 => 2% ≈ 0.9c).
+            _zoneMerged = exitPrice > 0 && exitBidLive > 0 && exitPrice === exitBidLive;
         }
         const headerOrderCol = exitPrice > 0 ? (_zoneMerged ? '#00ff88' : '#00d4ff') : combinedCol;
         const headerLiveCol = _zoneMerged ? '#00ff88' : '#ff7043';

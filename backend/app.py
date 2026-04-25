@@ -7826,10 +7826,11 @@ _PHANTOM_DEATH_ZONE = {
     'KXMLB':    {'period': 9, 'secs': None, 'name': 'MLB 9th inning'},
     'KXKBO':    {'period': 9, 'secs': None, 'name': 'KBO 9th inning'},
     'KXNPB':    {'period': 9, 'secs': None, 'name': 'NPB 9th inning'},
-    # Tennis: only fires at MATCH POINT in the deciding set (or deciding-set
-    # tiebreak match point). Sets 1-2 of BO3 (sets 1-4 of BO5) never trigger
-    # — that was the blowout-style logic we removed. This is the true
-    # death zone: one point from the match actually ending.
+    # Tennis: ENTIRE deciding set is death zone (set 3 of BO3, set 5 of BO5).
+    # Sets 1-2 of BO3 (sets 1-4 of BO5) never trigger — match point in those
+    # sets is "blowout-style" since opponent can save and force the next set.
+    # Once both players have won (sets_to_win - 1) sets, the next set IS the
+    # match — every game/break can end it, fav spikes throughout.
     'KXATP':    {'tennis': True, 'name': 'ATP Tennis'},
     'KXWTA':    {'tennis': True, 'name': 'WTA Tennis'},
     'KXITF':    {'tennis': True, 'name': 'ITF Tennis'},
@@ -7837,9 +7838,10 @@ _PHANTOM_DEATH_ZONE = {
 
 
 def _tennis_death_zone_check(match_data):
-    """Check if a tennis match is at MATCH POINT in the DECIDING set —
-    one point from the match actually ending. Set 1-2 of BO3 (or 1-4 of BO5)
-    never trigger here. Returns (True, reason) or (False, '')."""
+    """Tennis death zone = ENTIRE DECIDING SET (set 3 of BO3, set 5 of BO5).
+    Fires once both players have won (sets_to_win - 1) sets — the current set
+    will end the match. Sets 1-2 of BO3 (sets 1-4 of BO5) never trigger.
+    Returns (True, reason) or (False, '')."""
     scores = match_data.get('scores', [])
     if not scores:
         return False, ''
@@ -7848,42 +7850,14 @@ def _tennis_death_zone_check(match_data):
     p2_sets = sum(1 for s in scores if _set_won(s, 'second'))
     # BO3 vs BO5 (BO5 only at Grand Slams — infer from set count)
     sets_to_win = 3 if (p1_sets >= 3 or p2_sets >= 3 or len(scores) > 3) else 2
-    # Current set = last entry in scores array (in-progress)
+    # Deciding set = both players have won (sets_to_win - 1) sets
+    if p1_sets != sets_to_win - 1 or p2_sets != sets_to_win - 1:
+        return False, ''
     cur = scores[-1]
     g1 = int(float(cur.get('score_first', 0)))
     g2 = int(float(cur.get('score_second', 0)))
-    # Point score (e.g. "40-15", "40-A", "0-40")
-    game_pts = (match_data.get('event_game_result', '') or '').strip()
-    if not game_pts or game_pts == '-':
-        return False, ''
-    pts = game_pts.split('-')
-    if len(pts) != 2:
-        return False, ''
-    pt1 = pts[0].strip()
-    pt2 = pts[1].strip()
-    # Match point: deciding set + serving for match + at 40/Ad while opponent isn't
-    # P1 deciding-set match point: p1 has won (sets_to_win - 1) sets, leads 5+ games,
-    # leads in current set, opponent has ≤4 games, point score 40 or A and not opponent's
-    _p1_serving_for_match = p1_sets == sets_to_win - 1 and g1 >= 5 and g1 > g2 and g2 <= 4
-    _p2_serving_for_match = p2_sets == sets_to_win - 1 and g2 >= 5 and g2 > g1 and g1 <= 4
-    # Tiebreak in deciding set: both players one set away
-    _deciding_tb = (p1_sets == sets_to_win - 1 and p2_sets == sets_to_win - 1) and g1 == 6 and g2 == 6
-    if _p1_serving_for_match and pt1 in ('40', 'A') and pt2 not in ('40', 'A'):
-        return True, f'match point P1 (sets {p1_sets}-{p2_sets}, games {g1}-{g2}, pts {game_pts})'
-    if _p2_serving_for_match and pt2 in ('40', 'A') and pt1 not in ('40', 'A'):
-        return True, f'match point P2 (sets {p2_sets}-{p1_sets}, games {g2}-{g1}, pts {game_pts})'
-    # Tiebreak match point: deciding-set tiebreak, one player ahead with score >= 6
-    if _deciding_tb:
-        try:
-            _tb1 = int(pt1) if pt1.isdigit() else 0
-            _tb2 = int(pt2) if pt2.isdigit() else 0
-            if _tb1 >= 6 and _tb1 > _tb2:
-                return True, f'tiebreak match point P1 ({_tb1}-{_tb2})'
-            if _tb2 >= 6 and _tb2 > _tb1:
-                return True, f'tiebreak match point P2 ({_tb2}-{_tb1})'
-        except ValueError:
-            pass
-    return False, ''
+    set_label = 'set 5' if sets_to_win == 3 else 'set 3'
+    return True, f'{set_label} deciding (sets {p1_sets}-{p2_sets}, games {g1}-{g2})'
 
 
 def _tennis_blowout_check(match_data):

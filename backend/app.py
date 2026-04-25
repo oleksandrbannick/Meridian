@@ -5146,10 +5146,12 @@ def _ws_phantom_sympathy_guard(ticker, yes_bid, no_bid, yes_ask, no_ask):
         # Clean pull — flag for filter/display + store reference prices for recovery gate
         bot['_sympathy_pulled'] = True
         bot['_sympathy_pulled_at'] = now
+        bot['_sympathy_pull_reason'] = _pull_reason_tag  # 'textbook' or 'runaway' for UI
         bot['_fav_bid_at_pull'] = fav_bid
         bot['_fav_ask_at_pull'] = fav_ask
         bot['_dog_bid_at_pull'] = dog_bid
         bot['_sympathy_combined_at_pull'] = my_combined
+        bot['_fav_runaway_at_pull'] = fav_runaway
 
         if _pull_reason_tag == 'runaway':
             print(f'🎯 PHANTOM RUNAWAY PULL: {bot_id} fav_bid {_fb_anchor}→{fav_bid}¢ (+{fav_runaway}c since anchor), combined={my_combined}¢ — grind escape')
@@ -13788,10 +13790,12 @@ def _handle_phantom(bot_id, bot, actions):
                 })
                 bot['_sympathy_pulled'] = False
                 bot['_sympathy_pulled_at'] = None
+                bot['_sympathy_pull_reason'] = None
                 bot['_fav_bid_at_pull'] = None
                 bot['_fav_ask_at_pull'] = None
                 bot['_dog_bid_at_pull'] = None
                 bot['_sympathy_combined_at_pull'] = None
+                bot['_fav_runaway_at_pull'] = None
                 # Clear fill state (mirror price-floor recovery)
                 bot['dog_fill_qty'] = 0
                 bot['fav_fill_qty'] = 0
@@ -14104,10 +14108,12 @@ def _handle_phantom(bot_id, bot, actions):
         if bot.get('_sympathy_pulled') and dog_order_id and dog_filled == 0:
             bot['_sympathy_pulled'] = False
             bot['_sympathy_pulled_at'] = None
+            bot['_sympathy_pull_reason'] = None
             bot['_fav_bid_at_pull'] = None
             bot['_fav_ask_at_pull'] = None
             bot['_dog_bid_at_pull'] = None
             bot['_sympathy_combined_at_pull'] = None
+            bot['_fav_runaway_at_pull'] = None
             print(f'🔧 SYMPATHY FLAG CLEAR: {bot_id} had stale _sympathy_pulled with live dog order — re-armed sympathy guard')
 
         # Game ending: cancel to free capital
@@ -16018,10 +16024,12 @@ def _handle_phantom(bot_id, bot, actions):
             # and the relevant guards stay armed against re-firing.
             bot['_sympathy_pulled'] = False
             bot['_sympathy_pulled_at'] = None
+            bot['_sympathy_pull_reason'] = None
             bot['_fav_bid_at_pull'] = None
             bot['_fav_ask_at_pull'] = None
             bot['_dog_bid_at_pull'] = None
             bot['_sympathy_combined_at_pull'] = None
+            bot['_fav_runaway_at_pull'] = None
             bot['_price_floor_pulled'] = False
             bot['_pull_reason'] = None
             bot['_drift_pull_logged'] = False

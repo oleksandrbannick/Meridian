@@ -6276,7 +6276,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const _hasLiveDog = status === 'dog_anchor_posted' && !!bot.dog_order_id;
     const _isPulledFloor = (status === 'dog_anchor_posted' || status === 'waiting_repeat') && (bot._price_floor_pulled || _isPpiKill) && !_hasLiveDog;
     const _isAnyPulled = _isSympathyPulled || _isBlowoutPulled || _isPulledFloor;
-    const _pullLabel = _isBlowoutPulled ? '🎾 BLOWOUT' : _isSympathyPulled ? '🎯 SYMPATHY PULL' : _isPpiKill ? '🚨 PPI KILL' : '⏸ PULLED';
+    const _sympLabel = bot._sympathy_pull_reason === 'runaway' ? '🐌 RUNAWAY PULL' : '🎯 SYMPATHY PULL';
+    const _pullLabel = _isBlowoutPulled ? '🎾 BLOWOUT' : _isSympathyPulled ? _sympLabel : _isPpiKill ? '🚨 PPI KILL' : '⏸ PULLED';
     const statusMap = {
         'dog_anchor_posted': _isAnyPulled ? _pullLabel : _isParked ? '🅿️ PARKED' : '⏳ DOG POSTED', 'ladder_posted': '🪜 LADDER POSTED',
         'dog_filled': bot._sub_contract_stranded ? '🧊 SUB-1 STRANDED' : bot._orphan_hedge ? '🚨 ORPHAN — HEDGING' : '👻 FILLED — HEDGING', 'ladder_filled_no_fav': '👻 FILLED — HEDGING',
@@ -8429,7 +8430,8 @@ async function loadBots() {
             const isAnchorLadder = bot.bot_category === 'anchor_ladder';
             const isLadderArb = bot.bot_category === 'ladder_arb';
             const _compactSympathy = bot._sympathy_pulled && (bot.status === 'dog_anchor_posted' || bot.status === 'waiting_repeat');
-            const statusLabel = _compactSympathy ? '🎯 SYMPATHY PULL' : {
+            const _compactSympLabel = bot._sympathy_pull_reason === 'runaway' ? '🐌 RUNAWAY PULL' : '🎯 SYMPATHY PULL';
+            const statusLabel = _compactSympathy ? _compactSympLabel : {
                 both_posted:      '⚡ BOTH LIVE',
                 fav_posted:       '⏳ WAITING',     // legacy: one order posted
                 pending_fills:    '⏳ FILLING',

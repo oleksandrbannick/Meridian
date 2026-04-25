@@ -4711,22 +4711,16 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
         if fav_bid <= 0:
             continue
 
-        # Self-exclusion: if we're alone at fav_bid, the "bid" we see is just our own
-        # order — real market bid is the next level down. Walk the book to find it.
-        _fav_fills = bot.get('fav_fill_qty', 0)
-        _bot_qty = bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1))
-        _remaining = max(1, _bot_qty - _fav_fills)
-        effective_bid = _fav_bid_excluding_self(hedge_ticker, fav_side, fav_price, _remaining)
-        if effective_bid <= 0:
-            effective_bid = fav_bid  # fallback to WS bid if orderbook unavailable
-
-        # Only drop if hedge is ABOVE the effective (non-self) bid
-        if fav_price <= effective_bid:
+        # Stay parked at bid — even when alone at top of book.
+        # Phantom is a speed play: queue priority compounds, oscillating
+        # off-bid (self-alone drop) → on-bid (snap up) shreds priority and
+        # rarely ends up filled. Drop only when an external bid genuinely
+        # below fav_price appears (i.e., our order is above the highest bid).
+        if fav_price <= fav_bid:
             continue
 
-        # Drop to effective bid — same as monitor snap, no bid+1 (phantom always posts at bid)
         fav_ask_now = yes_ask if fav_side == 'yes' else no_ask
-        drop_target = effective_bid
+        drop_target = fav_bid
 
         if drop_target <= 0 or drop_target >= fav_price:
             continue
@@ -4768,12 +4762,10 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 bot['no_price'] = drop_target
             bot['fav_last_walk_at'] = time.time()
             bot['fav_walk_count'] = bot.get('fav_walk_count', 0) + 1
-            _alone_tag = ' SELF-ALONE' if effective_bid < fav_bid else ''
-            print(f'⚡ WS PHANTOM DROP: {bot_id} fav {fav_price}→{drop_target}¢ (bid={fav_bid}¢, effective={effective_bid}¢{_alone_tag})')
+            print(f'⚡ WS PHANTOM DROP: {bot_id} fav {fav_price}→{drop_target}¢ (bid={fav_bid}¢)')
             bot_log('PHANTOM_WS_INSTANT_DROP', bot_id, {
                 'old_price': fav_price, 'new_price': drop_target,
                 'fav_bid': fav_bid, 'fav_ask': fav_ask_now,
-                'effective_bid': effective_bid, 'self_alone': effective_bid < fav_bid,
             })
             save_state()
         except Exception as e:
@@ -14180,12 +14172,66 @@ def _handle_phantom(bot_id, bot, actions):
                     _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
                     _amend_new_oid = _amend_ord.get('order_id', '')
                     if _amend_new_oid and _amend_new_oid != dog_order_id:
+                        # ORDER ID CHANGED — Kalshi internally cancel+reposted.
+                        # Any fills on the OLD order would be silently dropped, leaving
+                        # an unmanaged dog position (the cancel-race orphan pattern).
+                        # REST-check the old order for fills before moving on; if any,
+                        # treat as a dog fill and route through the hedge worker.
+                        _old_fills = 0
+                        try:
+                            api_read_limiter.wait()
+                            _old_resp = kalshi_client.get_order(dog_order_id)
+                            _old_data = _old_resp.get('order', _old_resp) if isinstance(_old_resp, dict) else {}
+                            _old_fills = _parse_fill_count(_old_data)
+                        except Exception:
+                            pass
                         bot['dog_order_id'] = _amend_new_oid
                         bot.setdefault('_all_dog_order_ids', []).append(_amend_new_oid)
                         if dog_side == 'yes':
                             bot['yes_order_id'] = _amend_new_oid
                         else:
                             bot['no_order_id'] = _amend_new_oid
+                        if _old_fills > 0 and not bot.get('_hedge_fired'):
+                            # Cancel the new dog order before hedging so it can't fill more
+                            # dog inventory mid-hedge. If the cancel races (new order filled
+                            # in flight), pick up those fills too and add to total.
+                            _new_fills = 0
+                            _cancel_result = _safe_cancel(_amend_new_oid, f'amend_repost_old_fill_{bot_id}')
+                            if isinstance(_cancel_result, tuple) and _cancel_result[0] == 'filled':
+                                _new_fills = _cancel_result[1] or 0
+                            _total_fills = _old_fills + _new_fills
+                            print(f'🔍 AMEND-REPOST FILL CATCH: {bot_id} old order {dog_order_id[:12]} '
+                                  f'filled {_old_fills}{f" (+{_new_fills} on new order cancel-race)" if _new_fills else ""} '
+                                  f'during cancel+repost — firing hedge for {_total_fills}')
+                            bot['dog_order_id'] = None
+                            if dog_side == 'yes':
+                                bot['yes_order_id'] = None
+                            else:
+                                bot['no_order_id'] = None
+                            bot['dog_fill_qty'] = max(bot.get('dog_fill_qty', 0), _total_fills)
+                            if dog_side == 'yes':
+                                bot['yes_fill_qty'] = bot['dog_fill_qty']
+                            else:
+                                bot['no_fill_qty'] = bot['dog_fill_qty']
+                            bot['_hedge_fired'] = True
+                            bot['dog_filled_at'] = time.time()
+                            bot['status'] = 'dog_filled'
+                            if _total_fills < qty:
+                                bot['_original_qty'] = qty
+                                bot['_partial_hedge_qty'] = _total_fills
+                            _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
+                            bot_log('PHANTOM_AMEND_REPOST_FILL_CATCH', bot_id, {
+                                'old_oid': dog_order_id[:12], 'new_oid': _amend_new_oid[:12],
+                                'old_fills': _old_fills, 'new_fills': _new_fills,
+                                'total_fills': _total_fills, 'qty': qty,
+                            })
+                            _audit('PHANTOM_AMEND_REPOST_FILL_CATCH', bot_id, {
+                                'ticker': ticker, 'old_oid': dog_order_id, 'new_oid': _amend_new_oid,
+                                'old_fills': _old_fills, 'new_fills': _new_fills,
+                                'total_fills': _total_fills, 'qty': qty,
+                            })
+                            save_state()
+                            return
                     actual_new_price = new_dog_price
                 except Exception as _amend_err:
                     _amend_str = str(_amend_err)

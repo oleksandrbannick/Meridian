@@ -5083,16 +5083,21 @@ def _ws_phantom_sympathy_guard(ticker, yes_bid, no_bid, yes_ask, no_ask):
         shadow_medium = (fav_ask_delta >= 2 and fav_bid_delta >= 1 and my_combined >= 97)
 
         # Runaway trigger — slow-grind detector independent of velocity window.
-        # If fav_bid has crept >= 5c above where it was when this dog was anchored,
-        # the move is real (avg loss-day runaway is 13.6c, threshold catches it
-        # 8c+ before the loss locks in). NO depth-floor coupling: the depth floor
-        # is the bot's profit margin, not the system's tolerance for fav-side
-        # runaway. Pulling here costs only opportunity (next cycle reanchors
-        # with a fresh baseline); not pulling costs the runaway loss in full.
+        # If fav_bid has crept >= 8c above where it was when this dog was anchored,
+        # the move is real and structurally bad (loss-day median runaway was 15c,
+        # p75 was 23c — 8c catches them with 7c+ margin). NO depth-floor coupling:
+        # depth floor is the bot's profit margin, not the system's tolerance for
+        # fav-side runaway.
+        #
+        # Threshold history: started at 5c (2026-04-25 19:04). Live data showed
+        # 77 pulls in 3 hours, 86% firing at exactly 5c without continuing —
+        # catching noise, not real moves. Bumped to 8c (2026-04-25 ~15:30 AZ)
+        # which would have eliminated 75 of 77 noise pulls while still catching
+        # both genuine runaways.
         runaway_pull = False
         _fb_anchor = bot.get('_fav_bid_at_anchor', 0) or 0
         fav_runaway = (fav_bid - _fb_anchor) if _fb_anchor > 0 else 0
-        if _fb_anchor > 0 and fav_runaway >= 5:
+        if _fb_anchor > 0 and fav_runaway >= 8:
             runaway_pull = True
 
         # Rate-limit baseline snapshots (once per 2s per bot), always log signal events

@@ -7911,10 +7911,40 @@ def _is_phantom_death_zone(ticker, bot=None):
     period = score_info.get('period', 0)
     dz_period = rule['period']
     dz_secs = rule.get('secs')
+    status_detail = (score_info.get('status_detail') or '').strip()
+    sd_lower = status_detail.lower()
 
     # Past the death zone period (overtime) — still in death zone
     if period > dz_period:
         return True, f'{rule["name"]}: OT (period {period})'
+
+    # MLB-style (no clock): trust status_detail too. ESPN's period field
+    # can lag the actual inning by up to 60s (ESPN cache TTL + ESPN's own
+    # transition reporting). "End 8th" means the 8th has ended and 9th is
+    # imminent — equivalent to being in 9th for arb-safety purposes.
+    # Also catch "Top 9th"/"Mid 9th"/"Bot 9th"/"End 9th" in case period lags.
+    if dz_secs is None and sd_lower:
+        home = score_info.get('home_score', 0)
+        away = score_info.get('away_score', 0)
+        is_tied = (home == away and home > 0)
+        # Build phrases for the death-zone period and the one before
+        # (e.g. dz_period=9 → "9th", dz_period-1=8 → "8th"; KBO/NPB same)
+        def _ord(n):
+            if 10 <= n % 100 <= 20:
+                return f'{n}th'
+            suf = {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
+            return f'{n}{suf}'
+        prev_str = _ord(dz_period - 1)  # "8th"
+        this_str = _ord(dz_period)      # "9th"
+        # "End 8th" — 8th ended, 9th imminent
+        if sd_lower.startswith(f'end {prev_str}') and not is_tied:
+            return True, f'{rule["name"]}: {status_detail} (9th imminent)'
+        # "Top 9th" / "Mid 9th" / "Bot 9th" / "End 9th"
+        for _half in ('top ', 'mid ', 'bot ', 'end '):
+            if sd_lower.startswith(_half + this_str):
+                if is_tied:
+                    return False, ''  # tied — extras coming
+                return True, f'{rule["name"]}: {status_detail}'
 
     if period < dz_period:
         return False, ''

@@ -7715,7 +7715,7 @@ def _calculate_ppi(ticker, fav_side, dog_side):
 _PHANTOM_DEATH_ZONE = {
     # period: which period triggers death zone
     # secs: seconds remaining in that period (None = entire period)
-    # Tennis: score-based via _tennis_death_zone_check (serving for match / tiebreak)
+    # Clock sports only — tennis match-point was blowout-style logic, removed.
     'KXNBA':    {'period': 4, 'secs': 180, 'name': 'NBA Q4 <3:00'},
     'KXNCAAMB': {'period': 2, 'secs': 180, 'name': 'NCAAB 2H <3:00'},
     'KXNCAAWB': {'period': 4, 'secs': 180, 'name': 'NCAAWB Q4 <3:00'},
@@ -7724,60 +7724,7 @@ _PHANTOM_DEATH_ZONE = {
     'KXMLB':    {'period': 9, 'secs': None, 'name': 'MLB 9th inning'},
     'KXKBO':    {'period': 9, 'secs': None, 'name': 'KBO 9th inning'},
     'KXNPB':    {'period': 9, 'secs': None, 'name': 'NPB 9th inning'},
-    # Tennis: score-based death zone — fires when either player is serving for match
-    'KXATP':    {'tennis': True, 'score_dz': True, 'name': 'ATP Tennis'},
-    'KXWTA':    {'tennis': True, 'score_dz': True, 'name': 'WTA Tennis'},
-    'KXITF':    {'tennis': True, 'score_dz': True, 'name': 'ITF Tennis'},
 }
-
-
-def _tennis_death_zone_check(match_data):
-    """Check if a tennis match is at MATCH POINT — one point from ending.
-    Only fires to prevent catching a crashing knife on the final point.
-    Returns (True, reason) or (False, '')."""
-    scores = match_data.get('scores', [])
-    if not scores:
-        return False, ''
-    # Count completed sets
-    p1_sets = sum(1 for s in scores if _set_won(s, 'first'))
-    p2_sets = sum(1 for s in scores if _set_won(s, 'second'))
-    # BO3 vs BO5 (BO5 only at Grand Slams — infer from set count)
-    sets_to_win = 3 if (p1_sets >= 3 or p2_sets >= 3 or len(scores) > 3) else 2
-    # Current set = last entry in scores array (in-progress)
-    cur = scores[-1]
-    g1 = int(float(cur.get('score_first', 0)))
-    g2 = int(float(cur.get('score_second', 0)))
-    # Point score (e.g. "40-15", "40-A", "0-40")
-    game_pts = (match_data.get('event_game_result', '') or '').strip()
-    if not game_pts or game_pts == '-':
-        return False, ''
-    pts = game_pts.split('-')
-    if len(pts) != 2:
-        return False, ''
-    pt1 = pts[0].strip()
-    pt2 = pts[1].strip()
-    # Match point: player needs 1 more set AND 1 more game AND is at 40+ (or A)
-    # P1 match point: p1 needs 1 set, has 5+ games, leads games, AND at 40/A
-    _p1_serving_for_match = p1_sets == sets_to_win - 1 and g1 >= 5 and g1 > g2 and g2 <= 4
-    _p2_serving_for_match = p2_sets == sets_to_win - 1 and g2 >= 5 and g2 > g1 and g1 <= 4
-    # Tiebreak in deciding set
-    _deciding_tb = (p1_sets == sets_to_win - 1 and p2_sets == sets_to_win - 1) and g1 == 6 and g2 == 6
-    if _p1_serving_for_match and pt1 in ('40', 'A') and pt2 not in ('40', 'A'):
-        return True, f'match point P1 (sets {p1_sets}-{p2_sets}, games {g1}-{g2}, pts {game_pts})'
-    if _p2_serving_for_match and pt2 in ('40', 'A') and pt1 not in ('40', 'A'):
-        return True, f'match point P2 (sets {p2_sets}-{p1_sets}, games {g2}-{g1}, pts {game_pts})'
-    # Tiebreak match point: one player ahead by 1+ with score >= 6
-    if _deciding_tb:
-        try:
-            _tb1 = int(pt1) if pt1.isdigit() else 0
-            _tb2 = int(pt2) if pt2.isdigit() else 0
-            if _tb1 >= 6 and _tb1 > _tb2:
-                return True, f'tiebreak match point P1 ({_tb1}-{_tb2})'
-            if _tb2 >= 6 and _tb2 > _tb1:
-                return True, f'tiebreak match point P2 ({_tb2}-{_tb1})'
-        except ValueError:
-            pass
-    return False, ''
 
 
 def _tennis_blowout_check(match_data):
@@ -7901,10 +7848,9 @@ def _is_tennis_blowout(ticker, bot):
 
 
 def _is_phantom_death_zone(ticker, bot=None):
-    """Check if the game is in the death zone for Phantom.
-    Returns (True, reason_str) or (False, '').
-    Clock sports: uses ESPN period + time remaining.
-    Tennis: uses API Tennis scores (serving for match / tiebreak)."""
+    """Check if the game is in the end-of-clock death zone for Phantom.
+    Clock sports only — tennis is not in death zone.
+    Returns (True, reason_str) or (False, '')."""
     series = ticker.split('-')[0].upper() if ticker else ''
     rule = None
     rule_key = ''
@@ -7913,46 +7859,6 @@ def _is_phantom_death_zone(ticker, bot=None):
             rule = r
             rule_key = prefix
     if not rule:
-        return False, ''
-
-    # Tennis: score-based death zone (serving for match / tiebreak)
-    if rule.get('tennis'):
-        if not _api_tennis_cache.get('data'):
-            return False, ''
-        parts = ticker.split('-')
-        player_code = parts[-1].upper() if len(parts) >= 3 else ''
-        if not player_code:
-            return False, ''
-        # Extract BOTH player codes from ticker to avoid 3-letter collisions
-        # Ticker: KXATPMATCH-26APR15COBBER-BER → match_code=COBBER → codes COB+BER
-        _match_part = parts[1] if len(parts) >= 3 else ''
-        _match_code = _match_part[7:].upper() if len(_match_part) > 7 else ''  # strip 7-char date
-        _code_a = _match_code[:3] if len(_match_code) >= 6 else ''
-        _code_b = _match_code[3:6] if len(_match_code) >= 6 else ''
-        for _tm in _api_tennis_cache['data']:
-            _p1 = _tm.get('event_first_player', '')
-            _p2 = _tm.get('event_second_player', '')
-            _p1_code = _tennis_player_code(_p1)
-            _p2_code = _tennis_player_code(_p2)
-            # Require BOTH codes match (not just one) to avoid cross-match collisions
-            if _code_a and _code_b:
-                _both_match = {_code_a, _code_b} <= {_p1_code, _p2_code}
-                if not _both_match:
-                    continue
-            elif player_code not in (_p1_code, _p2_code):
-                continue
-            # Only check live matches — but NEVER during break time (between sets)
-            # Between sets, the completed set's score (e.g. 6-4) looks like death zone
-            # but the match has more sets to play. Only check during active play.
-            _status_str = (_tm.get('event_status') or '').lower()
-            if _status_str in ('break time',):
-                return False, ''  # between sets is never death zone
-            if _tm.get('event_live') != '1' and _status_str not in ('interrupted',):
-                continue
-            _dz, _dz_reason = _tennis_death_zone_check(_tm)
-            if _dz:
-                return True, f'{rule["name"]}: {_dz_reason}'
-            return False, ''
         return False, ''
 
     # Clock sports: check ESPN game state
@@ -12193,7 +12099,8 @@ def create_anchor_bot():
         # Auto-detect game phase
         game_phase = 'live' if _is_game_live(ticker) else 'pregame'
 
-        # Death zone guard: refuse to create bots for games already in death zone
+        # Death zone guard: refuse to create bots for clock-sport games already in end-of-game death zone
+        # (Tennis is NOT in death zone — match-point was blowout-style logic, removed.)
         _dz_create, _dz_create_reason = _is_phantom_death_zone(ticker)
         if _dz_create:
             return jsonify({'error': f'Death zone active — {_dz_create_reason}'}), 400

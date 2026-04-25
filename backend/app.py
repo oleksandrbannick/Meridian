@@ -14972,7 +14972,22 @@ def _handle_phantom(bot_id, bot, actions):
                     _dog_fills = _ph_no if dog_side == 'no' else _ph_yes
                     _fav_fills = _ph_yes if dog_side == 'no' else _ph_no
                     _need_hedge = _dog_fills - _fav_fills
-                    if _need_hedge > 0:
+                    # Sub-contract residues come from Kalshi's fractional fill_count_fp
+                    # rollout (e.g. dog reports 7.14, fav posted 7 → gap 0.14). Kalshi
+                    # won't match a 0.14 hedge order so it walks forever; the residue is
+                    # ~1c of exposure that resolves naturally at settlement. Skip rehedge
+                    # for any |gap| < 1.0 and let the bot complete normally.
+                    if 0 < _need_hedge < 1.0 or -1.0 < _need_hedge < 0:
+                        print(f'ℹ️ PHANTOM VERIFY SUB-CONTRACT: {bot_id} {_need_hedge:.3f} residue from Kalshi fill_count_fp — parking to settlement')
+                        bot_log('PHANTOM_VERIFY_SUB_CONTRACT', bot_id, {
+                            'residue': _need_hedge, 'dog_fills': _dog_fills, 'fav_fills': _fav_fills,
+                        })
+                        # Treat as balanced for completion (use the smaller side as matched qty)
+                        qty = min(_dog_fills, _fav_fills)
+                        bot['quantity'] = qty
+                        fav_filled = qty
+                        bot['fav_fill_qty'] = qty
+                    elif _need_hedge >= 1.0:
                         bot['_partial_hedge_qty'] = _need_hedge  # hedge just the gap
                         bot['quantity'] = _need_hedge  # monitor reads qty from here
                         bot['dog_fill_qty'] = _need_hedge  # ONLY the unhedged amount, not all Kalshi fills
@@ -14995,7 +15010,7 @@ def _handle_phantom(bot_id, bot, actions):
                             'dog_fills': _dog_fills, 'fav_fills': _fav_fills,
                         })
                         return
-                    elif _need_hedge < 0:
+                    elif _need_hedge <= -1.0:
                         # Fav overfilled — NO sell, hold excess until settlement
                         _excess = abs(_need_hedge)
                         _excess_side = fav_side

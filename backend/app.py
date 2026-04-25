@@ -5053,12 +5053,33 @@ def _ws_phantom_sympathy_guard(ticker, yes_bid, no_bid, yes_ask, no_ask):
         shadow_loose = (fav_ask_delta >= 1 and fav_bid_delta >= 1 and my_combined >= 96)
         shadow_medium = (fav_ask_delta >= 2 and fav_bid_delta >= 1 and my_combined >= 97)
 
+        # Runaway trigger — slow-grind detector independent of velocity window.
+        # If fav_bid has crept >= 5c above where it was when this dog was anchored,
+        # the move is real (avg loss-day runaway is 13.6c, threshold catches it
+        # 8c+ before the loss locks in). NO depth-floor coupling: the depth floor
+        # is the bot's profit margin, not the system's tolerance for fav-side
+        # runaway. Pulling here costs only opportunity (next cycle reanchors
+        # with a fresh baseline); not pulling costs the runaway loss in full.
+        runaway_pull = False
+        _fb_anchor = bot.get('_fav_bid_at_anchor', 0) or 0
+        fav_runaway = (fav_bid - _fb_anchor) if _fb_anchor > 0 else 0
+        if _fb_anchor > 0 and fav_runaway >= 5:
+            runaway_pull = True
+
         # Rate-limit baseline snapshots (once per 2s per bot), always log signal events
         _last_snap = bot.get('_sympathy_last_snap', 0)
-        should_log = textbook or shadow_loose or shadow_medium or (now - _last_snap >= 2.0)
+        should_log = textbook or runaway_pull or shadow_loose or shadow_medium or (now - _last_snap >= 2.0)
         if should_log:
+            if textbook:
+                _ev = 'sympathy_pull'
+            elif runaway_pull:
+                _ev = 'runaway_pull'
+            elif shadow_loose or shadow_medium:
+                _ev = 'shadow_hit'
+            else:
+                _ev = 'snapshot'
             _phantom_drift_log({
-                'event': 'sympathy_pull' if textbook else ('shadow_hit' if (shadow_loose or shadow_medium) else 'snapshot'),
+                'event': _ev,
                 'bot_id': bot_id,
                 'ticker': ticker,
                 'epoch': now,
@@ -5075,14 +5096,18 @@ def _ws_phantom_sympathy_guard(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 'fav_ask_delta_500ms': fav_ask_delta,
                 'dog_bid_delta_500ms': dog_bid_delta,
                 'my_combined': my_combined,
+                'fav_bid_at_anchor': _fb_anchor,
+                'fav_runaway': fav_runaway,
                 'shadow_loose': shadow_loose,
                 'shadow_medium': shadow_medium,
                 'textbook': textbook,
+                'runaway_pull': runaway_pull,
             })
             bot['_sympathy_last_snap'] = now
 
-        if not textbook:
+        if not (textbook or runaway_pull):
             continue
+        _pull_reason_tag = 'textbook' if textbook else 'runaway'
 
         dog_oid = bot.get('dog_order_id')
         if not dog_oid:
@@ -5109,10 +5134,11 @@ def _ws_phantom_sympathy_guard(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 bot['_original_qty'] = _qty
                 bot['_partial_hedge_qty'] = _sp_fills
             _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
-            print(f'🚨 WS SYMPATHY RACE FILL: {bot_id} {_sp_fills} fills on cancel — hedge fired, combined={my_combined}¢')
+            print(f'🚨 WS SYMPATHY RACE FILL ({_pull_reason_tag}): {bot_id} {_sp_fills} fills on cancel — hedge fired, combined={my_combined}¢ runaway={fav_runaway}c')
             bot_log('PHANTOM_SYMPATHY_RACE_FILL', bot_id, {
                 'fills': _sp_fills, 'my_combined': my_combined,
                 'fav_ask_delta': fav_ask_delta, 'fav_bid_delta': fav_bid_delta,
+                'fav_runaway': fav_runaway, 'pull_reason': _pull_reason_tag,
             }, level='WARN')
             save_state()
             return
@@ -5125,10 +5151,14 @@ def _ws_phantom_sympathy_guard(ticker, yes_bid, no_bid, yes_ask, no_ask):
         bot['_dog_bid_at_pull'] = dog_bid
         bot['_sympathy_combined_at_pull'] = my_combined
 
-        print(f'🎯 PHANTOM SYMPATHY PULL: {bot_id} fav_ask +{fav_ask_delta}c, fav_bid +{fav_bid_delta}c, combined={my_combined}¢ — trap avoided')
+        if _pull_reason_tag == 'runaway':
+            print(f'🎯 PHANTOM RUNAWAY PULL: {bot_id} fav_bid {_fb_anchor}→{fav_bid}¢ (+{fav_runaway}c since anchor), combined={my_combined}¢ — grind escape')
+        else:
+            print(f'🎯 PHANTOM SYMPATHY PULL: {bot_id} fav_ask +{fav_ask_delta}c, fav_bid +{fav_bid_delta}c, combined={my_combined}¢ — trap avoided')
         bot_log('PHANTOM_SYMPATHY_PULL', bot_id, {
             'fav_bid': fav_bid, 'fav_ask': fav_ask, 'dog_bid': dog_bid,
-            'my_combined': my_combined,
+            'my_combined': my_combined, 'fav_runaway': fav_runaway,
+            'pull_reason': _pull_reason_tag,
             'fav_ask_delta_500ms': fav_ask_delta,
             'fav_bid_delta_500ms': fav_bid_delta,
             'dog_bid_delta_500ms': dog_bid_delta,
@@ -12525,6 +12555,10 @@ def create_anchor_bot():
             '_ppi_launch_rec_depth': _ppi_rec,
             '_dog_bid_at_launch':  live_dog_bid if live_dog_bid > 0 else None,
             '_fav_bid_at_launch':  _fav_bid_init if _fav_bid_init else None,
+            # Anchor-baseline fav bid for runaway-pull (sympathy guard).
+            # Resets on every PHANTOM_REANCHOR so each fresh cycle starts measuring
+            # from its own equilibrium, not the original launch level.
+            '_fav_bid_at_anchor':  _fav_bid_init if _fav_bid_init else None,
         }
         save_state()
         bot_log('ANCHOR_DOG_CREATED', bot_id, {
@@ -16011,6 +16045,18 @@ def _handle_phantom(bot_id, bot, actions):
             else:
                 bot['no_order_id'] = bot['dog_order_id']
                 bot['no_price'] = actual_price
+
+            # Reset runaway baseline — every fresh anchor restarts the fav-bid
+            # measurement window for the sympathy guard. Pull fires when fav_bid
+            # has run >=5c above this anchor reference.
+            _anchor_fav_bid = bot.get(f'live_{fav_side}_bid', 0) or 0
+            if _anchor_fav_bid <= 0 and _fav_ob:
+                try:
+                    _, _anchor_fav_bid = _bid_depth(_fav_ob, fav_side, window=0)
+                except Exception:
+                    _anchor_fav_bid = 0
+            if _anchor_fav_bid > 0:
+                bot['_fav_bid_at_anchor'] = _anchor_fav_bid
 
             print(f'{"🔄 PHANTOM FLIP REPOST" if _was_flip else "🔄 PHANTOM REPOST"}: {bot_id} dog re-anchored @{actual_price}¢ (smart price from orderbook)')
             _audit('PHANTOM_REANCHOR', bot_id, {'ticker': ticker, 'new_dog_price': actual_price, 'dog_order_id': bot['dog_order_id']})

@@ -4576,6 +4576,35 @@ def _ws_phantom_retreat(ticker, yes_bid, no_bid):
                         _ord = _resp.get('order', _resp) if isinstance(_resp, dict) else {}
                         _new_oid = _ord.get('order_id', '')
                         if _new_oid and _new_oid != oid:
+                            # Kalshi cancel-replaced the order under the hood.
+                            # The OLD oid may have residual fills that arrived in the
+                            # racing window between repost and amend — same shape as
+                            # the 404 path below, just masked by 200 OK. Check it
+                            # before storing the new oid, or 20 contracts orphan silently.
+                            _old_fills = 0
+                            try:
+                                api_read_limiter.wait(priority=True)
+                                _old_resp = kalshi_client.get_order(oid)
+                                _old_od = _old_resp.get('order', _old_resp) if isinstance(_old_resp, dict) else {}
+                                _old_fills = _parse_fill_count(_old_od)
+                            except Exception:
+                                pass
+                            if _old_fills > 0 and not bot_ref.get('_hedge_fired'):
+                                print(f'🔍 WS RETREAT AMEND SUCCESS-FILL: {bot_id_ref} old oid {oid[:12]} had {_old_fills} fills, hedging now')
+                                bot_ref['dog_fill_qty'] = _old_fills
+                                bot_ref[f'{_dog_side}_fill_qty'] = _old_fills
+                                bot_ref['status'] = 'dog_filled'
+                                bot_ref['dog_filled_at'] = time.time()
+                                bot_ref['_hedge_fired'] = True
+                                if _old_fills < _qty:
+                                    bot_ref['_original_qty'] = _qty
+                                    bot_ref['_partial_hedge_qty'] = _old_fills
+                                _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id_ref,)))
+                                bot_log('WS_RETREAT_AMEND_SUCCESS_FILLS', bot_id_ref, {
+                                    'old_order_id': oid[:12], 'new_order_id': _new_oid[:12], 'fills': _old_fills,
+                                }, level='WARN')
+                                save_state()
+                                return
                             bot_ref['dog_order_id'] = _new_oid
                             bot_ref.setdefault('_all_dog_order_ids', []).append(_new_oid)
                             if _dog_side == 'yes':

@@ -5422,7 +5422,7 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                     bot['_sl_breach_peak'] = None
                     bot['_sl_breach_phase'] = None
 
-            # ── Priority 2: Snap-down — chase cheaper exit price ──
+            # ── Priority 2: Snap-down/up — track exit bid in real-time ──
             exit_oid = bot.get(f'_{exit_side}_exit_oid')
             if not exit_oid:
                 continue
@@ -5430,12 +5430,29 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
             if current_price <= 0:
                 continue
             exit_bid = yes_bid if exit_side == 'yes' else no_bid
-            if exit_bid <= 0 or exit_bid >= current_price:
-                continue  # bid not below current — nothing to snap to
+            if exit_bid <= 0:
+                continue
 
-            snap_price = max(1, exit_bid)
             target_price = bot.get('_exit_target_price', 0)
             net_held = abs(net_yes - net_no)
+            snap_price = 0
+            snap_dir = ''
+            if exit_bid < current_price:
+                # Snap-down — chase cheaper exit price (more profit)
+                snap_price = max(1, exit_bid)
+                snap_dir = 'DOWN'
+            elif exit_bid > current_price:
+                # Snap-up — bid moved above us; chase profit while still in green zone.
+                # Cap at WALL-1c (combined=99) so we never lock in a guaranteed loss.
+                live_combined = held_avg + exit_bid
+                if live_combined <= 99:
+                    _max_profitable = max(1, 99 - held_avg)
+                    snap_price = min(exit_bid, _max_profitable)
+                    if snap_price > current_price:
+                        snap_dir = 'UP'
+                # If live_combined > 99 (red zone), wall-park is the monitor walker's job.
+            if not snap_dir or snap_price <= 0:
+                continue
             try:
                 price_kwarg = {f'{exit_side}_price': snap_price}
                 api_rate_limiter.wait()
@@ -5443,18 +5460,20 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                                           count=net_held, action='buy', **price_kwarg)
                 bot['_exit_price'] = snap_price
                 bot['_wall_parked'] = False
-                if snap_price <= target_price:
+                if snap_dir == 'DOWN' and snap_price <= target_price:
                     bot['_exit_soak_start'] = time.time()
                     bot['_exit_walk_count'] = 0
+                if snap_dir == 'UP':
+                    bot['_last_walk_at'] = time.time()  # gate monitor walker
                 combined = held_avg + snap_price
-                print(f'📊 APEX MM WS SNAP-DOWN: {bot_id} {exit_side.upper()} {current_price}→{snap_price}c (combined={combined}c, bid={exit_bid})')
-                bot_log('APEX_MM_WS_SNAP_DOWN', bot_id, {
+                print(f'📊 APEX MM WS SNAP-{snap_dir}: {bot_id} {exit_side.upper()} {current_price}→{snap_price}c (combined={combined}c, bid={exit_bid})')
+                bot_log(f'APEX_MM_WS_SNAP_{snap_dir}', bot_id, {
                     'old': current_price, 'new': snap_price, 'bid': exit_bid,
                     'combined': combined, 'target': target_price,
                 })
             except Exception as e:
                 if '404' not in str(e) and 'filled' not in str(e).lower():
-                    print(f'⚠ APEX MM WS SNAP-DOWN FAIL: {bot_id}: {e}')
+                    print(f'⚠ APEX MM WS SNAP-{snap_dir} FAIL: {bot_id}: {e}')
     finally:
         _ws_apex_mm_tick_lock.release()
 
@@ -8740,6 +8759,11 @@ APEX_MM_WALK_INTERVAL_BY_PHASE = {  # Seconds between 1c walk-up steps in GREEN 
 APEX_MM_SLOW_FILL_THRESHOLD_S = 60   # If no fill in this window, treat as slow
 APEX_MM_SLOW_VELOCITY_MULT_DEFAULT = 5.0  # Slow + pregame phase: 5x slower walk
 APEX_MM_SLOW_VELOCITY_MULT = 3.0          # Slow + live phase: 3x slower walk
+# Wall escape — after parking at WALL (combined=100c breakeven), bots will sit
+# forever waiting for sellers to cross. After this window, the walker creeps
+# past WALL into small-loss territory to force a fill before market settles.
+APEX_MM_WALL_ESCAPE_AFTER_S = 300         # 5 min at WALL before escape kicks in
+APEX_MM_WALL_ESCAPE_INTERVAL_S = 60       # 1c escalation per minute (capped at stop_loss-1)
 
 
 def _apex_mm_game_phase(ticker):
@@ -10037,6 +10061,49 @@ def _apex_mm_walk_up(bot_id, bot):
                 'exit_price': current_price, 'avg_held': avg_held,
                 'combined': avg_held + current_price, 'width': width,
             })
+        # ── WALL ESCAPE: after N min parked at wall with no fill, creep past
+        #    breakeven into small loss to force a fill. Without this, bots can
+        #    sit at WALL forever (sellers won't drop 5c for 1c profit).
+        #    Default: 5 min start, 1c every 60s, capped at stop_loss-1c.
+        wall_age = now - bot.get('_wall_parked_at', now)
+        if wall_age >= APEX_MM_WALL_ESCAPE_AFTER_S:
+            stop_combined = 100 + max(width, bot.get('min_sl_margin', 0))
+            escalations = int((wall_age - APEX_MM_WALL_ESCAPE_AFTER_S) // APEX_MM_WALL_ESCAPE_INTERVAL_S) + 1
+            target_combined = min(stop_combined - 1, 100 + escalations)
+            target_price_escape = max(current_price + 1, target_combined - avg_held)
+            target_price_escape = max(1, min(98, target_price_escape))
+            # Snap to live bid if it's at or above target (instant fill possible),
+            # else creep up to the escalation target.
+            escape_price = min(live_exit_bid, target_price_escape) if live_exit_bid >= target_price_escape else target_price_escape
+            _last_escape = bot.get('_last_wall_escape_at', 0)
+            if escape_price > current_price and now - _last_escape >= 5:  # 5s amend gate
+                try:
+                    price_kwarg = {f'{exit_side}_price': escape_price}
+                    api_rate_limiter.wait()
+                    _amend_resp = kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
+                                              count=net_held, action='buy', **price_kwarg)
+                    _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
+                    _new_oid = _amend_ord.get('order_id', '')
+                    if _new_oid and _new_oid != exit_oid:
+                        bot[f'_{exit_side}_exit_oid'] = _new_oid
+                    old_p = current_price
+                    bot['_exit_price'] = escape_price
+                    bot['_last_wall_escape_at'] = now
+                    _esc_combined = avg_held + escape_price
+                    print(f'⏰ APEX MM WALL ESCAPE: {bot_id} {exit_side.upper()} {old_p}→{escape_price}c (combined={_esc_combined}c, age={wall_age:.0f}s, esc#{escalations}, bid={live_exit_bid}c)')
+                    bot_log('APEX_MM_WALL_ESCAPE', bot_id, {
+                        'old': old_p, 'new': escape_price, 'combined': _esc_combined,
+                        'wall_age_s': round(wall_age), 'escalation': escalations,
+                        'bid': live_exit_bid, 'stop_combined': stop_combined,
+                    })
+                except Exception as e:
+                    if 'filled' in str(e).lower():
+                        print(f'⚡ APEX MM WALL ESCAPE FILLED: {bot_id}')
+                    elif '404' in str(e) or 'not found' in str(e).lower():
+                        print(f'⚠ APEX MM WALL ESCAPE 404: {bot_id} exit order gone')
+                        bot[f'_{exit_side}_exit_oid'] = None
+                    else:
+                        print(f'⚠ APEX MM WALL ESCAPE FAIL: {bot_id} {e}')
         return
 
 

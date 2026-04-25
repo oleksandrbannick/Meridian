@@ -6819,13 +6819,16 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const exitAskLive = exitSide === 'YES' ? liveYesAsk : liveNoAsk;
         const heldBidLive = longSide === 'YES' ? liveYesBid : liveNoBid;
         // Combined = where your order actually sits (avgCost + posted exit price)
-        // liveCombined = what you'd get if filled at current bid (context only)
+        // liveCombined = what you'd get if filled at current bid
+        // Display rule: cyan = my posted combined, coral = live bid combined,
+        // ONE green number when they match. Always show actual posted (not the
+        // original target — that was inconsistent: cards walked-better showed
+        // the worse target value, cards walked-worse showed actual.)
         const liveCombined = (exitBidLive > 0) ? avgCost + exitBidLive : 999;
         const origTarget = bot._exit_target_price || exitPrice;
         const origTargetCombined = avgCost + origTarget;
         const postedCombined = avgCost + exitPrice;
-        // Show original target combined when at target, actual posted when walked/parked
-        const combined = exitPrice > 0 ? (exitPrice <= origTarget ? origTargetCombined : postedCombined) : (liveCombined < 999 ? liveCombined : 0);
+        const combined = exitPrice > 0 ? postedCombined : (liveCombined < 999 ? liveCombined : 0);
         const profit = 100 - combined;
         const combinedCol = combined > 100 ? '#ff4444' : combined >= 99 ? '#ffaa00' : '#00ff88';
         // Match backend Apex MM SL formula at app.py:16253 — `100 + max(width, 6)`.
@@ -6958,7 +6961,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
                 <div style="display:flex;align-items:baseline;gap:8px;">
                     <span style="color:${headerOrderCol};font-weight:800;font-size:16px;">${combined}c</span>
-                    ${liveCombined < 999 ? `<span style="color:${headerLiveCol};font-size:11px;font-weight:700;">${liveCombined}c</span>` : ''}
+                    ${liveCombined < 999 && !_zoneMerged ? `<span style="color:${headerLiveCol};font-size:11px;font-weight:700;">${liveCombined}c</span>` : ''}
                     ${walkBadge}
                 </div>
                 ${skewSec > 0 ? `<span style="color:#445;font-size:9px;">${timeStr}</span>` : ''}

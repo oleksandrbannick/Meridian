@@ -6605,18 +6605,19 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 }
                 if (status === 'fav_hedge_posted') {
                     const combined = avgDogPrice + favPrice;
-                    const atBid = favPrice >= favBid && favBid > 0;
-                    const statusIcon = atBid ? '🎯' : '⚡';
-                    const statusText = atBid ? 'AT BID' : 'SNAPPING TO BID';
-                    const statusCol = atBid ? '#00ff88' : '#00aaff';
                     const _bidGap = favBid > 0 && favPrice > 0 ? favBid - favPrice : 0;
+                    const _atBid = favBid > 0 && favPrice === favBid;
+                    const statusIcon = _atBid ? '🎯' : '⚡';
+                    const statusText = _atBid ? 'AT BID' : 'SNAPPING';
+                    const statusCol = _atBid ? '#00ff88' : '#00aaff';
                     return `</span></div>
                     <div style="background:${statusCol}11;border:1px solid ${statusCol}33;border-radius:5px;padding:6px 8px;font-size:10px;color:${statusCol};margin-top:6px;">
                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:3px;">
                             <span style="font-weight:700;">${statusIcon} <strong>${statusText}</strong></span>
+                            <span style="color:#8892a6;font-size:9px;font-weight:400;">WS bid-follow · no cap</span>
                         </div>
                         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;color:#8892a6;font-size:9px;">
-                            <span>dog ${avgDogPrice}¢ + fav ${favPrice}¢ = <strong style="color:${combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : combined <= 100 ? '#ff8800' : '#ff4444'};">${combined}¢</strong>${_bidGap > 0 ? ` <span style="color:#ff4444;">(bid ${favBid}¢, +${_bidGap}¢ away)</span>` : ''}${(bot.fav_walk_count || 0) > 0 ? ` · step #${bot.fav_walk_count}` : ''}</span>
+                            <span>dog ${avgDogPrice}¢ + fav ${favPrice}¢ = <strong style="color:${combined <= 96 ? '#00ff88' : combined <= 98 ? '#ffaa00' : combined <= 100 ? '#ff8800' : '#ff4444'};">${combined}¢</strong>${_bidGap !== 0 ? ` <span style="color:${_bidGap > 0 ? '#ff4444' : '#888'};">(bid ${favBid}¢)</span>` : ''}</span>
                         </div>
                     </div><div style="display:none;">`;
                 }
@@ -6885,7 +6886,18 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             const orderCol = merged ? '#00ff88' : '#00d4ff';
             const liveCol = merged ? '#00ff88' : '#ff7043';
             const glowStyle = merged ? 'box-shadow:0 0 8px #00ff8880,0 0 16px #00ff8840;' : '';
+            // Cent labels above the dots — explicit even when dots visually overlap
+            // due to small bar range (1c gap = ~1.25% on a 60→140 bar). Stacks
+            // labels vertically when the dots are within 6% of each other so they
+            // don't collide horizontally.
+            const _labelGapTooClose = !merged && Math.abs(orderPct - livePct) < 6;
+            const _orderLabelTop = _labelGapTooClose && orderPct <= livePct ? '0' : '0';
+            const _liveLabelTop = _labelGapTooClose ? '10px' : '0';
             zoneBarHtml = `<div style="margin-top:6px;">
+                ${!merged ? `<div style="position:relative;height:${_labelGapTooClose ? 18 : 10}px;font-size:8px;font-weight:700;margin-bottom:2px;">
+                    <span style="position:absolute;left:${orderPct}%;top:${_orderLabelTop};transform:translateX(-50%);color:${orderCol};white-space:nowrap;">${combined}</span>
+                    <span style="position:absolute;left:${livePct}%;top:${_liveLabelTop};transform:translateX(-50%);color:${liveCol};white-space:nowrap;">${liveCombined < 999 ? liveCombined : '?'}</span>
+                </div>` : ''}
                 <div style="position:relative;height:6px;background:#0a1018;border-radius:3px;overflow:hidden;">
                     <div style="position:absolute;left:0;width:50%;height:100%;background:linear-gradient(90deg,#00ff8818,#00ff8808);"></div>
                     <div style="position:absolute;left:50%;width:50%;height:100%;background:linear-gradient(90deg,#ff444410,#ff444420);"></div>

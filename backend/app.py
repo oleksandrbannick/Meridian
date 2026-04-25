@@ -19771,7 +19771,14 @@ def _run_monitor():
                                  (_cb.get('no_fill_qty', 0) or 0) > 0 or
                                  (_cb.get('fill_qty', 0) or 0) > 0 or
                                  (_cb.get('_cross_settled_qty', 0) or 0) > 0 or
-                                 (_cb.get('_cross_settled_qty_dog', 0) or 0) > 0)
+                                 (_cb.get('_cross_settled_qty_dog', 0) or 0) > 0 or
+                                 # Apex MM tracks inventory in net_yes/net_no
+                                 # (not the phantom-style *_fill_qty fields).
+                                 # Without this, MM bots holding 1+ contracts get
+                                 # purged by stale cleanup, orphaning the position
+                                 # and losing settlement P&L.
+                                 (_cb.get('net_yes', 0) or 0) >= 1 or
+                                 (_cb.get('net_no', 0) or 0) >= 1)
                 if _has_fills:
                     continue  # has positions — keep for settlement tracking
                 # No fills + market settled → cancel resting orders, set proper settlement status
@@ -19830,7 +19837,10 @@ def _run_monitor():
                               (_cb.get('fav_fill_qty', 0) or 0) > 0 or
                               (_cb.get('yes_fill_qty', 0) or 0) > 0 or
                               (_cb.get('no_fill_qty', 0) or 0) > 0 or
-                              (_cb.get('fill_qty', 0) or 0) > 0)
+                              (_cb.get('fill_qty', 0) or 0) > 0 or
+                              # Apex MM tracks inventory in net_yes/net_no
+                              (_cb.get('net_yes', 0) or 0) >= 1 or
+                              (_cb.get('net_no', 0) or 0) >= 1)
                 for _rung in _cb.get('rungs', []):
                     if (_rung.get('yes_fill_qty', 0) or 0) > 0 or (_rung.get('no_fill_qty', 0) or 0) > 0 or (_rung.get('fill_qty', 0) or 0) > 0:
                         _has_fills = True

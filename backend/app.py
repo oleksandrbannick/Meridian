@@ -9957,25 +9957,21 @@ def _apex_mm_walk_up(bot_id, bot):
                 bot[f'_{exit_side}_exit_oid'] = None
         return
 
-    # ── GREEN ZONE: combined <= 99c → walk 1c toward bid on regime-gated interval ──
-    # Walk interval scales by game phase and by recent fill activity on this bot.
-    # Pregame / no-fills-in-60s → wait 150s between 1c steps (preserves profit).
-    # Live mid-game → 8s. Overtime → 2s (every tick, volatile zone).
-    _green_snap = min(current_price + 1, live_exit_bid)  # walk 1c, cap at bid
+    # ── GREEN ZONE: combined <= 99c → snap directly to bid (capped at WALL-1c) ──
+    # Was: walk 1c per 150s in default phase (3-5x slow-fill mult). Tennis bots
+    # sat 50+ min walking up to a bid that was 20c above them. User wants snap
+    # behavior in profit zone — grab the move while it's there.
+    # Cap at combined=99c (1c profit) so a bid above the wall doesn't push us
+    # into a guaranteed loss.
+    _max_profitable_price = max(1, 99 - avg_held)
+    _green_snap = min(live_exit_bid, _max_profitable_price)
     if live_combined <= 99 and _green_snap > current_price:
-        _base_walk_iv = APEX_MM_WALK_INTERVAL_BY_PHASE.get(_phase, 10)
-        _last_yes_fill = bot.get('_last_yes_fill_at', 0) or 0
-        _last_no_fill = bot.get('_last_no_fill_at', 0) or 0
-        _last_fill_t = max(_last_yes_fill, _last_no_fill)
-        _since_fill = (now - _last_fill_t) if _last_fill_t > 0 else 9999
-        if _since_fill > APEX_MM_SLOW_FILL_THRESHOLD_S:
-            _mult = APEX_MM_SLOW_VELOCITY_MULT_DEFAULT if _phase == 'default' else APEX_MM_SLOW_VELOCITY_MULT
-            _walk_iv = _base_walk_iv * _mult
-        else:
-            _walk_iv = _base_walk_iv
+        # Light gate to avoid amend spam during ws price oscillation (Kalshi
+        # rate limits) — 2s between snaps is plenty for a mover-style exit.
         _last_walk = bot.get('_last_walk_at', 0) or bot.get('_exit_soak_start', now)
-        if now - _last_walk < _walk_iv:
-            return  # not yet time for next 1c step
+        if now - _last_walk < 2:
+            return
+        _walk_iv = 2  # log-only — kept for output formatting compatibility
         try:
             price_kwarg = {f'{exit_side}_price': _green_snap}
             api_rate_limiter.wait()

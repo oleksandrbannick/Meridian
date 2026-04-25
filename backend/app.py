@@ -12681,6 +12681,15 @@ def execute_maker_sell(ticker, side, count, reason='maker_exit'):
     """Post a maker sell at ask price. Returns (order_id, ask_price) or (None, 0).
     MAKER ONLY — never crosses the spread. If no ask available, returns None."""
     try:
+        # Kalshi requires count as int (Go API: "cannot unmarshal number 25.0
+        # into Go struct field CreateOrderRequest.count of type int"). Float
+        # counts come from _parse_fill_count (Kalshi fractional fills) and from
+        # `_s_qty - _s_fills` int-float subtraction in the auto-repost path.
+        # Floor sub-1 residues to 0 — Kalshi can't match them anyway.
+        count = max(0, int(count))
+        if count < 1:
+            print(f'⚠ execute_maker_sell({reason}): count<1 on {ticker} — skipping (sub-contract residue)')
+            return None, 0
         # Use WS cache FIRST for live ask — orderbook endpoint can be stale
         ask = 0
         ws_p = ws_manager.get_price(ticker) if ws_manager else None
@@ -16920,10 +16929,17 @@ def _run_monitor():
                     del _pending_maker_sells[_sk]
                     continue
                 if _s_status in ('cancelled', 'canceled'):
-                    # Order was cancelled externally — repost at current ask
+                    # Order was cancelled externally — repost at current ask.
+                    # Only delete the old entry if the repost SUCCEEDS — otherwise
+                    # the orphan position is left dangling forever (e.g., 400 from
+                    # Kalshi, no ask available, etc). Leaving the entry means the
+                    # next monitor cycle re-tries until success.
                     print(f'⚠ MAKER SELL CANCELLED: {_sv["reason"]} — reposting')
-                    del _pending_maker_sells[_sk]
-                    execute_maker_sell(_s_ticker, _s_side, _s_qty - _s_fills, reason=_sv['reason'])
+                    _new_oid, _ = execute_maker_sell(_s_ticker, _s_side, _s_qty - _s_fills, reason=_sv['reason'])
+                    if _new_oid:
+                        del _pending_maker_sells[_sk]
+                    else:
+                        print(f'⚠ MAKER SELL REPOST FAILED: {_sv["reason"]} {_s_side} {_s_ticker} — will retry next monitor cycle')
                     continue
                 # Still resting — shadow ask (fallback for when WS handler misses)
                 if (time.time() - _sv.get('_last_amend', 0)) > 3:

@@ -225,6 +225,15 @@ class KalshiAPI:
             post_only: If True, order is rejected if it would cross the spread (guarantees maker fees)
             order_group_id: Optional group ID to link related orders for atomic cancel
         """
+        # Kalshi's Go API requires count as int — float (e.g. 25.0 from int-float
+        # subtraction, or 0.51 from fractional position parsing) returns 400
+        # "cannot unmarshal number 25.0 into Go struct field ...count of type int".
+        # Match amend_order's coercion semantics: ceil on buy, floor on sell.
+        if isinstance(count, float) and abs(count - int(count)) > 1e-9:
+            import math as _m
+            count = int(_m.ceil(count)) if action == 'buy' else int(_m.floor(count))
+        elif isinstance(count, float):
+            count = int(count)
         data = {
             'ticker': ticker,
             'side': side,

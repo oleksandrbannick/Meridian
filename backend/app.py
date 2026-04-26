@@ -5607,12 +5607,14 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 snap_price = max(1, exit_bid)
                 snap_dir = 'DOWN'
             elif exit_bid > current_price:
-                # Snap-up — bid moved above us; chase profit while still in green zone.
-                # Cap at WALL-1c (combined=99) so we never lock in a guaranteed loss.
+                # Snap-up — bid moved above us (regime shift); reclaim BBO by posting
+                # at bid+1 (price-improve) instead of queue-joining at bid. Fires only
+                # when we're behind, so bid+1 just regains best-book priority. Cap at
+                # WALL-1c (combined=99) so we never lock in a guaranteed loss.
                 live_combined = held_avg + exit_bid
                 if live_combined <= 99:
                     _max_profitable = max(1, 99 - held_avg)
-                    snap_price = min(exit_bid, _max_profitable)
+                    snap_price = min(exit_bid + 1, _max_profitable)
                     if snap_price > current_price:
                         snap_dir = 'UP'
                 # If live_combined > 99 (red zone), wall-park is the monitor walker's job.
@@ -10256,14 +10258,16 @@ def _apex_mm_walk_up(bot_id, bot):
                 bot[f'_{exit_side}_exit_oid'] = None
         return
 
-    # ── GREEN ZONE: combined <= 99c → snap directly to bid (capped at WALL-1c) ──
+    # ── GREEN ZONE: combined <= 99c → snap to bid+1 (price-improve to BBO, capped at WALL-1c) ──
     # Was: walk 1c per 150s in default phase (3-5x slow-fill mult). Tennis bots
     # sat 50+ min walking up to a bid that was 20c above them. User wants snap
     # behavior in profit zone — grab the move while it's there.
+    # Bid+1 (not bid) so we reclaim BBO instead of queue-joining behind whoever
+    # just moved up. Only fires when bid > current_price (we're already behind).
     # Cap at combined=99c (1c profit) so a bid above the wall doesn't push us
     # into a guaranteed loss.
     _max_profitable_price = max(1, 99 - avg_held)
-    _green_snap = min(live_exit_bid, _max_profitable_price)
+    _green_snap = min(live_exit_bid + 1, _max_profitable_price)
     if live_combined <= 99 and _green_snap > current_price:
         # Light gate to avoid amend spam during ws price oscillation (Kalshi
         # rate limits) — 2s between snaps is plenty for a mover-style exit.

@@ -2487,10 +2487,20 @@ def _fetch_intl_basketball_scoreboard():
                 'league_id': league_id,
                 'sport_prefix': kalshi_prefix,
             }
-            for code in _basketball_team_codes(home_name):
+            # Pull Kalshi-derived aliases so SHL/ALT etc. (Kalshi contractions
+            # of "Shiga Lakestars" / "Alvark Tokyo") resolve to "Shiga"/"Alvark"
+            _aliases = _build_kalshi_intl_aliases(kalshi_prefix) if kalshi_prefix else {}
+            def _all_codes(name):
+                base = set(_basketball_team_codes(name))
+                if name:
+                    fw = name.split()[0].lower()
+                    base |= _aliases.get(fw, set())
+                    base |= _aliases.get(name.lower(), set())
+                return base
+            for code in _all_codes(home_name):
                 team_info.setdefault(code, entry)
                 team_info[f'{sport_key}:{code}'] = entry
-            for code in _basketball_team_codes(away_name):
+            for code in _all_codes(away_name):
                 # away gets a flipped entry so team_score/opp_score work
                 away_entry = dict(entry)
                 away_entry['team_score'] = away_total
@@ -2511,9 +2521,57 @@ def _fetch_intl_basketball_scoreboard():
         return team_info
 
 
-def _intl_basketball_event_shape(game: dict, sport_label: str) -> dict:
+# Cache: api-sports-short-name → set of Kalshi 3-char codes derived from market
+# titles. Bridges the gap when api-sports.io has "Shiga" but Kalshi codes the
+# market as SHL (Shiga Lakestars). Refresh hourly.
+_kalshi_intl_alias_cache = {}  # {kalshi_prefix: {'ts': float, 'data': {short_name: {codes}}}}
+_KALSHI_INTL_ALIAS_TTL = 3600
+
+
+def _build_kalshi_intl_aliases(kalshi_prefix: str) -> dict:
+    """Scan Kalshi events for this series, return {first_word_lower: {3char_codes}}.
+    Lets _intl_basketball_event_shape add Kalshi codes to api-sports.io teams whose
+    short name matches the first word of the Kalshi market title's team name."""
+    cached = _kalshi_intl_alias_cache.get(kalshi_prefix)
+    if cached and (time.time() - cached['ts']) < _KALSHI_INTL_ALIAS_TTL:
+        return cached['data']
+    aliases = {}  # short_name_lower → set of codes
+    try:
+        ev_resp = kalshi_client.get_events_by_series(kalshi_prefix, status='open', limit=200)
+        for ev in (ev_resp.get('events') or []):
+            ticker = ev.get('event_ticker', '') or ''
+            title = ev.get('title', '') or ev.get('sub_title', '') or ''
+            parts = ticker.split('-')
+            if len(parts) < 2:
+                continue
+            seg = re.sub(r'^\d{2}[A-Z]{3}\d+', '', parts[1])
+            if len(seg) != 6:
+                continue
+            t1, t2 = seg[:3], seg[3:]
+            # Title format: "Team A vs Team B Winner?" — first→t1, second→t2
+            m = re.match(r'^(.+?)\s+vs\.?\s+(.+?)(?:\s+Winner.*)?$', title, re.IGNORECASE)
+            if not m:
+                continue
+            for full_name, code in [(m.group(1).strip(), t1), (m.group(2).strip(), t2)]:
+                if not full_name or not code:
+                    continue
+                first_word = full_name.split()[0].lower()
+                aliases.setdefault(first_word, set()).add(code)
+                aliases.setdefault(full_name.lower(), set()).add(code)
+    except Exception as e:
+        print(f'⚠️ Kalshi intl alias fetch failed for {kalshi_prefix}: {e}')
+    _kalshi_intl_alias_cache[kalshi_prefix] = {'ts': time.time(), 'data': aliases}
+    return aliases
+
+
+def _intl_basketball_event_shape(game: dict, sport_label: str, aliases: dict = None) -> dict:
     """Shape an api-sports.io basketball game into the ESPN event shape that
-    the frontend's parseESPNGame() understands."""
+    the frontend's parseESPNGame() understands.
+
+    aliases: optional {short_name_lower: {kalshi_3char_codes}} from
+    _build_kalshi_intl_aliases — lets us add Kalshi-only contractions
+    (SHL for "Shiga Lakestars") to teams api-sports.io only knows as "Shiga"."""
+    aliases = aliases or {}
     status_obj = game.get('status') or {}
     short = (status_obj.get('short') or '').upper()
     timer = status_obj.get('timer') or ''
@@ -2549,6 +2607,15 @@ def _intl_basketball_event_shape(game: dict, sport_label: str) -> dict:
     # Use sorted-first 3-letter code as primary abbreviation; rest as extras
     h_codes = sorted(_basketball_team_codes(home_name), key=lambda x: (len(x), x))
     a_codes = sorted(_basketball_team_codes(away_name), key=lambda x: (len(x), x))
+    # Inject Kalshi-derived aliases — first word of api-sports.io name (e.g. "Shiga")
+    # often matches first word of Kalshi market title ("Shiga Lakestars" → SHL)
+    for name, codes_list in [(home_name, h_codes), (away_name, a_codes)]:
+        if not name:
+            continue
+        first_word = name.split()[0].lower()
+        for k_code in aliases.get(first_word, set()) | aliases.get(name.lower(), set()):
+            if k_code not in codes_list:
+                codes_list.append(k_code)
     h_primary = h_codes[0] if h_codes else (home_name[:3].upper() if home_name else '?')
     a_primary = a_codes[0] if a_codes else (away_name[:3].upper() if away_name else '?')
     return {
@@ -2638,12 +2705,13 @@ def get_scoreboard(sport):
             pass
         kalshi_prefix, label = _INTL_BB_KEYS[sport.lower()]
         target_league_id = _INTL_BASKETBALL_LEAGUES.get(kalshi_prefix)
+        aliases = _build_kalshi_intl_aliases(kalshi_prefix)
         raw_games = _basketball_api_cache.get('raw_games', []) or []
         events = []
         for g in raw_games:
             if (g.get('league') or {}).get('id') != target_league_id:
                 continue
-            events.append(_intl_basketball_event_shape(g, label))
+            events.append(_intl_basketball_event_shape(g, label, aliases))
         return jsonify({'events': events})
 
     sport_path = sport_map.get(sport.lower())

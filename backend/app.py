@@ -8054,8 +8054,16 @@ def _is_phantom_death_zone(ticker, bot=None):
     status_detail = (score_info.get('status_detail') or '').strip()
     sd_lower = status_detail.lower()
 
-    # Past the death zone period (overtime) — still in death zone
+    # Past the death zone period (overtime) — still in death zone, EXCEPT
+    # MLB-style sports (no clock) where extras can be tied for many innings.
+    # Tied extras = more innings coming, not yet death zone. Untied extras =
+    # next half-inning could end the game (walk-off in bottom, etc.) → death zone.
     if period > dz_period:
+        if dz_secs is None:
+            home = score_info.get('home_score', 0)
+            away = score_info.get('away_score', 0)
+            if home == away and home > 0:
+                return False, ''  # tied in extras — more innings coming
         return True, f'{rule["name"]}: OT (period {period})'
 
     # MLB-style (no clock): trust status_detail too. ESPN's period field

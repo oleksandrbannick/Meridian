@@ -15123,11 +15123,14 @@ def _handle_phantom(bot_id, bot, actions):
                     _fc = int(float(_fo.get('fill_count_fp', '0')))
                     if _fc <= 0:
                         continue
-                    _fp_d = _fo.get('no_price_dollars' if fav_side == 'no' else 'yes_price_dollars')
-                    if _fp_d:
-                        _fp = int(round(float(_fp_d) * 100))
-                    else:
-                        _fp = get_actual_fill_price(_foid, fav_side) or 0
+                    # Always use /fills wavg, never the order's limit-price field.
+                    # When fav amends (walks/snaps to follow bid), yes_price_dollars/
+                    # no_price_dollars updates to the new limit, while earlier fills
+                    # remain at the old price. Using the limit overstates the avg fill
+                    # price for amended orders and reports profitable trades as losses.
+                    _fp = get_actual_fill_price(_foid, fav_side) or 0
+                    if _fp <= 0:
+                        continue
                     _fav_total_cents += _fp * _fc
                     _fav_total_qty += _fc
                     _ff = float(_fo.get('maker_fees_dollars', '0')) + float(_fo.get('taker_fees_dollars', '0'))
@@ -15157,7 +15160,14 @@ def _handle_phantom(bot_id, bot, actions):
             bot['yes_price'] = yes_p
             bot['no_price'] = no_p
 
-            pnl_cents = (100 - yes_p - no_p) * qty
+            # Compute pnl from total cents, not rounded wavg × qty. Rounding the
+            # fav wavg before multiplying by qty loses up to ~qty/2 cents of
+            # real money (e.g. 70-qty trade with 72.17 wavg rounds to 72,
+            # overstates pnl by 12¢). Use the unrounded sum directly.
+            if _fav_total_qty > 0 and _fav_total_qty == qty:
+                pnl_cents = (100 * qty) - (dog_price * qty) - _fav_total_cents
+            else:
+                pnl_cents = (100 - yes_p - no_p) * qty
             # Pull actual fees from Kalshi orders (retry on 429, 1s spacing = fresh rate window)
             fee = 0
             for _fee_oid in list(set(filter(None, [bot.get('dog_order_id'), fav_order_id] + list(bot.get('_all_hedge_order_ids', []))))):

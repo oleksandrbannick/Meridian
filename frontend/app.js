@@ -2529,6 +2529,8 @@ function displayEventRow(eventData, container) {
             const teamLabel = getTeamLabelFromTicker(m.ticker);
             if (!teamLabel || teamLabel === 'Winner') {
                 winLabel = 'Winner';
+            } else if (teamLabel === 'Tie') {
+                winLabel = 'Tie';
             } else if (teamLabel.toLowerCase().endsWith('win')) {
                 winLabel = teamLabel;
             } else {
@@ -2901,6 +2903,10 @@ function getTeamLabelFromTicker(ticker) {
     const suffix = isSpread ? rawSuffix.replace(/\d+$/, '') : rawSuffix;
     if (!suffix) return 'Winner';
     const code = suffix.toUpperCase();
+
+    // Tie/Draw outcome — short-circuit before abbr lookup. Global _abbrToName can be
+    // contaminated by ATP player Learner Tien (abbr=TIE) bleeding 'Tien' into soccer.
+    if (code === 'TIE' || code === 'DRAW') return 'Tie';
 
     // Sport-aware resolution: ESPN/API Tennis data first, then hardcoded fallback
     const _sport = detectSport(ticker);
@@ -3293,7 +3299,7 @@ function formatBotDisplayName(ticker, spreadLine, marketTitle) {
     } else if (marketType === 'Moneyline') {
         const sideTeam = getTeamLabelFromTicker(ticker);
         if (sideTeam && sideTeam !== 'Winner') {
-            sideLabel = sideTeam + ' Win';
+            sideLabel = sideTeam === 'Tie' ? 'Tie' : sideTeam + ' Win';
         }
     } else if (suffix) {
         sideLabel = suffix;

@@ -567,6 +567,9 @@ async function loadLiveScores() {
             fetchBoxScore(g.sport, g.espnGameId);
         });
 
+        // Inject Kalshi-suffix aliases for soccer (ESPN OLM/NICE → Kalshi OM/NIC etc.)
+        injectKalshiSoccerAliases();
+
         // Re-render market cards so live badges update
         if (allMarkets.length > 0) applyFilters();
     } catch (e) {
@@ -666,6 +669,88 @@ function parseESPNGame(event, sport) {
         gameScoreDisplay: status.displayClock || '',
         serving: event._serving || '',
     };
+}
+
+// Soccer leagues where ESPN abbreviations diverge from Kalshi suffixes.
+// ESPN uses OLM/NICE/BVB/etc; Kalshi uses OM/NIC/BVB/etc — varies per team.
+// Resolve via team-name match (Kalshi yes_sub_title matches ESPN displayName)
+// rather than a hardcoded 150+ team table.
+const _SOCCER_SPORTS_FOR_ALIAS = ['EPL','UCL','MLS','LaLiga','Bundesliga','Ligue1','SerieA','LigaMX'];
+
+function injectKalshiSoccerAliases() {
+    if (!Array.isArray(allMarkets) || allMarkets.length === 0) return;
+
+    // Group Kalshi soccer markets by event_ticker
+    const groups = {};
+    for (const m of allMarkets) {
+        const t = (m.ticker || '').toUpperCase();
+        const sport = detectSport(t);
+        if (!_SOCCER_SPORTS_FOR_ALIAS.includes(sport)) continue;
+        const evt = m.event_ticker || t.replace(/-[^-]+$/, '');
+        if (!groups[evt]) groups[evt] = { sport, markets: [] };
+        groups[evt].markets.push(m);
+    }
+
+    for (const g of Object.values(groups)) {
+        const sport = g.sport;
+        const sportAbbrMap = (window._abbrToNameBySport || {})[sport] || {};
+        if (Object.keys(sportAbbrMap).length === 0) continue;
+
+        // Build name-lower → ESPN abbr lookup for this league
+        const nameToAbbr = {};
+        for (const [abbr, name] of Object.entries(sportAbbrMap)) {
+            const k = (name || '').toLowerCase().trim();
+            if (k) nameToAbbr[k] = abbr;
+        }
+
+        // Match Kalshi suffix → ESPN abbr by team name
+        const suffixToEspnAbbr = {};
+        for (const m of g.markets) {
+            const t = (m.ticker || '').toUpperCase();
+            const suffix = t.split('-').pop();
+            if (suffix === 'TIE' || suffix === 'DRAW') continue;
+            // Skip player props / spreads / totals — only winner-style suffixes
+            if (/^\d/.test(suffix)) continue;
+            const sub = (m.yes_sub_title || '').toLowerCase().trim();
+            if (!sub) continue;
+            let abbr = nameToAbbr[sub];
+            if (!abbr) {
+                // Fuzzy: ESPN "Le Havre AC" vs Kalshi "Le Havre"; ESPN "Inter Milan" vs Kalshi "Inter"
+                for (const [n, a] of Object.entries(nameToAbbr)) {
+                    if (n === sub) { abbr = a; break; }
+                    if (n.startsWith(sub + ' ') || sub.startsWith(n + ' ')) { abbr = a; break; }
+                }
+            }
+            if (abbr) suffixToEspnAbbr[suffix] = abbr;
+        }
+
+        // Inject single-suffix aliases into liveGames / allGameData / abbr-to-name map
+        for (const [suffix, espnAbbr] of Object.entries(suffixToEspnAbbr)) {
+            if (suffix === espnAbbr) continue;
+            const k = `${sport}:${espnAbbr}`;
+            if (liveGames[k]) liveGames[`${sport}:${suffix}`] = liveGames[k];
+            if (allGameData[k]) allGameData[`${sport}:${suffix}`] = allGameData[k];
+            window._abbrToNameBySport[sport][suffix] = sportAbbrMap[espnAbbr] || suffix;
+            // Do NOT write to global window._abbrToName — it bleeds across sports
+            // (e.g. ATP player Nicod has abbr NIC). Sport-keyed lookup is safe.
+        }
+
+        // Build paired-key lookups for Kalshi gameId middle (e.g. "OMNIC")
+        const suffixes = Object.keys(suffixToEspnAbbr);
+        if (suffixes.length === 2) {
+            const [a, b] = suffixes;
+            const game = allGameData[`${sport}:${a}`] || allGameData[`${sport}:${b}`]
+                      || liveGames[`${sport}:${a}`] || liveGames[`${sport}:${b}`];
+            if (game) {
+                allGameData[`${sport}:${a}${b}`] = game;
+                allGameData[`${sport}:${b}${a}`] = game;
+                if (game.state === 'in') {
+                    liveGames[`${sport}:${a}${b}`] = game;
+                    liveGames[`${sport}:${b}${a}`] = game;
+                }
+            }
+        }
+    }
 }
 
 // Live scores bar removed — live data shown inline on game cards via liveGames lookup
@@ -1573,6 +1658,9 @@ async function loadMarkets() {
         
         allMarkets = data.markets || data;
         console.log(`📊 Sports markets loaded: ${allMarkets.length} open (filter: ${currentSportFilter})`);
+
+        // Soccer: derive Kalshi↔ESPN abbreviation aliases from team names so live scores resolve.
+        injectKalshiSoccerAliases();
         
         // Log breakdown by series
         if (allMarkets.length > 0) {

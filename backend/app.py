@@ -2030,8 +2030,10 @@ def _fetch_api_tennis_scoreboard(tour_filter):
         all_matches = _api_tennis_cache['data']
     else:
         try:
-            # Fetch yesterday + today + tomorrow to catch timezone boundary matches
-            url = f'https://api.api-tennis.com/tennis/?method=get_fixtures&date_start={_utc_yesterday}&date_stop={_utc_tomorrow}&APIkey={_API_TENNIS_KEY}'
+            # Fetch yesterday + today + tomorrow to catch timezone boundary matches.
+            # timezone=America/Phoenix → event_time field comes back in Arizona local
+            # time so the UI shows correct scheduled match times (no DST in AZ).
+            url = f'https://api.api-tennis.com/tennis/?method=get_fixtures&date_start={_utc_yesterday}&date_stop={_utc_tomorrow}&APIkey={_API_TENNIS_KEY}&timezone=America/Phoenix'
             resp = requests.get(url, timeout=8)
             resp.raise_for_status()
             result = resp.json()
@@ -4508,7 +4510,7 @@ class TennisWSManager:
         if not _API_TENNIS_KEY:
             return
 
-        url = f'wss://wss.api-tennis.com/live?APIkey={_API_TENNIS_KEY}&timezone=+00:00'
+        url = f'wss://wss.api-tennis.com/live?APIkey={_API_TENNIS_KEY}&timezone=America/Phoenix'
 
         def on_open(ws):
             self._connected = True

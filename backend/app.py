@@ -16477,6 +16477,64 @@ def _handle_apex(bot_id, bot, actions):
     # blocked by exit) and just waste order slots + rate limit. No-op when flat.
     _apex_mm_cancel_close_side_orders(bot_id, bot)
 
+    # ── FLAT + STUCK safety nets (run for active+pulled states only) ──
+    # Why: a flat bot has nothing at risk. If the market goes dead with mid-range
+    # residual quotes (e.g. 10/41), drift guard never fires and the bot loops on
+    # depth/OBI checks indefinitely — even after the game ends. Two paths:
+    # (A) Settlement poll → awaiting_settlement when Kalshi confirms.
+    # (B) Stale-flat purge → straight to completed when Kalshi never settles.
+    # Gated to mm_depth_pulled/market_making_active so we don't interrupt an
+    # active exit (mm_exiting) or an already-settling bot (awaiting_settlement).
+    if status in ('mm_depth_pulled', 'market_making_active') and \
+       bot.get('net_yes', 0) == 0 and bot.get('net_no', 0) == 0:
+        # (A) Settlement poll (30s cadence)
+        if now - bot.get('_last_settle_check_global', 0) >= 30:
+            bot['_last_settle_check_global'] = now
+            try:
+                api_read_limiter.wait()
+                _fp_mkt = kalshi_client.get_market(ticker)
+                _fp_data = _fp_mkt.get('market', _fp_mkt) if isinstance(_fp_mkt, dict) else {}
+                _fp_status = _fp_data.get('status', '').lower()
+                if _fp_status in ('settled', 'finalized') or (
+                    _fp_status == 'closed' and _fp_data.get('result', '') in ('yes', 'no')
+                ):
+                    # Cancel any live orders before settling
+                    for _sk in ('yes_orders', 'no_orders'):
+                        for _lvl in bot.get(_sk, {}).values():
+                            _oid = _lvl.get('oid')
+                            if _oid:
+                                try: _safe_cancel(_oid, f'apex_mm_flat_settle_{bot_id}')
+                                except Exception: pass
+                                _lvl['oid'] = None
+                    bot['status'] = 'awaiting_settlement'
+                    bot['awaiting_since'] = now
+                    bot['_market_settled_at'] = now
+                    bot['_smart_stop_reason'] = 'final'
+                    print(f'🏁 APEX MM FLAT→SETTLED: {bot_id} market {_fp_status} — transitioning to awaiting_settlement')
+                    save_state()
+                    return
+            except Exception:
+                pass
+
+        # (B) Stale-flat purge: pulls>=200 + age>=4h + flat → completed
+        # Bypasses Kalshi settle-gate for the case where Kalshi never settles.
+        _age_h = (now - bot.get('created_at', now)) / 3600
+        if bot.get('_pull_count', 0) >= 200 and _age_h >= 4:
+            print(f'🪦 APEX MM STALE-FLAT PURGE: {bot_id} pulls={bot.get("_pull_count")} age={_age_h:.1f}h status={status} — flat, market dead')
+            for _sk in ('yes_orders', 'no_orders'):
+                for _lvl in bot.get(_sk, {}).values():
+                    _oid = _lvl.get('oid')
+                    if _oid:
+                        try: _safe_cancel(_oid, f'apex_mm_stale_flat_{bot_id}')
+                        except Exception: pass
+                        _lvl['oid'] = None
+            bot['status'] = 'completed'
+            bot['completed_at'] = now
+            bot['_market_settled_at'] = now
+            bot['_smart_stop_reason'] = 'stale_flat_purge'
+            save_state()
+            return
+
     # ── STATUS: mm_depth_pulled — check recovery ──
     if status == 'mm_depth_pulled':
         # Extra reconcile while pulled (30s cadence) — orphan-prone state
@@ -16488,48 +16546,9 @@ def _handle_apex(bot_id, bot, actions):
             _apex_mm_begin_exit(bot_id, bot, 'max_pull_cycles')
             return
 
-        # ── FLAT + PULLED safety nets (always run; not gated on drift) ──
-        # Why: a flat bot with no inventory has nothing at risk. If the market goes
-        # dead with mid-range residual quotes (e.g. 10/41), drift guard never fires
-        # and the old settlement check (gated inside drift) never ran — bot loops
-        # forever on depth/OBI recovery checks.
-        _flat = bot.get('net_yes', 0) == 0 and bot.get('net_no', 0) == 0
-        if _flat:
-            # (A) Settlement poll: transition to awaiting_settlement when Kalshi confirms.
-            if now - bot.get('_last_settle_check_global', 0) >= 30:
-                bot['_last_settle_check_global'] = now
-                try:
-                    api_read_limiter.wait()
-                    _fp_mkt = kalshi_client.get_market(ticker)
-                    _fp_data = _fp_mkt.get('market', _fp_mkt) if isinstance(_fp_mkt, dict) else {}
-                    _fp_status = _fp_data.get('status', '').lower()
-                    if _fp_status in ('settled', 'finalized') or (
-                        _fp_status == 'closed' and _fp_data.get('result', '') in ('yes', 'no')
-                    ):
-                        bot['status'] = 'awaiting_settlement'
-                        bot['awaiting_since'] = now
-                        bot['_market_settled_at'] = now
-                        bot['_smart_stop_reason'] = 'final'
-                        print(f'🏁 APEX MM FLAT→SETTLED: {bot_id} market {_fp_status} — transitioning to awaiting_settlement')
-                        save_state()
-                        return
-                except Exception:
-                    pass
-
-            # (B) Stale-flat purge: nothing at risk, sat too long, Kalshi never settled.
-            # Trigger requires both pull-count and age — pull-count alone could hit on
-            # a brief liquidity gap; age alone could hit on a freshly-flat bot mid-game.
-            # Goes straight to 'completed' with _market_settled_at so the 5-min global
-            # purge clears it; awaiting_settlement would re-gate on Kalshi market status.
-            _age_h = (now - bot.get('created_at', now)) / 3600
-            if bot.get('_pull_count', 0) >= 200 and _age_h >= 4:
-                print(f'🪦 APEX MM STALE-FLAT PURGE: {bot_id} pulls={bot.get("_pull_count")} age={_age_h:.1f}h — flat, market dead')
-                bot['status'] = 'completed'
-                bot['completed_at'] = now
-                bot['_market_settled_at'] = now
-                bot['_smart_stop_reason'] = 'stale_flat_purge'
-                save_state()
-                return
+        # Note: flat-stuck safety nets (settlement poll + stale-flat purge) run
+        # earlier in _handle_apex (after close-side cleanup) and cover both
+        # mm_depth_pulled and market_making_active.
 
         # Drift guard: don't recover if market is too decided
         _drift_max = max(bot.get('live_yes_bid', 0), bot.get('live_no_bid', 0))

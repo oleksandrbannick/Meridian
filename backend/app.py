@@ -16516,11 +16516,21 @@ def _handle_apex(bot_id, bot, actions):
             except Exception:
                 pass
 
-        # (B) Stale-flat purge: pulls>=200 + age>=4h + flat → completed
+        # (B) Stale-flat purge: bot has nothing at risk and isn't doing anything.
         # Bypasses Kalshi settle-gate for the case where Kalshi never settles.
+        # Two trigger paths (either fires):
+        #   - busy-stuck: pulls>=200 + age>=4h (rapid pull/repost loop in market_making_active)
+        #   - idle-stale: no round trip in 4h+ AND age>=4h (survives waiting_repeat resets,
+        #                 which zero out _pull_count but preserve _rt_log + created_at)
         _age_h = (now - bot.get('created_at', now)) / 3600
-        if bot.get('_pull_count', 0) >= 200 and _age_h >= 4:
-            print(f'🪦 APEX MM STALE-FLAT PURGE: {bot_id} pulls={bot.get("_pull_count")} age={_age_h:.1f}h status={status} — flat, market dead')
+        _rt_log = bot.get('_rt_log') or []
+        _last_rt_ts = _rt_log[-1].get('ts', 0) if _rt_log else 0
+        # If no RTs ever, treat created_at as last activity so age check governs.
+        _idle_h = (now - max(_last_rt_ts, bot.get('created_at', now))) / 3600
+        _busy_stuck = bot.get('_pull_count', 0) >= 200 and _age_h >= 4
+        _idle_stale = _idle_h >= 4 and _age_h >= 4
+        if _busy_stuck or _idle_stale:
+            print(f'🪦 APEX MM STALE-FLAT PURGE: {bot_id} pulls={bot.get("_pull_count")} age={_age_h:.1f}h idle={_idle_h:.1f}h status={status} — flat, market dead')
             for _sk in ('yes_orders', 'no_orders'):
                 for _lvl in bot.get(_sk, {}).values():
                     _oid = _lvl.get('oid')

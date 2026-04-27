@@ -13833,6 +13833,14 @@ def _handle_phantom(bot_id, bot, actions):
             _mkt_data = _mkt.get('market', _mkt) if isinstance(_mkt, dict) else {}
             _mkt_status = _mkt_data.get('status', '').lower()
             _settled = _mkt_status in ('settled', 'finalized')
+            # 'inactive' on Kalshi means trading is closed but settlement hasn't run yet
+            # (common for NBA player props, etc — game ended, awaiting Kalshi to call result).
+            # If the bot has ZERO fills (no position at risk) and is in death-zone-stopped,
+            # treat inactive as settled so the bot doesn't sit forever waiting.
+            if not _settled and _mkt_status == 'inactive':
+                _has_pos = (bot.get('dog_fill_qty', 0) or 0) > 0 or (bot.get('fav_fill_qty', 0) or 0) > 0
+                if not _has_pos and bot.get('_death_zone_stopped'):
+                    _settled = True
             if not _settled and _mkt_status == 'closed':
                 _is_tennis = ticker.startswith(('KXATP', 'KXWTA', 'KXITF'))
                 if _is_tennis:
@@ -18772,8 +18780,14 @@ def _run_monitor():
                             _sl_order_status = _sl_obj.get('status', '')
 
                             if _sl_filled >= qty:
-                                # Fully filled — record the SL exit
-                                actual_sell = bot.get('sl_posted_price', 0) or cur_bid
+                                # Fully filled — record the SL exit at ACTUAL fill price
+                                # (sl_posted_price = where we POSTED, but the fill can land
+                                # at a better price via maker improvement, e.g. posted 82,
+                                # fills 78 against a stale ask). Using post price flips the
+                                # loss sign on improvements: (entry-82)*qty = -6 looks like
+                                # a phantom +$0.06 gain when it was actually a -$0.06 loss.
+                                _real_fill = get_actual_fill_price(_sl_sell_oid, watch_side) if _sl_sell_oid else None
+                                actual_sell = _real_fill or bot.get('sl_posted_price', 0) or cur_bid
                                 loss = (entry - actual_sell) * qty
                                 bot['status'] = 'stopped'
                                 bot['stopped_at'] = now
@@ -18800,7 +18814,8 @@ def _run_monitor():
                                 save_state()
                             elif _sl_filled > 0 and _sl_filled < qty:
                                 # Partial fill — record partial, keep selling remainder
-                                actual_sell = bot.get('sl_posted_price', 0) or cur_bid
+                                _real_fill = get_actual_fill_price(_sl_sell_oid, watch_side) if _sl_sell_oid else None
+                                actual_sell = _real_fill or bot.get('sl_posted_price', 0) or cur_bid
                                 partial_loss = (entry - actual_sell) * _sl_filled
                                 remaining = qty - _sl_filled
                                 bot['quantity'] = remaining
@@ -18927,15 +18942,17 @@ def _run_monitor():
                                 _tp_filled = _parse_fill_count(_tp_obj) or 0
                                 _tp_status = _tp_obj.get('status', '')
                                 if _tp_filled >= qty:
-                                    # TP order fully filled — record completion
+                                    # TP order fully filled — record completion at ACTUAL fill price
                                     _tp_oid = _existing_tp_oid
-                                    _tp_price = entry + tp
+                                    _real_fill = get_actual_fill_price(_existing_tp_oid, watch_side)
+                                    _tp_price = _real_fill or (entry + tp)
                                     sold = True
                                     print(f'✅ SCOUT TP ORDER FILLED: {bot_id} — resting sell filled {_tp_filled}x @{_tp_price}¢')
                                 elif _tp_filled > 0 and _tp_filled < qty:
                                     # Partial fill — record the filled portion, keep watching remainder
                                     _tp_partial_filled = _tp_filled
-                                    _tp_price = entry + tp
+                                    _real_fill = get_actual_fill_price(_existing_tp_oid, watch_side)
+                                    _tp_price = _real_fill or (entry + tp)
                                     _partial_profit = (_tp_price - entry) * _tp_partial_filled
                                     remaining = qty - _tp_partial_filled
                                     bot['quantity'] = remaining
@@ -18991,7 +19008,9 @@ def _run_monitor():
                             _tp_oid, _tp_price = execute_maker_sell(ticker, watch_side, qty, reason=f'watch_TP_{bot_id}')
                             sold = bool(_tp_oid)
                         if sold:
-                            actual_sell = _tp_price or cur_bid
+                            # If maker_sell returned an oid, prefer ACTUAL fill price
+                            _real_fill = get_actual_fill_price(_tp_oid, watch_side) if _tp_oid else None
+                            actual_sell = _real_fill or _tp_price or cur_bid
                             profit = (actual_sell - entry) * qty
                             bot['status'] = 'completed'
                             bot['completed_at'] = now

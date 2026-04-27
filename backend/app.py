@@ -1598,9 +1598,9 @@ def get_depth_rec(ticker):
     ppi, rd, ppi_det = _calculate_ppi(ticker, fav_side, dog_side)
     if ppi is None:
         ppi, rd, ppi_det = 0, 0, {}
-    tier = 'WALL' if ppi >= 90 else 'PRIME' if ppi >= 70 else 'TRAP' if ppi >= 55 else 'DEEP' if ppi >= 40 else 'FLOOR' if ppi >= 30 else 'KILL'
-    # Base depth before gap overrides — must mirror _calculate_ppi rec ladder (v10 final)
-    _base_rd = 4 if ppi >= 90 else 5 if ppi >= 70 else 6 if ppi >= 55 else 7 if ppi >= 40 else 8 if ppi >= 30 else 0
+    tier = 'WALL' if ppi >= 85 else 'PRIME' if ppi >= 60 else 'TRAP' if ppi >= 45 else 'DEEP' if ppi >= 30 else 'KILL'
+    # Base depth before gap overrides — must mirror _calculate_ppi rec ladder (v11)
+    _base_rd = 5 if ppi >= 85 else 5 if ppi >= 60 else 6 if ppi >= 45 else 7 if ppi >= 30 else 0
     _gap_bumped = rd > _base_rd and rd > 0
     reasons = [f'PPI {ppi} {tier}: D={ppi_det.get("d",0)} S={ppi_det.get("s",0)} T={ppi_det.get("t",0)} (gaps={ppi_det.get("fg",0)})']
     if _gap_bumped:
@@ -8009,15 +8009,14 @@ def _calculate_ppi(ticker, fav_side, dog_side):
     _raw = d_pts + g_pts + s_pts + t_pts               # v6 original: D(40)+G(25)+S(20)+T(15) = max 100
     ppi = max(0, min(100, round(_raw)))                # divisor 100 — v6 was already 0-100 normalized
 
-    # PPI → depth rec. 4c lane retired 2026-04-27 — 928-trade analysis showed
-    # 4c posts had +$0.004/trade lifetime and 19% deep-loss rate. WALL @ 4c was
-    # the worst single bucket (-$14.57 over 20 trades). WALL now shares 5c with
-    # PRIME — 5c is the lifetime workhorse (804 trades, +$244, biggest profit pool).
-    if ppi >= 90: rec = 5                              # WALL: shares 5c with PRIME
-    elif ppi >= 70: rec = 5                            # PRIME: 70-89
-    elif ppi >= 55: rec = 6                            # TRAP: 55-69
-    elif ppi >= 40: rec = 7                            # DEEP: 40-54 (15 pts)
-    elif ppi >= 30: rec = 8                            # FLOOR: 30-39 (10 pts)
+    # PPI → depth rec. v11 (2026-04-27): PRIME widened down to 60 to recover the
+    # 60-69 sweet spot (110 trades, avg 145c/trade, was demoted to 6c TRAP under v10).
+    # FLOOR removed — 8c posts catch game-changing events not sweeps. Tennis median
+    # PPI=68 now lands at 5c PRIME instead of 6c TRAP.
+    if ppi >= 85: rec = 5                              # WALL: shares 5c with PRIME (15 pts)
+    elif ppi >= 60: rec = 5                            # PRIME: 60-84 (25 pts) — the workhorse zone
+    elif ppi >= 45: rec = 6                            # TRAP: 45-59 (15 pts)
+    elif ppi >= 30: rec = 7                            # DEEP: 30-44 (15 pts)
     else: rec = 0                                      # KILL: pull
     # Fav gaps override (only when not KILL — gaps don't save a toxic book)
     if rec > 0:

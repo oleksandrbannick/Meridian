@@ -2550,10 +2550,16 @@ function displayEventRow(eventData, container) {
         // No ESPN data (or ESPN still says pregame) but Kalshi says it's live.
         // Distinguish sports with no known score provider ("Kalshi-reported")
         // from sports where a provider exists but returned nothing ("Score unavailable").
+        // ITF lower tiers (KXITFMATCH, KXITFWMATCH) aren't tracked by API Tennis at all
+        // — the lookup will always miss for these, so the tooltip flags it explicitly.
+        const _itfLowerTier = /KXITFMATCH|KXITFWMATCH/i.test(eventData.eventTicker || '');
         const liveBanner = document.createElement('div');
         liveBanner.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:8px;background:linear-gradient(135deg,#0a1a0a,#0f1f12);border:1px solid #00ff88;border-radius:8px;padding:10px 16px;margin-bottom:12px;';
         const bannerNote = NO_SCORE_SPORTS.has(sport) ? 'Kalshi-reported (no score feed)' : 'Score unavailable';
-        liveBanner.innerHTML = `<span style="color:#ff3333;font-size:10px;font-weight:800;letter-spacing:1px;display:flex;align-items:center;gap:4px;"><span style="animation:pulse 1.5s infinite;">●</span> LIVE</span><span style="color:#8892a6;font-size:12px;">${bannerNote}</span>`;
+        const bannerTitle = _itfLowerTier ? 'ITF lower-tier (W15/W25/W35/etc.) tournaments not tracked by API Tennis'
+                          : NO_SCORE_SPORTS.has(sport) ? `${sport} has no live-score provider`
+                          : '';
+        liveBanner.innerHTML = `<span style="color:#ff3333;font-size:10px;font-weight:800;letter-spacing:1px;display:flex;align-items:center;gap:4px;"><span style="animation:pulse 1.5s infinite;">●</span> LIVE</span><span style="color:#8892a6;font-size:12px;" title="${bannerTitle}">${bannerNote}</span>`;
         card.appendChild(liveBanner);
     } else if (!gameScore && eventData.markets && eventData.markets.length > 0) {
         // No score data at all — show scheduled start or DELAYED status

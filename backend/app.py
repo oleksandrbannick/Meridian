@@ -1598,9 +1598,9 @@ def get_depth_rec(ticker):
     ppi, rd, ppi_det = _calculate_ppi(ticker, fav_side, dog_side)
     if ppi is None:
         ppi, rd, ppi_det = 0, 0, {}
-    tier = 'WALL' if ppi >= 90 else 'PRIME' if ppi >= 55 else 'TRAP' if ppi >= 45 else 'DEEP' if ppi >= 40 else 'FLOOR' if ppi >= 35 else 'KILL'
-    # Base depth before gap overrides (v8: WALL threshold 85→90, TRAP/DEEP=7c)
-    _base_rd = 4 if ppi >= 90 else 5 if ppi >= 55 else 7 if ppi >= 45 else 7 if ppi >= 40 else 8 if ppi >= 35 else 0
+    tier = 'WALL' if ppi >= 90 else 'PRIME' if ppi >= 70 else 'TRAP' if ppi >= 55 else 'DEEP' if ppi >= 40 else 'FLOOR' if ppi >= 30 else 'KILL'
+    # Base depth before gap overrides — must mirror _calculate_ppi rec ladder (v10 final)
+    _base_rd = 4 if ppi >= 90 else 5 if ppi >= 70 else 6 if ppi >= 55 else 7 if ppi >= 40 else 8 if ppi >= 30 else 0
     _gap_bumped = rd > _base_rd and rd > 0
     reasons = [f'PPI {ppi} {tier}: D={ppi_det.get("d",0)} S={ppi_det.get("s",0)} T={ppi_det.get("t",0)} (gaps={ppi_det.get("fg",0)})']
     if _gap_bumped:
@@ -3460,6 +3460,25 @@ def run_migrations():
         print('✅ No pending migrations')
 
 
+# Throttled save: WS hot path was calling save_state on every snap, blocking the
+# per-bot lock for 400-500ms while serializing 10MB JSON. With many bots and fast
+# bid moves, saves chained up multi-second behind the global _save_lock — bots
+# couldn't snap fast enough. Hot path now uses save_state_throttled which coalesces
+# saves to at most once per 1s. Safety: Kalshi is source-of-truth for orders,
+# in-memory state reflects amends instantly, monitor cycle calls save_state proper.
+_last_throttled_save = [0.0]
+_throttled_save_lock = threading.Lock()
+def save_state_throttled(min_interval=1.0):
+    """Coalesce save_state calls — at most once per min_interval seconds.
+    Safe in WS hot path; critical state (trade records, completions) should still
+    call save_state() directly."""
+    now = time.time()
+    with _throttled_save_lock:
+        if now - _last_throttled_save[0] < min_interval:
+            return
+        _last_throttled_save[0] = now
+    save_state()
+
 def save_state():
     """Persist active_bots and trade_history to disk so they survive restarts.
     Uses atomic write (temp → rename) so a crash mid-write never corrupts data.json."""
@@ -4800,8 +4819,22 @@ def _ws_maker_sell_follow(ticker, yes_ask, no_ask):
         _maker_sell_follow_lock.release()
 
 
-# Lock to prevent concurrent phantom drop amends
-_phantom_drop_lock = threading.Lock()
+# Per-bot lock to prevent concurrent phantom amends ON THE SAME BOT.
+# Was a single global lock — caused ALL phantom bots to contend, so when a multi-cent
+# bid jump happened only 1 bot snapped per WS tick and others lagged hundreds of ms.
+# Per-bot lock = each bot's amends serialize correctly with no cross-bot contention.
+_phantom_drop_locks = {}
+_phantom_drop_locks_meta = threading.Lock()  # protects the dict itself
+def _phantom_lock_for(bot_id):
+    """Return the per-bot phantom amend lock, creating it on first use."""
+    lk = _phantom_drop_locks.get(bot_id)
+    if lk is None:
+        with _phantom_drop_locks_meta:
+            lk = _phantom_drop_locks.get(bot_id)
+            if lk is None:
+                lk = threading.Lock()
+                _phantom_drop_locks[bot_id] = lk
+    return lk
 
 
 def _fav_bid_excluding_self(ticker, fav_side, our_price, our_remaining_qty):
@@ -4845,6 +4878,73 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
         if fav_bid <= 0:
             continue
 
+        # ── Stranding drop ──────────────────────────────────────────────
+        # We ARE the bid (fav_price == fav_bid) but there's a meaningful
+        # gap below us to the next real bid. Defends against walk-up-then-
+        # cancel where ghost bidders push us up and leave us stranded.
+        # 3c gap threshold filters book breathing; 3s hysteresis filters
+        # HFT priority wars. Floor at _fav_bid_at_anchor so we only reclaim
+        # original margin, never chase a falling knife.
+        # IMPORTANT: only reset _alone_since when the GAP closes (someone joined),
+        # NOT on transient fav_price != fav_bid moments during snap-up amends —
+        # that race was wiping the 3s timer on every bid move.
+        _hedge_qty = bot.get('_active_fav_qty') or bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1))
+        _next_real = _fav_bid_excluding_self(hedge_ticker, fav_side, fav_price, _hedge_qty)
+        _gap = fav_price - _next_real if _next_real > 0 else 0
+        if fav_price == fav_bid and _gap >= 3:
+            if not bot.get('_alone_since'):
+                bot['_alone_since'] = time.time()
+                bot_log('PHANTOM_STRANDING_DETECTED', bot_id, {
+                    'fav_price': fav_price, 'next_real_bid': _next_real, 'gap': _gap,
+                })
+            elif time.time() - bot['_alone_since'] >= 3:
+                    _floor = bot.get('_fav_bid_at_anchor') or 0
+                    _drop_target = max(_next_real + 1, _floor)
+                    if _drop_target < fav_price and _phantom_lock_for(bot_id).acquire(blocking=False):
+                        try:
+                            _str_oid = bot.get('fav_order_id')
+                            if _str_oid:
+                                api_rate_limiter.wait(priority=True)
+                                _str_resp = kalshi_client.amend_order(_str_oid, ticker=hedge_ticker, side=fav_side,
+                                                                       count=_hedge_qty, **{f'{fav_side}_price': _drop_target})
+                                _str_ord = _str_resp.get('order', _str_resp) if isinstance(_str_resp, dict) else {}
+                                _str_new_oid = _str_ord.get('order_id', '')
+                                if _str_new_oid and _str_new_oid != _str_oid:
+                                    bot['fav_order_id'] = _str_new_oid
+                                    _str_hids = bot.setdefault('_all_hedge_order_ids', [])
+                                    if _str_oid not in _str_hids: _str_hids.append(_str_oid)
+                                    if _str_new_oid not in _str_hids: _str_hids.append(_str_new_oid)
+                                    if fav_side == 'yes':
+                                        bot['yes_order_id'] = _str_new_oid
+                                    else:
+                                        bot['no_order_id'] = _str_new_oid
+                                bot['fav_price'] = _drop_target
+                                if fav_side == 'yes':
+                                    bot['yes_price'] = _drop_target
+                                else:
+                                    bot['no_price'] = _drop_target
+                                bot['fav_last_walk_at'] = time.time()
+                                bot['fav_walk_count'] = bot.get('fav_walk_count', 0) + 1
+                                bot['_alone_since'] = None
+                                _str_dog_p = bot.get('dog_price', 0)
+                                print(f'⚡ WS PHANTOM STRANDING DROP: {bot_id} fav {fav_price}→{_drop_target}¢ (next_real={_next_real}¢ gap={_gap}¢ combined={_str_dog_p+_drop_target}¢)')
+                                bot_log('PHANTOM_WS_STRANDING_DROP', bot_id, {
+                                    'old_price': fav_price, 'new_price': _drop_target,
+                                    'next_real_bid': _next_real, 'gap': _gap,
+                                    'fav_anchor_floor': _floor,
+                                })
+                                save_state_throttled()
+                        except Exception as _str_e:
+                            if '404' not in str(_str_e):
+                                print(f'⚠ WS PHANTOM STRANDING DROP FAIL: {bot_id}: {_str_e}')
+                        finally:
+                            _phantom_lock_for(bot_id).release()
+                        continue
+            else:
+                bot['_alone_since'] = None
+        else:
+            bot['_alone_since'] = None
+
         # Stay parked at bid — even when alone at top of book.
         # Phantom is a speed play: queue priority compounds, oscillating
         # off-bid (self-alone drop) → on-bid (snap up) shreds priority and
@@ -4860,8 +4960,8 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
             continue
 
         # Acquire lock — only one amend at a time (prevents race with monitor walk).
-        # If contended, skip this bot and try the next — don't bail on all bots.
-        if not _phantom_drop_lock.acquire(blocking=False):
+        # Per-bot lock: only this bot's amends serialize; other bots aren't blocked.
+        if not _phantom_lock_for(bot_id).acquire(blocking=False):
             continue
 
         try:
@@ -4901,12 +5001,12 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 'old_price': fav_price, 'new_price': drop_target,
                 'fav_bid': fav_bid, 'fav_ask': fav_ask_now,
             })
-            save_state()
+            save_state_throttled()
         except Exception as e:
             if '404' not in str(e):
                 print(f'⚠ WS PHANTOM DROP FAIL: {bot_id}: {e}')
         finally:
-            _phantom_drop_lock.release()
+            _phantom_lock_for(bot_id).release()
         # NO throttle — every phantom bot drops on every tick if needed.
 
 
@@ -5316,9 +5416,9 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
         if snap_target == fav_price:
             continue
 
-        # Acquire lock — prevents race with monitor walk and instant drop.
-        # If contended, skip THIS bot and try the next one (don't bail on all bots).
-        if not _phantom_drop_lock.acquire(blocking=False):
+        # Per-bot lock: prevents race with this bot's drop/monitor amend.
+        # Other bots aren't blocked — each has its own lock.
+        if not _phantom_lock_for(bot_id).acquire(blocking=False):
             continue
 
         try:
@@ -5362,7 +5462,7 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 'bid_plus_1': snap_target > fav_bid,
                 'combined': combined,
             })
-            save_state()
+            save_state_throttled()
         except Exception as e:
             if '404' in str(e):
                 # Order gone — check if it FILLED before clearing (prevents double hedge orphan)
@@ -5426,7 +5526,7 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
             else:
                 print(f'⚠ WS PHANTOM SNAP FAIL: {bot_id}: {e}')
         finally:
-            _phantom_drop_lock.release()
+            _phantom_lock_for(bot_id).release()
         # NO throttle — keep iterating so every phantom bot snaps on every tick.
         # Bid can change 20+ times/sec; we must follow it every time, no cap.
 
@@ -5621,13 +5721,24 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 # at bid+1 (price-improve) instead of queue-joining at bid. Fires only
                 # when we're behind, so bid+1 just regains best-book priority. Cap at
                 # WALL-1c (combined=99) so we never lock in a guaranteed loss.
-                live_combined = held_avg + exit_bid
-                if live_combined <= 99:
-                    _max_profitable = max(1, 99 - held_avg)
-                    snap_price = min(exit_bid + 1, _max_profitable)
-                    if snap_price > current_price:
-                        snap_dir = 'UP'
+                # CRITICAL: bid for the snap-up target must EXCLUDE our own resting
+                # exit. The WS event's yes_bid/no_bid is the LOB top including our
+                # orders; in the race window between amend_order returning and the
+                # bot._exit_price write below (line 5738), a fresh WS update can
+                # arrive showing OUR new price as top. exit_bid (our new price) >
+                # current_price (still old) → snap to our_new+1 → climb 1c per
+                # tick until max_profitable. Use _apex_mm_market_best_bid which
+                # walks the book excluding our resting contribution.
+                _real_top = _apex_mm_market_best_bid(bot, exit_side)
+                if _real_top > 0 and _real_top > current_price:
+                    live_combined = held_avg + _real_top
+                    if live_combined <= 99:
+                        _max_profitable = max(1, 99 - held_avg)
+                        snap_price = min(_real_top + 1, _max_profitable)
+                        if snap_price > current_price:
+                            snap_dir = 'UP'
                 # If live_combined > 99 (red zone), wall-park is the monitor walker's job.
+                # If _real_top <= current_price, we're still BBO — no climb.
             if not snap_dir or snap_price <= 0:
                 continue
             try:
@@ -6740,7 +6851,7 @@ def _execute_ws_completion(bot_id):
         _saved_raw_hedge_ms = bot.get('raw_hedge_ms')
         _saved_hedge_latency_ms = bot.get('hedge_latency_ms')
         if will_repeat:
-            bot['waiting_repeat_since'] = time.time() + 3  # 3s linger
+            bot['waiting_repeat_since'] = time.time() + 1  # 1s linger
             bot['first_fill_at'] = None
             bot['first_leg'] = None
             bot['dog_filled_at'] = None
@@ -7584,14 +7695,19 @@ def _is_game_live(ticker: str) -> bool:
                 if not candidates:
                     t1, t2 = _parse_ticker_teams(ticker)
                     candidates = [c for c in [t1, t2] if c]
+                _espn_found_team = False
                 for code in candidates:
                     espn_code = _KALSHI_TO_ESPN.get(code, code)
                     entry = info.get(code) or info.get(espn_code)
-                    if entry and entry.get('live'):
-                        return True
-                # ESPN says game is NOT live — trust ESPN over Kalshi timing
-                # (Kalshi timing can say "live" for pregame games near tipoff)
-                return False
+                    if entry:
+                        _espn_found_team = True
+                        if entry.get('live'):
+                            return True
+                # ESPN POSITIVELY found the team but not live → trust ESPN.
+                # If ESPN didn't have the team at all (LigaMX, intl basketball, etc),
+                # fall through to Kalshi expected_expiration_time check below.
+                if _espn_found_team:
+                    return False
         except Exception:
             pass  # ESPN failed, fall through to Kalshi check
 
@@ -7849,16 +7965,22 @@ def _calculate_ppi(ticker, fav_side, dog_side):
     fpl = fav_analysis['perLevel']
     fg = fav_analysis['gaps']
 
-    # 1. Density (40pts) — fav contracts/level
-    _dr = 100 if fpl >= 100000 else 95 if fpl >= 50000 else 90 if fpl >= 10000 else 85 if fpl >= 5000 else 80 if fpl >= 1000 else 70 if fpl >= 500 else 60 if fpl >= 200 else 50 if fpl >= 100 else 40 if fpl >= 50 else 30 if fpl >= 20 else 20 if fpl >= 10 else 10 if fpl >= 5 else 0
+    # 1. Density (40pts) — fav contracts/level. REVERTED to v6 original 2026-04-26.
+    # Apr 16-19 (v6 era) was peak +$72/day @ 64% WR. Subsequent tuning (v6c-v8-v10)
+    # progressively degraded. Going back to what worked.
+    _dr = 100 if fpl >= 100000 else 95 if fpl >= 50000 else 90 if fpl >= 10000 \
+        else 85 if fpl >= 5000 else 80 if fpl >= 1000 else 70 if fpl >= 500 \
+        else 60 if fpl >= 200 else 50 if fpl >= 100 else 40 if fpl >= 50 \
+        else 30 if fpl >= 20 else 20 if fpl >= 10 else 10 if fpl >= 5 else 0
     d_pts = round(_dr * 0.4)
 
-    # 2. Gap count — kept for telemetry + depth-override only [v8: dropped from score, was wrong-signed in 7d data: G≥10 buckets +$60, G=0,5 buckets flat-to-loss]
+    # 2. Gap count (max 25pts) — v6 original: monotonic linear reward
     g_pts = min(25, fg * 5)
 
-    # 3. Spread (20pts)
+    # 3. Spread (20pts) — v6 original: tighter = better
     spread = max(0, 100 - (dog_bid or 0) - (fav_bid or 0)) if dog_bid and fav_bid else 5
-    s_pts = 20 if spread <= 1 else 18 if spread == 2 else 15 if spread == 3 else 12 if spread == 4 else 8 if spread <= 6 else 4 if spread <= 8 else 0
+    s_pts = 20 if spread <= 1 else 18 if spread == 2 else 15 if spread == 3 \
+        else 12 if spread == 4 else 8 if spread <= 6 else 4 if spread <= 8 else 0
 
     # 4. Time (15pts) — game phase
     t_pts = 15
@@ -7870,6 +7992,8 @@ def _calculate_ppi(ticker, fav_side, dog_side):
     elif 'KXKBO' in tu: sport = 'KBO'
     elif 'KXNPB' in tu: sport = 'NPB'
     elif 'KXATP' in tu or 'KXWTA' in tu or 'KXITF' in tu: sport = 'Tennis'
+    elif any(x in tu for x in ('KXMLS','KXEPL','KXUCL','KXLALIGA','KXLIGAMX','KXLIGUE1','KXSERIEA','KXBUNDESLIGA')): sport = 'Soccer'
+    elif any(x in tu for x in ('KXNBL','KXVTB','KXBSL','KXABA','KXKBL','KXCBA','KXEUROLEAGUE','KXBBL','KXGBL','KXACB','KXJBLEAGUE','KXLNBELITE')): sport = 'IntlBB'
     sc = _get_game_score_for_ticker(ticker)
     if sc and sc.get('status') == 'in':
         period = sc.get('period', 0)
@@ -7877,20 +8001,23 @@ def _calculate_ppi(ticker, fav_side, dog_side):
         if period >= max_p: t_pts = 0
         elif period >= max_p - 1: t_pts = 5
         elif period >= max_p // 2: t_pts = 10
-    elif sport == 'Tennis' and not sc:
-        # No score data = Challenger/small tournament not covered by API Tennis
-        # Penalize: can't detect game phase, flying blind
+    elif sport in ('Tennis','Soccer','IntlBB') and not sc:
+        # No score data — Challenger tennis, intl basketball, or soccer markets
+        # without live score feed. Can't detect game phase = flying blind.
         t_pts = 5
 
-    _raw = d_pts + s_pts + t_pts                       # v8: G removed from score (depth-override carries gap protection)
-    ppi = max(0, min(100, round(_raw * 100 / 75)))     # divisor 75 (max raw = 40+20+15)
+    _raw = d_pts + g_pts + s_pts + t_pts               # v6 original: D(40)+G(25)+S(20)+T(15) = max 100
+    ppi = max(0, min(100, round(_raw)))                # divisor 100 — v6 was already 0-100 normalized
 
-    # PPI → depth rec (v8 — WALL threshold 85→90 since dropping G shifts scores up; WALL was the only losing tier in 7d data)
-    if ppi >= 90: rec = 4                              # WALL: pristine book only (raised from 85, was 59% WR / -$7.81 net)
-    elif ppi >= 55: rec = 5                            # PRIME: money zone workhorse
-    elif ppi >= 45: rec = 7                            # TRAP: caution zone → post 7c for adverse-selection cushion
-    elif ppi >= 40: rec = 7                            # DEEP: recovery buffer
-    elif ppi >= 35: rec = 8                            # FLOOR: last stop before pull
+    # PPI → depth rec. 4c lane retired 2026-04-27 — 928-trade analysis showed
+    # 4c posts had +$0.004/trade lifetime and 19% deep-loss rate. WALL @ 4c was
+    # the worst single bucket (-$14.57 over 20 trades). WALL now shares 5c with
+    # PRIME — 5c is the lifetime workhorse (804 trades, +$244, biggest profit pool).
+    if ppi >= 90: rec = 5                              # WALL: shares 5c with PRIME
+    elif ppi >= 70: rec = 5                            # PRIME: 70-89
+    elif ppi >= 55: rec = 6                            # TRAP: 55-69
+    elif ppi >= 40: rec = 7                            # DEEP: 40-54 (15 pts)
+    elif ppi >= 30: rec = 8                            # FLOOR: 30-39 (10 pts)
     else: rec = 0                                      # KILL: pull
     # Fav gaps override (only when not KILL — gaps don't save a toxic book)
     if rec > 0:
@@ -7929,26 +8056,12 @@ _PHANTOM_DEATH_ZONE = {
 
 
 def _tennis_death_zone_check(match_data):
-    """Tennis death zone = ENTIRE DECIDING SET (set 3 of BO3, set 5 of BO5).
-    Fires once both players have won (sets_to_win - 1) sets — the current set
-    will end the match. Sets 1-2 of BO3 (sets 1-4 of BO5) never trigger.
-    Returns (True, reason) or (False, '')."""
-    scores = match_data.get('scores', [])
-    if not scores:
-        return False, ''
-    # Count completed sets (winning side has 6+ games with 2+ margin, or 7)
-    p1_sets = sum(1 for s in scores if _set_won(s, 'first'))
-    p2_sets = sum(1 for s in scores if _set_won(s, 'second'))
-    # BO3 vs BO5 (BO5 only at Grand Slams — infer from set count)
-    sets_to_win = 3 if (p1_sets >= 3 or p2_sets >= 3 or len(scores) > 3) else 2
-    # Deciding set = both players have won (sets_to_win - 1) sets
-    if p1_sets != sets_to_win - 1 or p2_sets != sets_to_win - 1:
-        return False, ''
-    cur = scores[-1]
-    g1 = int(float(cur.get('score_first', 0)))
-    g2 = int(float(cur.get('score_second', 0)))
-    set_label = 'set 5' if sets_to_win == 3 else 'set 3'
-    return True, f'{set_label} deciding (sets {p1_sets}-{p2_sets}, games {g1}-{g2})'
+    """Tennis death zone DISABLED 2026-04-26. 7d data: set-3 phantom trades (n=92)
+    netted +$49 / 65% WR — historically profitable. Death zone was blocking trades
+    that the data said were +EV. v10 PPI's S inversion + D cap should de-rate the
+    truly toxic clean-book set-3 setups; let the rest trade through.
+    Returns (False, '') always — disabled."""
+    return False, ''
 
 
 def _tennis_blowout_check(match_data):
@@ -10276,9 +10389,17 @@ def _apex_mm_walk_up(bot_id, bot):
     # just moved up. Only fires when bid > current_price (we're already behind).
     # Cap at combined=99c (1c profit) so a bid above the wall doesn't push us
     # into a guaranteed loss.
+    # CRITICAL: bid must EXCLUDE our own resting exit, else we race ourselves —
+    # post @bid+1, become the new top, next cycle bid+1 = our_price+1, climb
+    # 1c per cycle until we hit max_profitable_price. live_exit_bid (WS cache)
+    # includes our own orders; _apex_mm_market_best_bid(side) walks levels and
+    # returns the highest where OTHERS have depth.
+    _market_best_bid = _apex_mm_market_best_bid(bot, exit_side)
     _max_profitable_price = max(1, 99 - avg_held)
-    _green_snap = min(live_exit_bid + 1, _max_profitable_price)
-    if live_combined <= 99 and _green_snap > current_price:
+    _green_snap = min(_market_best_bid + 1, _max_profitable_price) if _market_best_bid > 0 else 0
+    # Skip snap-up when we're alone at the top (no real bidder to outbid) or
+    # the snap target isn't an improvement.
+    if live_combined <= 99 and _market_best_bid > 0 and _green_snap > current_price:
         # Light gate to avoid amend spam during ws price oscillation (Kalshi
         # rate limits) — 2s between snaps is plenty for a mover-style exit.
         _last_walk = bot.get('_last_walk_at', 0) or bot.get('_exit_soak_start', now)
@@ -12511,8 +12632,21 @@ def create_anchor_bot():
         # depth_floor IS the anchor_depth — post exactly that many cents from the market
         auto_depth = data.get('auto_depth', False)
         anchor_depth = int(data.get('anchor_depth', 0))  # 0 = use target_width as depth
-        # Always compute PPI for analytics (cheap orderbook read), use it if auto_depth on
+        # Always compute PPI for analytics (cheap orderbook read), use it if auto_depth on.
+        # WS warmup retry: orderbook subscription may have just been added — last_update_ts
+        # could be 0 for the first second or two. Retry up to 2s @ 200ms intervals so PPI
+        # is always recorded for analytics/gating instead of getting None and bypassing.
         _ppi, _ppi_rec, _ppi_d = _calculate_ppi(ticker, fav_side, dog_side)
+        if _ppi is None:
+            _ppi_warmup_start = time.time()
+            while _ppi is None and (time.time() - _ppi_warmup_start) < 2.0:
+                time.sleep(0.2)
+                _ppi, _ppi_rec, _ppi_d = _calculate_ppi(ticker, fav_side, dog_side)
+            if _ppi is None:
+                print(f'⚠ PPI WARMUP TIMEOUT: {ticker} fav={fav_side} dog={dog_side} — orderbook never received WS update in 2s, launching unrecorded')
+                bot_log('PHANTOM_PPI_WARMUP_TIMEOUT', None, {'ticker': ticker, 'fav_side': fav_side, 'dog_side': dog_side}, level='WARN')
+            else:
+                print(f'📊 PPI WARMUP OK: {ticker} got PPI={_ppi} after {time.time()-_ppi_warmup_start:.1f}s wait')
         # KILL guard at initial launch — mirrors the repeat-path guard (_ppi_rec==0 branch
         # around line 15325). Without this, a bot on a toxic book posts a live order for
         # 1-3s until the continuous KILL check pulls it. Start pulled; PPI-recovery rearms.
@@ -13586,6 +13720,28 @@ def _handle_phantom(bot_id, bot, actions):
     fav_side = bot['fav_side']
     status = bot['status']
 
+    # Retroactive PPI for bots that launched before WS warmup. _ppi_launch_score
+    # gets set once at create-time; if WS wasn't ready then, it's stuck at None
+    # for the bot's whole life and downstream analytics + trade records lose the
+    # signal. Backfill on first monitor cycle where orderbook IS warm.
+    if bot.get('_ppi_launch_score') is None:
+        try:
+            _bf_ppi, _bf_rec, _bf_d = _calculate_ppi(ticker, fav_side, dog_side)
+            if _bf_ppi is not None:
+                bot['_ppi_launch_score'] = _bf_ppi
+                bot['_ppi_launch_d'] = (_bf_d or {}).get('d')
+                bot['_ppi_launch_g'] = (_bf_d or {}).get('g')
+                bot['_ppi_launch_s'] = (_bf_d or {}).get('s')
+                bot['_ppi_launch_t'] = (_bf_d or {}).get('t')
+                bot['_ppi_launch_fpl'] = (_bf_d or {}).get('fpl')
+                bot['_ppi_launch_fg'] = (_bf_d or {}).get('fg')
+                bot['_ppi_launch_spread'] = (_bf_d or {}).get('spread')
+                bot['_ppi_launch_rec_depth'] = _bf_rec
+                print(f'📊 PPI BACKFILL: {bot_id} got PPI={_bf_ppi} (was None at launch)')
+                bot_log('PHANTOM_PPI_BACKFILL', bot_id, {'ppi': _bf_ppi, 'd': (_bf_d or {}).get('d'), 's': (_bf_d or {}).get('s'), 't': (_bf_d or {}).get('t')})
+        except Exception:
+            pass
+
     # ── State validation: recover from half-updated state after prior exceptions ──
     # Only reset _hedge_fired if enough time passed — the hedge worker may still be
     # in flight (posting takes ~100-500ms). Resetting too early causes DOUBLE HEDGE.
@@ -14181,6 +14337,7 @@ def _handle_phantom(bot_id, bot, actions):
                     bot['dog_order_id'] = None
                 bot['_price_floor_pulled'] = True
                 bot['_ppi_pulled'] = True
+                bot['_parked_at_ceiling'] = False  # clear stale ceiling flag — pull state takes priority
                 bot['_last_ppi'] = _kill_ppi
                 bot_log('PPI_AUTO_PULL', bot_id, {'ppi': _kill_ppi, 'details': _kill_det, 'trigger': 'continuous'})
                 save_state()
@@ -14218,6 +14375,7 @@ def _handle_phantom(bot_id, bot, actions):
             bot['_dog_bid_at_pull'] = None
             bot['_sympathy_combined_at_pull'] = None
             bot['_fav_runaway_at_pull'] = None
+            bot['_alone_since'] = None
             print(f'🔧 SYMPATHY FLAG CLEAR: {bot_id} had stale _sympathy_pulled with live dog order — re-armed sympathy guard')
 
         # Game ending: cancel to free capital
@@ -15453,7 +15611,7 @@ def _handle_phantom(bot_id, bot, actions):
             _is_cross = bot.get('hedge_ticker') and bot.get('hedge_ticker') != ticker
             if _will_repeat:
                 bot['status'] = 'waiting_repeat'
-                bot['waiting_repeat_since'] = time.time() + 3  # 3s linger to show completion
+                bot['waiting_repeat_since'] = time.time() + 1  # 1s linger to show completion
                 bot['_just_completed'] = True
                 bot['_last_pnl'] = net_pnl
                 bot['_last_result'] = 'win' if net_pnl >= 0 else 'loss'
@@ -15702,9 +15860,9 @@ def _handle_phantom(bot_id, bot, actions):
         walk_type = 'snap_to_bid' if new_fav_price <= current_fav_price else 'snap_up'
         combined = dog_price + new_fav_price
 
-        # Amend fav order (shared lock with WS instant drop to prevent race)
+        # Amend fav order (per-bot lock with WS instant drop to prevent race)
         try:
-            _phantom_drop_lock.acquire()
+            _phantom_lock_for(bot_id).acquire()
             try:
                 fav_order_id = bot.get('fav_order_id', fav_order_id)
                 # Re-check inside lock — WS snap may have already moved price
@@ -15734,7 +15892,7 @@ def _handle_phantom(bot_id, bot, actions):
                         bot['no_order_id'] = _walk_new_oid
                     fav_order_id = _walk_new_oid
             finally:
-                _phantom_drop_lock.release()
+                _phantom_lock_for(bot_id).release()
             walk_count = bot.get('fav_walk_count', 0) + 1
             direction = '↓' if new_fav_price < current_fav_price else '↑'
             _bid1_tag = ' BID+1' if new_fav_price > current_fav_bid else ''
@@ -15848,7 +16006,7 @@ def _handle_phantom(bot_id, bot, actions):
     # ── STATE: waiting_repeat — wait for spread to reopen, re-anchor ──
     if status == 'waiting_repeat':
         wait_since = bot.get('waiting_repeat_since', now)
-        if now - wait_since < 5:  # 5s cooldown between repeats
+        if now - wait_since < 2:  # 2s cooldown between repeats
             return
 
         # Smart stop check: cross-market → awaiting_settlement, same-market → completed
@@ -16144,6 +16302,7 @@ def _handle_phantom(bot_id, bot, actions):
             bot['_dog_bid_at_pull'] = None
             bot['_sympathy_combined_at_pull'] = None
             bot['_fav_runaway_at_pull'] = None
+            bot['_alone_since'] = None
             bot['_price_floor_pulled'] = False
             bot['_pull_reason'] = None
             bot['_drift_pull_logged'] = False
@@ -16516,21 +16675,17 @@ def _handle_apex(bot_id, bot, actions):
             except Exception:
                 pass
 
-        # (B) Stale-flat purge: bot has nothing at risk and isn't doing anything.
+        # (B) Stale-flat purge: bot has nothing at risk and hasn't done anything.
+        # Trigger: no round trip in 4h+ AND age>=4h. Uses _rt_log timestamp which
+        # is preserved across waiting_repeat resets (unlike _pull_count). If no
+        # RT has ever happened, treat created_at as last-activity so age governs.
         # Bypasses Kalshi settle-gate for the case where Kalshi never settles.
-        # Two trigger paths (either fires):
-        #   - busy-stuck: pulls>=200 + age>=4h (rapid pull/repost loop in market_making_active)
-        #   - idle-stale: no round trip in 4h+ AND age>=4h (survives waiting_repeat resets,
-        #                 which zero out _pull_count but preserve _rt_log + created_at)
         _age_h = (now - bot.get('created_at', now)) / 3600
         _rt_log = bot.get('_rt_log') or []
         _last_rt_ts = _rt_log[-1].get('ts', 0) if _rt_log else 0
-        # If no RTs ever, treat created_at as last activity so age check governs.
         _idle_h = (now - max(_last_rt_ts, bot.get('created_at', now))) / 3600
-        _busy_stuck = bot.get('_pull_count', 0) >= 200 and _age_h >= 4
-        _idle_stale = _idle_h >= 4 and _age_h >= 4
-        if _busy_stuck or _idle_stale:
-            print(f'🪦 APEX MM STALE-FLAT PURGE: {bot_id} pulls={bot.get("_pull_count")} age={_age_h:.1f}h idle={_idle_h:.1f}h status={status} — flat, market dead')
+        if _idle_h >= 4 and _age_h >= 4:
+            print(f'🪦 APEX MM STALE-FLAT PURGE: {bot_id} age={_age_h:.1f}h idle={_idle_h:.1f}h status={status} — flat, market dead')
             for _sk in ('yes_orders', 'no_orders'):
                 for _lvl in bot.get(_sk, {}).values():
                     _oid = _lvl.get('oid')

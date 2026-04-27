@@ -2551,7 +2551,7 @@ function displayEventRow(eventData, container) {
         // Distinguish sports with no known score provider ("Kalshi-reported")
         // from sports where a provider exists but returned nothing ("Score unavailable").
         // ITF lower tiers (KXITFMATCH, KXITFWMATCH) aren't tracked by API Tennis at all
-        // — the lookup will always miss for these, so the tooltip flags it explicitly.
+        // — the lookup will always miss for these, so flag them explicitly.
         const _itfLowerTier = /KXITFMATCH|KXITFWMATCH/i.test(eventData.eventTicker || '');
         const liveBanner = document.createElement('div');
         liveBanner.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:8px;background:linear-gradient(135deg,#0a1a0a,#0f1f12);border:1px solid #00ff88;border-radius:8px;padding:10px 16px;margin-bottom:12px;';
@@ -3785,9 +3785,9 @@ function displayOrderbookLadder(orderbook) {
     // v6b: PPI = D(40) + G(25) + S(20) + T(15) = max 100, no division
     const _rawPPI = densityPts + gapPts + spreadPts + timePts;
     const catchScore = Math.min(100, Math.max(0, Math.round(_rawPPI)));
-    // v6b tiers
-    const catchLabel = catchScore >= 85 ? 'WALL' : catchScore >= 55 ? 'PRIME' : catchScore >= 45 ? 'TRAP' : catchScore >= 40 ? 'DEEP' : catchScore >= 35 ? 'FLOOR' : 'KILL';
-    const catchCol = catchScore >= 85 ? '#00ff88' : catchScore >= 55 ? '#00ccff' : catchScore >= 45 ? '#ff8800' : catchScore >= 40 ? '#ff6600' : catchScore >= 35 ? '#ff4400' : '#ff4444';
+    // v6b widened: DEEP 15pts (40-54), FLOOR 10pts (30-39)
+    const catchLabel = catchScore >= 90 ? 'WALL' : catchScore >= 70 ? 'PRIME' : catchScore >= 55 ? 'TRAP' : catchScore >= 40 ? 'DEEP' : catchScore >= 30 ? 'FLOOR' : 'KILL';
+    const catchCol = catchScore >= 90 ? '#00ff88' : catchScore >= 70 ? '#00ccff' : catchScore >= 55 ? '#ff8800' : catchScore >= 40 ? '#ff6600' : catchScore >= 30 ? '#ff4400' : '#ff4444';
 
     // Fav concentration for display
     const _favConc = favDepth > 0 ? favAnalysis.top1Qty / favDepth : 0;
@@ -3856,13 +3856,14 @@ function displayOrderbookLadder(orderbook) {
     const roomCol = hedgeRoom >= 4 ? '#00ff88' : hedgeRoom >= 2 ? '#ffaa00' : '#ff4444';
     const roomLabel = hedgeRoom >= 4 ? 'wide spread' : hedgeRoom >= 2 ? 'ok spread' : 'tight — fav mirrors dog';
     let verdict = '', verdictCol = '';
-    // ── Depth rec — v6b restored: 4/5/6/7/8 ladder ──
+    // ── Depth rec — 4c retired 2026-04-27 (lifetime +$0.004/trade, 19% deep-loss) ──
+    // WALL+PRIME both at 5c (workhorse depth, +$244 lifetime, biggest profit pool)
     let _recDepth;
-    if (catchScore >= 85) _recDepth = 4;                                   // WALL
-    else if (catchScore >= 55) _recDepth = 5;                              // PRIME
-    else if (catchScore >= 45) _recDepth = 6;                              // TRAP
-    else if (catchScore >= 40) _recDepth = 7;                              // DEEP
-    else if (catchScore >= 35) _recDepth = 8;                              // FLOOR
+    if (catchScore >= 90) _recDepth = 5;                                   // WALL: shares 5c with PRIME
+    else if (catchScore >= 70) _recDepth = 5;                              // PRIME: 70-89
+    else if (catchScore >= 55) _recDepth = 6;                              // TRAP
+    else if (catchScore >= 40) _recDepth = 7;                              // DEEP: 15-pt band
+    else if (catchScore >= 30) _recDepth = 8;                              // FLOOR: 10-pt band
     else _recDepth = 0;                                                    // KILL — pull
     const _baseDepth = _recDepth;  // before gap overrides
     // Fav gaps override (only when not KILL — gaps don't save a toxic book)
@@ -3944,12 +3945,12 @@ function displayOrderbookLadder(orderbook) {
             PPI v10: <span style="color:#00ff88;">D 40</span> + <span style="color:#aa66ff;">G 12</span> + <span style="color:#00ccff;">S 20</span> + <span style="color:#ffaa00;">T 15</span> · S peaks 4-6¢ spread, D peaks 500-999 fav/lvl
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:4px 5px;margin-bottom:6px;font-size:9px;font-weight:700;justify-content:center;">
-            <span style="color:#00ff88;background:#00ff8815;padding:2px 6px;border-radius:4px;">85+ WALL 4¢</span>
-            <span style="color:#00ccff;background:#00ccff15;padding:2px 6px;border-radius:4px;">55+ PRIME 5¢</span>
-            <span style="color:#ff8800;background:#ff880015;padding:2px 6px;border-radius:4px;">45+ TRAP 6¢</span>
+            <span style="color:#00ff88;background:#00ff8815;padding:2px 6px;border-radius:4px;">90+ WALL 5¢</span>
+            <span style="color:#00ccff;background:#00ccff15;padding:2px 6px;border-radius:4px;">70+ PRIME 5¢</span>
+            <span style="color:#ff8800;background:#ff880015;padding:2px 6px;border-radius:4px;">55+ TRAP 6¢</span>
             <span style="color:#ff6600;background:#ff660015;padding:2px 6px;border-radius:4px;">40+ DEEP 7¢</span>
-            <span style="color:#ff4400;background:#ff440015;padding:2px 6px;border-radius:4px;">35+ FLOOR 8¢</span>
-            <span style="color:#ff4444;background:#ff444415;padding:2px 6px;border-radius:4px;">&lt;35 KILL</span>
+            <span style="color:#ff4400;background:#ff440015;padding:2px 6px;border-radius:4px;">30+ FLOOR 8¢</span>
+            <span style="color:#ff4444;background:#ff444415;padding:2px 6px;border-radius:4px;">&lt;30 KILL</span>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <div style="text-align:center;background:${dogCol}08;border:1px solid ${dogCol}22;border-radius:6px;padding:6px;">
@@ -4507,9 +4508,11 @@ function initAnchorDogPrices() {
 
     // Store raw prices for preview calculations
     _anchorDogAsk = dogAsk;
-    const spread = dogAsk > 0 ? (dogAsk - _anchorDogBid) : 1;
-    _anchorIsBrokenSpread = spread > 1;
-    const anchorBase = _anchorIsBrokenSpread ? dogAsk : _anchorDogBid;
+    // Phantom ALWAYS posts from bid - depth, even in broken/wide markets.
+    // Old broken-spread fallback (post at ask − depth) was a legacy concept that
+    // produced 85¢ posts on heavy-fav markets — wrong, phantom dog is bid-side only.
+    _anchorIsBrokenSpread = false;
+    const anchorBase = _anchorDogBid;
 
     // Calculate smart price using depth floor (or PPI rec when AUTO)
     const depthSlider = document.getElementById('anchor-depth');
@@ -4803,9 +4806,9 @@ function updateAnchorPreview() {
             const thinWarn = fpl > 0 && fpl < 5 ? ` <span style="color:#ff4444;font-weight:700;">⚠ thin book!</span>` : '';
             const concNote = favConc > 0.6 ? ` · <span style="color:#ff8800;">${Math.round(favConc*100)}% in 1 wall</span>` : '';
             const _ppiScore = _obCache.catchScore || 0;
-            const _ppiTier = _obCache.ppiTier || (_ppiScore >= 85 ? 'WALL' : _ppiScore >= 55 ? 'PRIME' : _ppiScore >= 45 ? 'TRAP' : _ppiScore >= 40 ? 'DEEP' : _ppiScore >= 35 ? 'FLOOR' : 'KILL');
-            const _ppiTierCol = _ppiScore >= 85 ? '#00ff88' : _ppiScore >= 55 ? '#00ccff' : _ppiScore >= 45 ? '#ff8800' : _ppiScore >= 40 ? '#ff6600' : _ppiScore >= 35 ? '#ff4400' : '#ff4444';
-            const _creBaseD = _ppiScore >= 85 ? 4 : _ppiScore >= 55 ? 5 : _ppiScore >= 45 ? 6 : _ppiScore >= 40 ? 7 : _ppiScore >= 35 ? 8 : 0;
+            const _ppiTier = _obCache.ppiTier || (_ppiScore >= 90 ? 'WALL' : _ppiScore >= 70 ? 'PRIME' : _ppiScore >= 55 ? 'TRAP' : _ppiScore >= 40 ? 'DEEP' : _ppiScore >= 30 ? 'FLOOR' : 'KILL');
+            const _ppiTierCol = _ppiScore >= 90 ? '#00ff88' : _ppiScore >= 70 ? '#00ccff' : _ppiScore >= 55 ? '#ff8800' : _ppiScore >= 40 ? '#ff6600' : _ppiScore >= 30 ? '#ff4400' : '#ff4444';
+            const _creBaseD = _ppiScore >= 90 ? 4 : _ppiScore >= 70 ? 5 : _ppiScore >= 55 ? 6 : _ppiScore >= 40 ? 7 : _ppiScore >= 30 ? 8 : 0;
             const _creGapBump = recDepth > _creBaseD && _creBaseD > 0 ? ` <span style="color:#ff8800;font-size:9px;font-weight:700;">gaps→${recDepth}¢</span>` : '';
             depthRec = `<div style="margin-top:3px;padding:3px 6px;background:#ff66aa11;border:1px solid ${recCol}33;border-radius:4px;font-size:10px;">` +
                 `<span style="color:${_ppiTierCol};font-weight:700;">PPI ${_ppiScore} ${_ppiTier}</span>${_creGapBump} ` +
@@ -6652,8 +6655,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
                 const _ppi = bot._live_ppi != null ? bot._live_ppi : bot._last_ppi;
                 if (_ppi != null) {
                     const _ppiCol = _ppi >= 90 ? '#00ff88' : _ppi >= 55 ? '#00ccff' : _ppi >= 45 ? '#ff8800' : _ppi >= 40 ? '#ff6600' : _ppi >= 35 ? '#ff4400' : '#ff4444';
-                    const _ppiLabel = _ppi >= 85 ? 'WALL' : _ppi >= 55 ? 'PRIME' : _ppi >= 45 ? 'TRAP' : _ppi >= 40 ? 'DEEP' : _ppi >= 35 ? 'FLOOR' : 'KILL';
-                    const _baseD = _ppi >= 85 ? 4 : _ppi >= 55 ? 5 : _ppi >= 45 ? 6 : _ppi >= 40 ? 7 : _ppi >= 35 ? 8 : 0;
+                    const _ppiLabel = _ppi >= 90 ? 'WALL' : _ppi >= 70 ? 'PRIME' : _ppi >= 55 ? 'TRAP' : _ppi >= 40 ? 'DEEP' : _ppi >= 30 ? 'FLOOR' : 'KILL';
+                    const _baseD = _ppi >= 90 ? 4 : _ppi >= 70 ? 5 : _ppi >= 55 ? 6 : _ppi >= 40 ? 7 : _ppi >= 30 ? 8 : 0;
                     const _recD = bot._rec_depth || _baseD;
                     const _gapBump = _recD > _baseD && _baseD > 0 ? ` <span style="color:#ff8800;font-size:8px;">gaps→${_recD}¢</span>` : '';
                     return `<span style="color:${_ppiCol};font-size:9px;font-weight:700;">PPI:${_ppi} ${_ppiLabel}</span>${_gapBump}`;
@@ -15223,8 +15226,9 @@ function renderDogStatsAndDepth(trades, pnl) {
                     const bgCol = isActive ? 'rgba(255,102,170,0.08)' : '#0f1419';
                     const capAvg = d.capCount > 0 ? (d.capTotal / d.capCount).toFixed(1) : '—';
                     const capCol = capAvg !== '—' ? (parseFloat(capAvg) >= d.depth ? '#00ff88' : parseFloat(capAvg) >= 0 ? '#ffaa00' : '#ff4444') : '#555';
-                    const _tierLabel = d.depth <= 5 ? 'WALL' : d.depth <= 6 ? 'PRIME' : d.depth <= 7 ? 'MID' : d.depth <= 8 ? 'FLOOR' : '';
-                    const _tierCol = d.depth <= 5 ? '#00ff88' : d.depth <= 6 ? '#00ccff' : d.depth <= 7 ? '#aa66ff' : d.depth <= 8 ? '#ff4400' : '#555';
+                    // 4c retired 2026-04-27 — old trades labeled "RETIRED"; 5c now serves WALL+PRIME
+                    const _tierLabel = d.depth <= 4 ? 'RETIRED' : d.depth === 5 ? 'WALL/PRIME' : d.depth === 6 ? 'TRAP' : d.depth === 7 ? 'DEEP' : d.depth === 8 ? 'FLOOR' : '';
+                    const _tierCol = d.depth <= 4 ? '#5a6484' : d.depth === 5 ? '#00ccff' : d.depth === 6 ? '#ff8800' : d.depth === 7 ? '#ff6600' : d.depth === 8 ? '#ff4400' : '#555';
                     return `<div data-depth="${d.depth}" onclick="selectPhantomDepth(${d.depth})" style="background:${bgCol};border-radius:8px;padding:10px;text-align:center;border:1px solid ${borderCol};cursor:pointer;transition:border-color 0.15s,background 0.15s;">
                         <div style="color:#ff66aa;font-size:14px;font-weight:800;">⬇${d.depth}¢</div>
                         ${_tierLabel ? `<div style="color:${_tierCol};font-size:8px;font-weight:700;letter-spacing:.05em;margin-top:-2px;">${_tierLabel}</div>` : ''}

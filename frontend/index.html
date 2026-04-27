@@ -578,18 +578,18 @@
                                     <div><strong style="color:#ffaa00;">Phantom</strong><br><span style="color:#8892a6;font-size:10px;">Underdog anchor — fills on volatility spikes</span></div>
                                 </div>
                                 <div style="border-top:1px solid #1e2740;padding-top:6px;font-size:10px;color:#8892a6;">
-                                    <strong style="color:#ffaa00;">Ghost label: PPI 0–100</strong> (Phantom Pull Index — live from orderbook)<br>
-                                    Rates the market for phantom — is the book deep enough that the hedge catches without gapping?<br>
+                                    <strong style="color:#ffaa00;">Ghost label: PPI 0–100 (v10)</strong> — Phantom thrives on messy markets, not pristine ones.<br>
+                                    Rewards books with whales abandoning depth. Penalizes tight institutional walls (no edge).<br>
                                     <div style="margin:4px 0 4px 8px;">
-                                        <span style="color:#00ff88;">Density (D)</span> → up to 40pts — fav contracts per level (thicker = better hedge fill)<br>
-                                        <span style="color:#00ccff;">Spread (S)</span> → up to 20pts — tight bid/ask = clean room to maneuver<br>
-                                        <span style="color:#ffaa00;">Time (T)</span> → up to 15pts — early game safer, endgame liquidity vanishes<br>
-                                        <span style="color:#ff8800;">Gaps</span> → not in score (v8); bumps depth floor (1→5¢, 2→6¢, 3→7¢)
+                                        <span style="color:#00ff88;">Density (D)</span> → up to 40pts — peak at 500-999 fav/lvl. 10k+ books = sticky walls = mediocre.<br>
+                                        <span style="color:#aa66ff;">Gaps (G)</span> → up to 12pts — more gaps = whales dumping. ≥15 gaps gets max.<br>
+                                        <span style="color:#00ccff;">Spread (S)</span> → up to 20pts — peak at <strong>4-6¢ spread</strong>. 1¢ tight = toxic, no arb cushion.<br>
+                                        <span style="color:#ffaa00;">Time (T)</span> → up to 15pts — early game safer, endgame liquidity vanishes
                                     </div>
-                                    <strong style="color:#ffaa00;">Open orderbook for detailed analysis:</strong> contracts/level, gaps, max safe qty (capped 50), depth floor rec<br><br>
-                                    <span style="color:#00ff88;font-weight:700;">90+ WALL 4¢</span> &nbsp;
+                                    <strong style="color:#ffaa00;">Open orderbook for detailed analysis:</strong> contracts/level, gaps, max safe qty, depth floor rec<br><br>
+                                    <span style="color:#00ff88;font-weight:700;">85+ WALL 4¢</span> &nbsp;
                                     <span style="color:#00ccff;font-weight:700;">55+ PRIME 5¢</span> &nbsp;
-                                    <span style="color:#ff8800;font-weight:700;">45+ TRAP 7¢</span> &nbsp;
+                                    <span style="color:#ff8800;font-weight:700;">45+ TRAP 6¢</span> &nbsp;
                                     <span style="color:#ff6600;font-weight:700;">40+ DEEP 7¢</span> &nbsp;
                                     <span style="color:#ff4400;font-weight:700;">35+ FLOOR 8¢</span> &nbsp;
                                     <span style="color:#ff4444;font-weight:700;">&lt;35 KILL</span>
@@ -1372,12 +1372,12 @@
                             <button onclick="setDepthFloor(9)" data-depth="9" class="depth-btn" style="flex:1;padding:10px 0;background:transparent;border:none;border-left:1px solid rgba(255,102,170,0.15);color:#5a6484;font-size:13px;font-weight:700;cursor:pointer;transition:all 0.2s;">9¢</button>
                         </div>
                         <div style="margin-top:6px;font-size:8px;color:#5a6484;text-align:center;letter-spacing:0.3px;">
-                            PPI v8: <span style="color:#00ff88;">D 40</span> + <span style="color:#00ccff;">S 20</span> + <span style="color:#ffaa00;">T 15</span> · <span style="color:#ff8800;">gaps</span> bump depth (1→5¢, 2→6¢, 3→7¢)
+                            PPI v10: <span style="color:#00ff88;">D 40</span> + <span style="color:#aa66ff;">G 12</span> + <span style="color:#00ccff;">S 20</span> + <span style="color:#ffaa00;">T 15</span> · S peaks at 4-6¢ spread, D peaks at 500-999 fav/lvl
                         </div>
                         <div style="display:flex;flex-wrap:wrap;gap:4px 5px;margin-top:4px;font-size:9px;font-weight:700;justify-content:center;">
-                            <span style="color:#00ff88;background:#00ff8815;padding:2px 6px;border-radius:4px;">90+ WALL 4¢</span>
+                            <span style="color:#00ff88;background:#00ff8815;padding:2px 6px;border-radius:4px;">85+ WALL 4¢</span>
                             <span style="color:#00ccff;background:#00ccff15;padding:2px 6px;border-radius:4px;">55+ PRIME 5¢</span>
-                            <span style="color:#ff8800;background:#ff880015;padding:2px 6px;border-radius:4px;">45+ TRAP 7¢</span>
+                            <span style="color:#ff8800;background:#ff880015;padding:2px 6px;border-radius:4px;">45+ TRAP 6¢</span>
                             <span style="color:#ff6600;background:#ff660015;padding:2px 6px;border-radius:4px;">40+ DEEP 7¢</span>
                             <span style="color:#ff4400;background:#ff440015;padding:2px 6px;border-radius:4px;">35+ FLOOR 8¢</span>
                             <span style="color:#ff4444;background:#ff444415;padding:2px 6px;border-radius:4px;">&lt;35 KILL</span>
@@ -3206,7 +3206,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260426socceralias"></script>
+    <script src="app.js?v=20260427socceraliasrender"></script>
     <!-- Bottom status bar — always visible -->
     <div id="bottom-status-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#080c16;border-top:1px solid #1a2035;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;font-size:11px;">
         <span style="color:#3a4560;font-size:10px;letter-spacing:.03em;">hi irene</span>

@@ -16645,16 +16645,15 @@ def _handle_apex(bot_id, bot, actions):
     _apex_mm_cancel_close_side_orders(bot_id, bot)
 
     # ── FLAT + STUCK safety nets (run for active+pulled states only) ──
-    # Why: a flat bot has nothing at risk. If the market goes dead with mid-range
-    # residual quotes (e.g. 10/41), drift guard never fires and the bot loops on
-    # depth/OBI checks indefinitely — even after the game ends. Two paths:
-    # (A) Settlement poll → awaiting_settlement when Kalshi confirms.
-    # (B) Stale-flat purge → straight to completed when Kalshi never settles.
-    # Gated to mm_depth_pulled/market_making_active so we don't interrupt an
-    # active exit (mm_exiting) or an already-settling bot (awaiting_settlement).
+    # Why: a flat bot in mm_depth_pulled/active needs to detect when Kalshi
+    # has settled the market so it transitions to awaiting_settlement (then the
+    # global 5-min purge clears it). Phantom does the same — keeps running until
+    # drift guard fires or market settles, then 5-min purge.
+    # Gated to flat + (pulled/active) so we don't interrupt an active exit
+    # (mm_exiting) or an already-settling bot (awaiting_settlement).
     if status in ('mm_depth_pulled', 'market_making_active') and \
        bot.get('net_yes', 0) == 0 and bot.get('net_no', 0) == 0:
-        # (A) Settlement poll (30s cadence)
+        # Settlement poll (30s cadence) — transition when Kalshi confirms settled
         if now - bot.get('_last_settle_check_global', 0) >= 30:
             bot['_last_settle_check_global'] = now
             try:
@@ -16682,31 +16681,6 @@ def _handle_apex(bot_id, bot, actions):
                     return
             except Exception:
                 pass
-
-        # (B) Stale-flat purge: bot has nothing at risk and hasn't done anything.
-        # Trigger: no round trip in 4h+ AND age>=4h. Uses _rt_log timestamp which
-        # is preserved across waiting_repeat resets (unlike _pull_count). If no
-        # RT has ever happened, treat created_at as last-activity so age governs.
-        # Bypasses Kalshi settle-gate for the case where Kalshi never settles.
-        _age_h = (now - bot.get('created_at', now)) / 3600
-        _rt_log = bot.get('_rt_log') or []
-        _last_rt_ts = _rt_log[-1].get('ts', 0) if _rt_log else 0
-        _idle_h = (now - max(_last_rt_ts, bot.get('created_at', now))) / 3600
-        if _idle_h >= 4 and _age_h >= 4:
-            print(f'🪦 APEX MM STALE-FLAT PURGE: {bot_id} age={_age_h:.1f}h idle={_idle_h:.1f}h status={status} — flat, market dead')
-            for _sk in ('yes_orders', 'no_orders'):
-                for _lvl in bot.get(_sk, {}).values():
-                    _oid = _lvl.get('oid')
-                    if _oid:
-                        try: _safe_cancel(_oid, f'apex_mm_stale_flat_{bot_id}')
-                        except Exception: pass
-                        _lvl['oid'] = None
-            bot['status'] = 'completed'
-            bot['completed_at'] = now
-            bot['_market_settled_at'] = now
-            bot['_smart_stop_reason'] = 'stale_flat_purge'
-            save_state()
-            return
 
     # ── STATUS: mm_depth_pulled — check recovery ──
     if status == 'mm_depth_pulled':
@@ -18585,7 +18559,30 @@ def _run_monitor():
                         mkt_check_w = kalshi_client.get_market(ticker)
                         mkt_status_w = mkt_check_w.get('market', mkt_check_w).get('status', 'active')
                         if mkt_status_w not in ('active', 'open'):
-                            if not bot.get('order_filled', False):
+                            # Before trusting bot.order_filled, double-check actual fills on Kalshi.
+                            # Bug fix 2026-04-27: a missed WS event or unsynced flag could route
+                            # a scout that ACTUALLY filled into the unfilled cleanup path — bot
+                            # got marked 'completed' with no trade record, then purged 5 min later,
+                            # and the win/loss never hit P&L.
+                            _flag_filled = bot.get('order_filled', False)
+                            _verified_filled = _flag_filled
+                            if not _flag_filled and bot.get('order_id'):
+                                try:
+                                    api_read_limiter.wait()
+                                    _o = kalshi_client.get_order(bot['order_id'])
+                                    _o_obj = _o.get('order', _o) if isinstance(_o, dict) else {}
+                                    _o_filled = _parse_fill_count(_o_obj) or 0
+                                    if _o_filled > 0:
+                                        _verified_filled = True
+                                        bot['order_filled'] = True
+                                        bot['fill_qty'] = _o_filled
+                                        bot['quantity'] = _o_filled
+                                        qty = _o_filled
+                                        print(f'⚠ SCOUT FILL RECOVERED on settle: {bot_id} — Kalshi shows {_o_filled} fills, flag was False')
+                                        bot_log('WATCH_FILL_RECOVERED', bot_id, {'fills': _o_filled, 'mkt_status': mkt_status_w})
+                                except Exception:
+                                    pass  # If order lookup fails, fall back to flag
+                            if not _verified_filled:
                                 # Order never filled on a settled market — cancel & clean up
                                 if bot.get('order_id'):
                                     try:
@@ -18610,16 +18607,43 @@ def _run_monitor():
                                 entry       = bot.get('entry_price', 50)
                                 qty         = bot.get('quantity', 1)
                                 won = (mkt_result_w == watch_side) if mkt_result_w else None
-                                # Infer result from bid prices if Kalshi hasn't published result yet
+                                # Infer result from market data if Kalshi hasn't published result yet.
+                                # Use mkt_data_w directly (the response we already fetched) instead
+                                # of bot.live_yes_bid/live_no_bid — those weren't reliably set on
+                                # watch bots, so inference always failed and the bot looped forever
+                                # waiting for `result` to appear.
                                 if won is None:
-                                    _yes_bid_w = bot.get('live_yes_bid', 0) or 0
-                                    _no_bid_w = bot.get('live_no_bid', 0) or 0
+                                    _yes_bid_w = mkt_data_w.get('yes_bid', 0) or 0
+                                    _no_bid_w = mkt_data_w.get('no_bid', 0) or 0
                                     if _yes_bid_w <= 0 and _no_bid_w >= 95:
                                         won = (watch_side == 'no')
                                         mkt_result_w = 'no'
                                     elif _no_bid_w <= 0 and _yes_bid_w >= 95:
                                         won = (watch_side == 'yes')
                                         mkt_result_w = 'yes'
+                                # Final fallback: query positions for definitive settled value.
+                                # Kalshi market.result can lag for several minutes after status flips
+                                # to 'finalized'; the position payload reflects settle immediately.
+                                if won is None:
+                                    try:
+                                        api_read_limiter.wait()
+                                        _pos_resp = kalshi_client.get_positions(ticker=ticker)
+                                        _positions = _pos_resp.get('market_positions', _pos_resp.get('positions', []))
+                                        for _p in _positions:
+                                            if _p.get('ticker') != ticker: continue
+                                            # realized_pnl is settled P&L in dollars (string) or cents (int)
+                                            _rp_d = _p.get('realized_pnl_dollars')
+                                            _rp_c = _p.get('realized_pnl', 0)
+                                            _rp = (float(_rp_d) * 100) if _rp_d else float(_rp_c)
+                                            if _rp > 0:
+                                                won = True
+                                                mkt_result_w = watch_side
+                                            elif _rp < 0:
+                                                won = False
+                                                mkt_result_w = 'yes' if watch_side == 'no' else 'no'
+                                            break
+                                    except Exception as _pos_err:
+                                        print(f'⚠ scout positions fallback failed for {bot_id}: {_pos_err}')
                                 if won is True:
                                     profit_cents = (100 - entry) * qty
                                     loss_cents   = 0
@@ -18658,7 +18682,10 @@ def _run_monitor():
                                 save_state()
                                 continue
                     except Exception as ws_err:
-                        pass  # If API fails, proceed with normal monitoring
+                        # Don't silent-swallow — log so we can spot persistent failures.
+                        # Bot stays in 'watching' state and the next cycle will retry,
+                        # so this isn't fatal, but we want visibility.
+                        print(f'⚠ Scout settlement check failed for {bot_id}: {ws_err}')
 
                     # ── Manual watch bots (no order_id) are pre-filled positions ──
                     if not bot.get('order_id'):

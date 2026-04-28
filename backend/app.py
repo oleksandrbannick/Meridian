@@ -1598,9 +1598,9 @@ def get_depth_rec(ticker):
     ppi, rd, ppi_det = _calculate_ppi(ticker, fav_side, dog_side)
     if ppi is None:
         ppi, rd, ppi_det = 0, 0, {}
-    tier = 'WALL' if ppi >= 85 else 'PRIME' if ppi >= 60 else 'TRAP' if ppi >= 50 else 'DEEP' if ppi >= 40 else 'FLOOR' if ppi >= 30 else 'KILL'
-    # Base depth before gap overrides — must mirror _calculate_ppi rec ladder (v12)
-    _base_rd = 5 if ppi >= 85 else 5 if ppi >= 60 else 6 if ppi >= 50 else 7 if ppi >= 40 else 8 if ppi >= 30 else 0
+    tier = 'WALL' if ppi >= 90 else 'PRIME' if ppi >= 55 else 'TRAP' if ppi >= 45 else 'DEEP' if ppi >= 40 else 'FLOOR' if ppi >= 35 else 'KILL'
+    # Base depth before gap overrides — must mirror _calculate_ppi rec ladder (v8)
+    _base_rd = 4 if ppi >= 90 else 5 if ppi >= 55 else 7 if ppi >= 45 else 7 if ppi >= 40 else 8 if ppi >= 35 else 0
     _gap_bumped = rd > _base_rd and rd > 0
     reasons = [f'PPI {ppi} {tier}: D={ppi_det.get("d",0)} S={ppi_det.get("s",0)} T={ppi_det.get("t",0)} (gaps={ppi_det.get("fg",0)})']
     if _gap_bumped:
@@ -6005,110 +6005,9 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     bot['yes_fill_qty'] = bot['dog_fill_qty']
                 else:
                     bot['no_fill_qty'] = bot['dog_fill_qty']
-                # Cancel-race handler — used by partial-fill sweep path.
-                # Dog partially fills (e.g. 24/50), hedge fires for 24, cancel issued for
-                # the remaining 26. Between the hedge-fire and the cancel reaching Kalshi,
-                # 1+ more contracts can match (24 → 24.63). _safe_cancel returns
-                # ('filled', 24.63). Two outcomes:
-                #   - Fav still has unfilled qty: amend live fav up to 24.63 at original price.
-                #   - Fav already fully filled: fire a NEW supplemental hedge for the extras
-                #     at original fav_price (or live bid if better). Without this branch,
-                #     extras parked until PHANTOM_DOG_RECONCILE 60-120s later, by which
-                #     time fav bid had moved 20-40c — source of -98c, -862c late "orphan"
-                #     hedges (CHEROD-CHE today).
-                def _cancel_and_reconcile(oid, bot_id_ref=bot_id, partial_q=None, qty_bot_ref=qty_bot):
-                    _result = _safe_cancel(oid, f'sweep_cancel_{bot_id_ref}')
-                    if not (isinstance(_result, tuple) and _result[0] == 'filled'):
-                        return
-                    _actual = _result[1]
-                    _b = active_bots.get(bot_id_ref)
-                    if not _b:
-                        return
-                    _pq = partial_q if partial_q is not None else (_b.get('_partial_hedge_qty') or qty_bot_ref)
-                    _extra = _actual - _pq
-                    if _extra <= 0:
-                        return
-                    _dog_side = _b.get('dog_side', 'no')
-                    _b['dog_fill_qty'] = max(_b.get('dog_fill_qty', 0), _actual)
-                    _b[f'{_dog_side}_fill_qty'] = _b['dog_fill_qty']
-                    _fav_oid = _b.get('fav_order_id')
-                    _fav_filled = _b.get('fav_fill_qty') or 0
-                    _fav_side = _b.get('fav_side', 'no')
-                    _fav_price = _b.get('fav_price')
-                    _hticker = _b.get('hedge_ticker') or _b.get('ticker')
-                    if _fav_oid and _fav_filled < _pq:
-                        # Amend path: fav still has resting qty — bump count at original price.
-                        try:
-                            api_rate_limiter.wait(priority=True)
-                            _amend_kw = {f'{_fav_side}_price': _fav_price}
-                            _amend_resp = kalshi_client.amend_order(
-                                _fav_oid, ticker=_hticker,
-                                side=_fav_side, count=_actual, **_amend_kw
-                            )
-                            _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
-                            _new_oid = _amend_ord.get('order_id', '')
-                            if _new_oid and _new_oid != _fav_oid:
-                                _b.setdefault('_all_hedge_order_ids', []).append(_fav_oid)
-                                _b['fav_order_id'] = _new_oid
-                                if _fav_side == 'yes': _b['yes_order_id'] = _new_oid
-                                else: _b['no_order_id'] = _new_oid
-                            _b['_partial_hedge_qty'] = _actual
-                            _b['_active_fav_qty'] = _actual
-                            print(f'✅ CANCEL-RACE AMEND: {bot_id_ref} hedge qty {_pq}→{_actual} @{_fav_price}¢ (extra {_extra} absorbed)')
-                            bot_log('PHANTOM_CANCEL_RACE_AMEND', bot_id_ref, {
-                                'old_qty': _pq, 'new_qty': _actual, 'extra': _extra, 'fav_price': _fav_price,
-                            })
-                        except Exception as _e:
-                            print(f'⚠ CANCEL-RACE AMEND FAILED: {bot_id_ref} {_e} — reconcile will supplemental later')
-                            bot_log('PHANTOM_CANCEL_RACE_AMEND_FAIL', bot_id_ref, {
-                                'old_qty': _pq, 'new_qty': _actual, 'error': str(_e)[:200],
-                            }, level='WARN')
-                    else:
-                        # Supplemental path: fav already fully filled — fire a NEW hedge order
-                        # for the extras now, at original fav_price (or live bid if better).
-                        # Integer-only: sub-contract residue is handled by completion-path tolerance.
-                        _supp_qty_int = int(_extra)
-                        if _supp_qty_int < 1:
-                            return
-                        try:
-                            _live_bid = 0
-                            if ws_manager:
-                                _wsd = ws_manager.get_price(_hticker)
-                                if _wsd:
-                                    _live_bid = _wsd.get(f'{_fav_side}_bid', 0)
-                            # Use original fav_price unless live bid is strictly better (lower for buy).
-                            _supp_price = _fav_price
-                            if _live_bid > 0 and _live_bid < _fav_price:
-                                _supp_price = _live_bid
-                            api_rate_limiter.wait(priority=True)
-                            _supp_resp, _supp_actual_price = create_order_maker(
-                                ticker=_hticker, side=_fav_side, action='buy',
-                                count=_supp_qty_int, price=_supp_price, priority=True,
-                            )
-                            _supp_oid = _supp_resp['order']['order_id']
-                            _b.setdefault('_all_hedge_order_ids', []).append(_b.get('fav_order_id'))
-                            _b['fav_order_id'] = _supp_oid
-                            if _fav_side == 'yes': _b['yes_order_id'] = _supp_oid
-                            else: _b['no_order_id'] = _supp_oid
-                            _b['_partial_hedge_qty'] = _actual
-                            _b['_active_fav_qty'] = _supp_qty_int
-                            _b['_last_supp_at'] = time.time()
-                            _b['fav_price'] = _supp_actual_price
-                            _b['status'] = 'fav_hedge_posted'
-                            _b['_trade_recorded'] = False  # let completion re-fire after this fills
-                            print(f'⚡ CANCEL-RACE SUPP: {bot_id_ref} +{_supp_qty_int} {_fav_side} @{_supp_actual_price}¢ (post-fill extras hedged)')
-                            bot_log('PHANTOM_CANCEL_RACE_SUPP', bot_id_ref, {
-                                'extra_qty': _supp_qty_int, 'price': _supp_actual_price,
-                                'order_id': _supp_oid[:12], 'partial_q': _pq, 'actual': _actual,
-                            }, level='WARN')
-                        except Exception as _e:
-                            print(f'⚠ CANCEL-RACE SUPP FAILED: {bot_id_ref} {_e}')
-                            bot_log('PHANTOM_CANCEL_RACE_SUPP_FAIL', bot_id_ref, {
-                                'extra_qty': _supp_qty_int, 'error': str(_e)[:200],
-                            }, level='ERROR')
-
                 if bot['dog_fill_qty'] >= qty_bot and not bot.get('_hedge_fired'):
-                    # SPEED CRITICAL — hedge worker gets the job IMMEDIATELY, log after
+                    # SPEED CRITICAL — hedge worker gets the job IMMEDIATELY, log after.
+                    # NOTHING else on this path — no closure defs, no extra dict ops.
                     bot['_hedge_fired'] = True
                     bot['dog_filled_at'] = time.time()
                     bot['status'] = 'dog_filled'
@@ -6132,10 +6031,106 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     _cancel_oid = bot.get('dog_order_id') if bot['dog_fill_qty'] < qty_bot else None
                     _partial_q_snap = bot['dog_fill_qty']
                     if _cancel_oid:
-                        threading.Thread(target=_cancel_and_reconcile,
-                                         args=(_cancel_oid,),
-                                         kwargs={'partial_q': _partial_q_snap},
-                                         daemon=True).start()
+                        # Cancel-race handler — defined ONLY in this branch so the full-fill
+                        # hot path stays clean (no closure def overhead). When dog partially
+                        # fills (e.g. 24/50), hedge fires for 24, cancel issued for the
+                        # remaining 26. Between hedge-fire and cancel reaching Kalshi, 1+
+                        # more contracts can match (24 → 24.63). Two outcomes:
+                        #   - Fav still has unfilled qty: amend live fav up at original price.
+                        #   - Fav already fully filled: fire a NEW supplemental hedge for
+                        #     the extras at original fav_price (or live bid if better).
+                        # Without the supplemental branch, extras parked until
+                        # PHANTOM_DOG_RECONCILE 60-120s later — source of -98c, -862c late
+                        # "orphan" hedges (CHEROD-CHE 2026-04-28).
+                        def _cancel_and_reconcile(oid, bot_id_ref=bot_id, partial_q=_partial_q_snap):
+                            _result = _safe_cancel(oid, f'sweep_cancel_{bot_id_ref}')
+                            if not (isinstance(_result, tuple) and _result[0] == 'filled'):
+                                return
+                            _actual = _result[1]
+                            _extra = _actual - partial_q
+                            if _extra <= 0:
+                                return
+                            _b = active_bots.get(bot_id_ref)
+                            if not _b:
+                                return
+                            _dog_side = _b.get('dog_side', 'no')
+                            _b['dog_fill_qty'] = max(_b.get('dog_fill_qty', 0), _actual)
+                            _b[f'{_dog_side}_fill_qty'] = _b['dog_fill_qty']
+                            _fav_oid = _b.get('fav_order_id')
+                            _fav_filled = _b.get('fav_fill_qty') or 0
+                            _fav_side = _b.get('fav_side', 'no')
+                            _fav_price = _b.get('fav_price')
+                            _hticker = _b.get('hedge_ticker') or _b.get('ticker')
+                            if _fav_oid and _fav_filled < partial_q:
+                                # Amend path: fav still has resting qty — bump count at original price.
+                                try:
+                                    api_rate_limiter.wait(priority=True)
+                                    _amend_kw = {f'{_fav_side}_price': _fav_price}
+                                    _amend_resp = kalshi_client.amend_order(
+                                        _fav_oid, ticker=_hticker,
+                                        side=_fav_side, count=_actual, **_amend_kw
+                                    )
+                                    _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
+                                    _new_oid = _amend_ord.get('order_id', '')
+                                    if _new_oid and _new_oid != _fav_oid:
+                                        _b.setdefault('_all_hedge_order_ids', []).append(_fav_oid)
+                                        _b['fav_order_id'] = _new_oid
+                                        if _fav_side == 'yes': _b['yes_order_id'] = _new_oid
+                                        else: _b['no_order_id'] = _new_oid
+                                    _b['_partial_hedge_qty'] = _actual
+                                    _b['_active_fav_qty'] = _actual
+                                    print(f'✅ CANCEL-RACE AMEND: {bot_id_ref} hedge qty {partial_q}→{_actual} @{_fav_price}¢ (extra {_extra} absorbed)')
+                                    bot_log('PHANTOM_CANCEL_RACE_AMEND', bot_id_ref, {
+                                        'old_qty': partial_q, 'new_qty': _actual, 'extra': _extra, 'fav_price': _fav_price,
+                                    })
+                                except Exception as _e:
+                                    print(f'⚠ CANCEL-RACE AMEND FAILED: {bot_id_ref} {_e} — reconcile will supplemental later')
+                                    bot_log('PHANTOM_CANCEL_RACE_AMEND_FAIL', bot_id_ref, {
+                                        'old_qty': partial_q, 'new_qty': _actual, 'error': str(_e)[:200],
+                                    }, level='WARN')
+                            else:
+                                # Supplemental path: fav already fully filled — fire a NEW hedge order
+                                # for the extras now, at original fav_price (or live bid if better).
+                                # Integer-only: sub-contract residue handled by completion-path tolerance.
+                                _supp_qty_int = int(_extra)
+                                if _supp_qty_int < 1:
+                                    return
+                                try:
+                                    _live_bid = 0
+                                    if ws_manager:
+                                        _wsd = ws_manager.get_price(_hticker)
+                                        if _wsd:
+                                            _live_bid = _wsd.get(f'{_fav_side}_bid', 0)
+                                    _supp_price = _fav_price
+                                    if _live_bid > 0 and _live_bid < _fav_price:
+                                        _supp_price = _live_bid
+                                    api_rate_limiter.wait(priority=True)
+                                    _supp_resp, _supp_actual_price = create_order_maker(
+                                        ticker=_hticker, side=_fav_side, action='buy',
+                                        count=_supp_qty_int, price=_supp_price, priority=True,
+                                    )
+                                    _supp_oid = _supp_resp['order']['order_id']
+                                    _b.setdefault('_all_hedge_order_ids', []).append(_b.get('fav_order_id'))
+                                    _b['fav_order_id'] = _supp_oid
+                                    if _fav_side == 'yes': _b['yes_order_id'] = _supp_oid
+                                    else: _b['no_order_id'] = _supp_oid
+                                    _b['_partial_hedge_qty'] = _actual
+                                    _b['_active_fav_qty'] = _supp_qty_int
+                                    _b['_last_supp_at'] = time.time()
+                                    _b['fav_price'] = _supp_actual_price
+                                    _b['status'] = 'fav_hedge_posted'
+                                    _b['_trade_recorded'] = False
+                                    print(f'⚡ CANCEL-RACE SUPP: {bot_id_ref} +{_supp_qty_int} {_fav_side} @{_supp_actual_price}¢ (post-fill extras hedged)')
+                                    bot_log('PHANTOM_CANCEL_RACE_SUPP', bot_id_ref, {
+                                        'extra_qty': _supp_qty_int, 'price': _supp_actual_price,
+                                        'order_id': _supp_oid[:12], 'partial_q': partial_q, 'actual': _actual,
+                                    }, level='WARN')
+                                except Exception as _e:
+                                    print(f'⚠ CANCEL-RACE SUPP FAILED: {bot_id_ref} {_e}')
+                                    bot_log('PHANTOM_CANCEL_RACE_SUPP_FAIL', bot_id_ref, {
+                                        'extra_qty': _supp_qty_int, 'error': str(_e)[:200],
+                                    }, level='ERROR')
+                        threading.Thread(target=_cancel_and_reconcile, args=(_cancel_oid,), daemon=True).start()
                     print(f'⚡ WS PHANTOM PARTIAL HEDGE: {bot_id} {bot["dog_fill_qty"]}/{qty_bot} filled → hedging now, cancelling rest async')
                     # Skip save_state — deferred to hedge fn (line 3508)
                     break
@@ -8053,22 +8048,16 @@ def _calculate_ppi(ticker, fav_side, dog_side):
     fpl = fav_analysis['perLevel']
     fg = fav_analysis['gaps']
 
-    # 1. Density (40pts) — fav contracts/level. REVERTED to v6 original 2026-04-26.
-    # Apr 16-19 (v6 era) was peak +$72/day @ 64% WR. Subsequent tuning (v6c-v8-v10)
-    # progressively degraded. Going back to what worked.
-    _dr = 100 if fpl >= 100000 else 95 if fpl >= 50000 else 90 if fpl >= 10000 \
-        else 85 if fpl >= 5000 else 80 if fpl >= 1000 else 70 if fpl >= 500 \
-        else 60 if fpl >= 200 else 50 if fpl >= 100 else 40 if fpl >= 50 \
-        else 30 if fpl >= 20 else 20 if fpl >= 10 else 10 if fpl >= 5 else 0
+    # 1. Density (40pts) — fav contracts/level
+    _dr = 100 if fpl >= 100000 else 95 if fpl >= 50000 else 90 if fpl >= 10000 else 85 if fpl >= 5000 else 80 if fpl >= 1000 else 70 if fpl >= 500 else 60 if fpl >= 200 else 50 if fpl >= 100 else 40 if fpl >= 50 else 30 if fpl >= 20 else 20 if fpl >= 10 else 10 if fpl >= 5 else 0
     d_pts = round(_dr * 0.4)
 
-    # 2. Gap count (max 25pts) — v6 original: monotonic linear reward
+    # 2. Gap count — kept for telemetry + depth-override only [v8: dropped from score, was wrong-signed in 7d data]
     g_pts = min(25, fg * 5)
 
-    # 3. Spread (20pts) — v6 original: tighter = better
+    # 3. Spread (20pts)
     spread = max(0, 100 - (dog_bid or 0) - (fav_bid or 0)) if dog_bid and fav_bid else 5
-    s_pts = 20 if spread <= 1 else 18 if spread == 2 else 15 if spread == 3 \
-        else 12 if spread == 4 else 8 if spread <= 6 else 4 if spread <= 8 else 0
+    s_pts = 20 if spread <= 1 else 18 if spread == 2 else 15 if spread == 3 else 12 if spread == 4 else 8 if spread <= 6 else 4 if spread <= 8 else 0
 
     # 4. Time (15pts) — game phase
     t_pts = 15
@@ -8094,19 +8083,17 @@ def _calculate_ppi(ticker, fav_side, dog_side):
         # without live score feed. Can't detect game phase = flying blind.
         t_pts = 5
 
-    _raw = d_pts + g_pts + s_pts + t_pts               # v6 original: D(40)+G(25)+S(20)+T(15) = max 100
-    ppi = max(0, min(100, round(_raw)))                # divisor 100 — v6 was already 0-100 normalized
+    _raw = d_pts + s_pts + t_pts                       # v8: G removed from score (depth-override carries gap protection)
+    ppi = max(0, min(100, round(_raw * 100 / 75)))     # divisor 75 (max raw = 40+20+15)
 
-    # PPI → depth rec. v12 (2026-04-28): restore Apr 17 ladder shape (best day
-    # of month: +$102.52, 69% win) but drop 4c WALL (lifetime +$14.68 / 270 trades
-    # ≈ scratch). 5c is the workhorse — owns 40 pts (WALL 85+ and PRIME 60-84).
-    # 6c/7c/8c get equal 10-pt steps. FLOOR restored — 8c is a profitable bucket
-    # in lifetime data (+$31 / 69 trades) when fed by reasonable PPI floor.
-    if ppi >= 85: rec = 5                              # WALL: shares 5c with PRIME (15 pts)
-    elif ppi >= 60: rec = 5                            # PRIME: 60-84 (25 pts) — workhorse
-    elif ppi >= 50: rec = 6                            # TRAP: 50-59 (10 pts)
-    elif ppi >= 40: rec = 7                            # DEEP: 40-49 (10 pts)
-    elif ppi >= 30: rec = 8                            # FLOOR: 30-39 (10 pts)
+    # PPI → depth rec (v8 — RESTORED 2026-04-28 after v10/v11/v12 lost ~$194 of edge in 3 days).
+    # WALL threshold 90 (raised from 85): pristine book only.
+    # PRIME 55-89: workhorse 5c. TRAP/DEEP equal 7c, FLOOR 8c last stop.
+    if ppi >= 90: rec = 4                              # WALL: pristine book only
+    elif ppi >= 55: rec = 5                            # PRIME: money zone workhorse
+    elif ppi >= 45: rec = 7                            # TRAP: caution zone → 7c adverse-selection cushion
+    elif ppi >= 40: rec = 7                            # DEEP: recovery buffer
+    elif ppi >= 35: rec = 8                            # FLOOR: last stop before pull
     else: rec = 0                                      # KILL: pull
     # Fav gaps override (only when not KILL — gaps don't save a toxic book)
     if rec > 0:

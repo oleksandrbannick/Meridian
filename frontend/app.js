@@ -3782,12 +3782,13 @@ function displayOrderbookLadder(orderbook) {
         timePts = 0;
     }
 
-    // v6b: PPI = D(40) + G(25) + S(20) + T(15) = max 100, no division
-    const _rawPPI = densityPts + gapPts + spreadPts + timePts;
-    const catchScore = Math.min(100, Math.max(0, Math.round(_rawPPI)));
-    // v12 (2026-04-28): WALL≥85 / PRIME≥60 → 5c (40 pts), TRAP/DEEP/FLOOR equal 10-pt steps at 6/7/8c.
-    const catchLabel = catchScore >= 85 ? 'WALL' : catchScore >= 60 ? 'PRIME' : catchScore >= 50 ? 'TRAP' : catchScore >= 40 ? 'DEEP' : catchScore >= 30 ? 'FLOOR' : 'KILL';
-    const catchCol = catchScore >= 85 ? '#00ff88' : catchScore >= 60 ? '#00ccff' : catchScore >= 50 ? '#ff8800' : catchScore >= 40 ? '#ff6600' : catchScore >= 30 ? '#ff4400' : '#ff4444';
+    // v8 (RESTORED 2026-04-28): G dropped from score (wrong-signed in 7d data), divisor 75.
+    // _rawPPI max = D(40) + S(20) + T(15) = 75, scaled to 100.
+    const _rawPPI = densityPts + spreadPts + timePts;
+    const catchScore = Math.min(100, Math.max(0, Math.round(_rawPPI * 100 / 75)));
+    // v8 thresholds: WALL≥90 (4c), PRIME≥55 (5c), TRAP≥45 (7c), DEEP≥40 (7c), FLOOR≥35 (8c), <35 KILL.
+    const catchLabel = catchScore >= 90 ? 'WALL' : catchScore >= 55 ? 'PRIME' : catchScore >= 45 ? 'TRAP' : catchScore >= 40 ? 'DEEP' : catchScore >= 35 ? 'FLOOR' : 'KILL';
+    const catchCol = catchScore >= 90 ? '#00ff88' : catchScore >= 55 ? '#00ccff' : catchScore >= 45 ? '#ff8800' : catchScore >= 40 ? '#ff6600' : catchScore >= 35 ? '#ff4400' : '#ff4444';
 
     // Fav concentration for display
     const _favConc = favDepth > 0 ? favAnalysis.top1Qty / favDepth : 0;
@@ -3849,21 +3850,21 @@ function displayOrderbookLadder(orderbook) {
         _updateGhostPill(tk, catchScore);
     }
 
-    // Score breakdown tooltip (v10: D + G + S + T, divisor 87)
-    const _scoreBreakdown = `PPI v10: D=${densityPts}/40 (${_favPL}/lvl) · G=${gapPts}/12 (${_favGapCount} gaps) · S=${spreadPts}/20 (${_spread}¢) · T=${timePts}/15`;
+    // Score breakdown tooltip (v8: D + S + T only, scaled ×100/75. G shown for telemetry/depth-override.)
+    const _scoreBreakdown = `PPI v8: D=${densityPts}/40 (${_favPL}/lvl) · S=${spreadPts}/20 (${_spread}¢) · T=${timePts}/15  [G=${gapPts} info-only · ${_favGapCount} gaps]`;
 
     // ── Verdict: plain-language summary of whether this market is good for phantom ──
     const roomCol = hedgeRoom >= 4 ? '#00ff88' : hedgeRoom >= 2 ? '#ffaa00' : '#ff4444';
     const roomLabel = hedgeRoom >= 4 ? 'wide spread' : hedgeRoom >= 2 ? 'ok spread' : 'tight — fav mirrors dog';
     let verdict = '', verdictCol = '';
-    // ── Depth rec — 4c retired 2026-04-27 (lifetime +$0.004/trade, 19% deep-loss) ──
-    // WALL+PRIME both at 5c (workhorse depth, +$244 lifetime, biggest profit pool)
+    // ── v8 depth ladder (RESTORED 2026-04-28). WALL=4c pristine only, PRIME=5c workhorse,
+    //    TRAP/DEEP=7c adverse-selection cushion, FLOOR=8c last stop, <35=KILL. ──
     let _recDepth;
-    if (catchScore >= 85) _recDepth = 5;                                   // WALL: 85-99 (15 pts)
-    else if (catchScore >= 60) _recDepth = 5;                              // PRIME: 60-84 (25 pts) — workhorse
-    else if (catchScore >= 50) _recDepth = 6;                              // TRAP: 50-59 (10 pts)
-    else if (catchScore >= 40) _recDepth = 7;                              // DEEP: 40-49 (10 pts)
-    else if (catchScore >= 30) _recDepth = 8;                              // FLOOR: 30-39 (10 pts)
+    if (catchScore >= 90) _recDepth = 4;                                   // WALL: pristine book only
+    else if (catchScore >= 55) _recDepth = 5;                              // PRIME: money zone workhorse
+    else if (catchScore >= 45) _recDepth = 7;                              // TRAP: caution → 7c cushion
+    else if (catchScore >= 40) _recDepth = 7;                              // DEEP: recovery buffer
+    else if (catchScore >= 35) _recDepth = 8;                              // FLOOR: last stop
     else _recDepth = 0;                                                    // KILL — pull
     const _baseDepth = _recDepth;  // before gap overrides
     // Fav gaps override (only when not KILL — gaps don't save a toxic book)
@@ -3885,24 +3886,24 @@ function displayOrderbookLadder(orderbook) {
     if (catchScore >= 90) {
         verdict = `WALL — ${Math.round(_favPL/1000)}k/lvl fav, pristine book. ${_recDepth}¢ depth`;
         verdictCol = '#00ff88';
-    } else if (catchScore >= 70) {
+    } else if (catchScore >= 55) {
         if (_dogIsPacked) {
             verdict = `PRIME — hedge catches easy but dog crowded (${Math.round(dogDepth/1000)}k). ${_recDepth}¢ depth`;
         } else {
             verdict = `PRIME — ${_favPL}/lvl fav, ${_recDepth}¢ depth`;
         }
         verdictCol = '#00ccff';
-    } else if (catchScore >= 50) {
+    } else if (catchScore >= 45) {
         if (_favGappy) {
-            verdict = `MID — ${favAnalysis.gaps} fav gaps, hedge may slip. ${_recDepth}¢+ depth`;
+            verdict = `TRAP — ${favAnalysis.gaps} fav gaps, hedge may slip. ${_recDepth}¢+ depth`;
         } else if (_tightRoom) {
-            verdict = `MID — only ${hedgeRoom}¢ room, thin margin. ${_recDepth}¢+ depth`;
+            verdict = `TRAP — only ${hedgeRoom}¢ room, thin margin. ${_recDepth}¢+ depth`;
         } else {
-            verdict = `MID — ${_favPL}/lvl fav, ${_recDepth}¢ depth`;
+            verdict = `TRAP — ${_favPL}/lvl fav, ${_recDepth}¢ depth`;
         }
-        verdictCol = '#aa66ff';
+        verdictCol = '#ff8800';
     } else if (catchScore >= 35) {
-        const _tierName = catchScore >= 40 ? 'CAUTION' : 'FLOOR';
+        const _tierName = catchScore >= 40 ? 'DEEP' : 'FLOOR';
         if (_favIsThin) {
             verdict = `${_tierName} — fav only ${_favPL}/lvl, hedge may miss. ${_recDepth}¢+ depth`;
         } else if (_favGappy) {
@@ -3942,15 +3943,15 @@ function displayOrderbookLadder(orderbook) {
             <div style="color:${verdictCol};font-size:10px;font-weight:700;">${verdict}</div>
         </div>
         <div style="font-size:8px;color:#5a6484;text-align:center;letter-spacing:0.3px;margin-bottom:4px;">
-            PPI v10: <span style="color:#00ff88;">D 40</span> + <span style="color:#aa66ff;">G 12</span> + <span style="color:#00ccff;">S 20</span> + <span style="color:#ffaa00;">T 15</span> · S peaks 4-6¢ spread, D peaks 500-999 fav/lvl
+            PPI v8: <span style="color:#00ff88;">D 40</span> + <span style="color:#00ccff;">S 20</span> + <span style="color:#ffaa00;">T 15</span> ×100/75 · G shown for telemetry / depth-override
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:4px 5px;margin-bottom:6px;font-size:9px;font-weight:700;justify-content:center;">
-            <span style="color:#00ff88;background:#00ff8815;padding:2px 6px;border-radius:4px;">85+ WALL 5¢</span>
-            <span style="color:#00ccff;background:#00ccff15;padding:2px 6px;border-radius:4px;">60+ PRIME 5¢</span>
-            <span style="color:#ff8800;background:#ff880015;padding:2px 6px;border-radius:4px;">50+ TRAP 6¢</span>
+            <span style="color:#00ff88;background:#00ff8815;padding:2px 6px;border-radius:4px;">90+ WALL 4¢</span>
+            <span style="color:#00ccff;background:#00ccff15;padding:2px 6px;border-radius:4px;">55+ PRIME 5¢</span>
+            <span style="color:#ff8800;background:#ff880015;padding:2px 6px;border-radius:4px;">45+ TRAP 7¢</span>
             <span style="color:#ff6600;background:#ff660015;padding:2px 6px;border-radius:4px;">40+ DEEP 7¢</span>
-            <span style="color:#ff4400;background:#ff440015;padding:2px 6px;border-radius:4px;">30+ FLOOR 8¢</span>
-            <span style="color:#ff4444;background:#ff444415;padding:2px 6px;border-radius:4px;">&lt;30 KILL</span>
+            <span style="color:#ff4400;background:#ff440015;padding:2px 6px;border-radius:4px;">35+ FLOOR 8¢</span>
+            <span style="color:#ff4444;background:#ff444415;padding:2px 6px;border-radius:4px;">&lt;35 KILL</span>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <div style="text-align:center;background:${dogCol}08;border:1px solid ${dogCol}22;border-radius:6px;padding:6px;">
@@ -3979,9 +3980,9 @@ function displayOrderbookLadder(orderbook) {
 function _updateGhostPill(ticker, catchScore) {
     const pill = document.querySelector(`[data-ghost-ticker="${ticker}"]`);
     if (!pill) return;
-    // v12 thresholds: 85+ WALL, 60+ PRIME, 50+ TRAP, 40+ DEEP, 30+ FLOOR, <30 KILL
-    const col = catchScore >= 85 ? '#00ff88' : catchScore >= 60 ? '#00ccff' : catchScore >= 50 ? '#ff8800' : catchScore >= 40 ? '#ff6600' : catchScore >= 30 ? '#ff4400' : '#ff4444';
-    const qualLabel = catchScore >= 85 ? '🟢' : catchScore >= 60 ? '🔵' : catchScore >= 50 ? '🟠' : catchScore >= 40 ? '🔻' : catchScore >= 30 ? '🟡' : '🔴';
+    // v8 thresholds: 90+ WALL, 55+ PRIME, 45+ TRAP, 40+ DEEP, 35+ FLOOR, <35 KILL
+    const col = catchScore >= 90 ? '#00ff88' : catchScore >= 55 ? '#00ccff' : catchScore >= 45 ? '#ff8800' : catchScore >= 40 ? '#ff6600' : catchScore >= 35 ? '#ff4400' : '#ff4444';
+    const qualLabel = catchScore >= 90 ? '🟢' : catchScore >= 55 ? '🔵' : catchScore >= 45 ? '🟠' : catchScore >= 40 ? '🔻' : catchScore >= 35 ? '🟡' : '🔴';
     const labelEl = pill.querySelector('.ghost-label');
     if (labelEl) {
         labelEl.textContent = `${qualLabel}${catchScore}`;
@@ -4806,9 +4807,9 @@ function updateAnchorPreview() {
             const thinWarn = fpl > 0 && fpl < 5 ? ` <span style="color:#ff4444;font-weight:700;">⚠ thin book!</span>` : '';
             const concNote = favConc > 0.6 ? ` · <span style="color:#ff8800;">${Math.round(favConc*100)}% in 1 wall</span>` : '';
             const _ppiScore = _obCache.catchScore || 0;
-            const _ppiTier = _obCache.ppiTier || (_ppiScore >= 85 ? 'WALL' : _ppiScore >= 60 ? 'PRIME' : _ppiScore >= 50 ? 'TRAP' : _ppiScore >= 40 ? 'DEEP' : _ppiScore >= 30 ? 'FLOOR' : 'KILL');
-            const _ppiTierCol = _ppiScore >= 85 ? '#00ff88' : _ppiScore >= 60 ? '#00ccff' : _ppiScore >= 50 ? '#ff8800' : _ppiScore >= 40 ? '#ff6600' : _ppiScore >= 30 ? '#ff4400' : '#ff4444';
-            const _creBaseD = _ppiScore >= 85 ? 5 : _ppiScore >= 60 ? 5 : _ppiScore >= 50 ? 6 : _ppiScore >= 40 ? 7 : _ppiScore >= 30 ? 8 : 0;
+            const _ppiTier = _obCache.ppiTier || (_ppiScore >= 90 ? 'WALL' : _ppiScore >= 55 ? 'PRIME' : _ppiScore >= 45 ? 'TRAP' : _ppiScore >= 40 ? 'DEEP' : _ppiScore >= 35 ? 'FLOOR' : 'KILL');
+            const _ppiTierCol = _ppiScore >= 90 ? '#00ff88' : _ppiScore >= 55 ? '#00ccff' : _ppiScore >= 45 ? '#ff8800' : _ppiScore >= 40 ? '#ff6600' : _ppiScore >= 35 ? '#ff4400' : '#ff4444';
+            const _creBaseD = _ppiScore >= 90 ? 4 : _ppiScore >= 55 ? 5 : _ppiScore >= 45 ? 7 : _ppiScore >= 40 ? 7 : _ppiScore >= 35 ? 8 : 0;
             const _creGapBump = recDepth > _creBaseD && _creBaseD > 0 ? ` <span style="color:#ff8800;font-size:9px;font-weight:700;">gaps→${recDepth}¢</span>` : '';
             depthRec = `<div style="margin-top:3px;padding:3px 6px;background:#ff66aa11;border:1px solid ${recCol}33;border-radius:4px;font-size:10px;">` +
                 `<span style="color:${_ppiTierCol};font-weight:700;">PPI ${_ppiScore} ${_ppiTier}</span>${_creGapBump} ` +
@@ -6654,8 +6655,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             <span style="color:#ff66aa;font-weight:600;">Depth: ${bot.anchor_depth || targetWidth}¢${bot.auto_depth ? ' <span style="color:#64ffda;font-size:8px;">AUTO</span>' : ''}</span>${bot._rec_qty != null ? (() => { const _rq = bot._rec_qty, _mq = bot._max_qty || _rq; const _ok = qty <= _rq; const _over = qty > _mq; const _border = _ok ? '#00ff8833' : _over ? '#ff444433' : '#ffaa0033'; const _recCol = qty <= _rq ? '#00ff88' : '#ff4444'; return `<span style="display:inline-flex;align-items:center;border:1px solid ${_border};border-radius:4px;overflow:hidden;font-size:9px;font-weight:700;" title="Fav bid L1: ${bot._fav_bid_l1 || '?'} · Fav ask L1: ${bot._fav_ask_l1 || '?'}"><span style="padding:1px 5px;color:#b2ff59;background:#b2ff5910;">×${fmtQty(qty)}</span><span style="padding:1px 5px;color:${_recCol};background:${_recCol}10;border-left:1px solid #1e2740;">rec ${fmtQty(_rq)}</span><span style="padding:1px 5px;color:#ff4444;background:#ff444410;border-left:1px solid #1e2740;">max ${fmtQty(_mq)}</span></span>`; })() : `<span style="color:#b2ff59;">×${fmtQty(qty)}</span>`}${(() => {
                 const _ppi = bot._live_ppi != null ? bot._live_ppi : bot._last_ppi;
                 if (_ppi != null) {
-                    const _ppiCol = _ppi >= 85 ? '#00ff88' : _ppi >= 60 ? '#00ccff' : _ppi >= 50 ? '#ff8800' : _ppi >= 40 ? '#ff6600' : _ppi >= 30 ? '#ff4400' : '#ff4444';
-                    const _ppiLabel = _ppi >= 85 ? 'WALL' : _ppi >= 60 ? 'PRIME' : _ppi >= 50 ? 'TRAP' : _ppi >= 40 ? 'DEEP' : _ppi >= 30 ? 'FLOOR' : 'KILL';
+                    const _ppiCol = _ppi >= 90 ? '#00ff88' : _ppi >= 55 ? '#00ccff' : _ppi >= 45 ? '#ff8800' : _ppi >= 40 ? '#ff6600' : _ppi >= 35 ? '#ff4400' : '#ff4444';
+                    const _ppiLabel = _ppi >= 90 ? 'WALL' : _ppi >= 55 ? 'PRIME' : _ppi >= 45 ? 'TRAP' : _ppi >= 40 ? 'DEEP' : _ppi >= 35 ? 'FLOOR' : 'KILL';
                     const _baseD = _ppi >= 85 ? 5 : _ppi >= 60 ? 5 : _ppi >= 50 ? 6 : _ppi >= 40 ? 7 : _ppi >= 30 ? 8 : 0;
                     const _recD = bot._rec_depth || _baseD;
                     const _gapBump = _recD > _baseD && _baseD > 0 ? ` <span style="color:#ff8800;font-size:8px;">gaps→${_recD}¢</span>` : '';

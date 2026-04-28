@@ -1598,9 +1598,9 @@ def get_depth_rec(ticker):
     ppi, rd, ppi_det = _calculate_ppi(ticker, fav_side, dog_side)
     if ppi is None:
         ppi, rd, ppi_det = 0, 0, {}
-    tier = 'WALL' if ppi >= 85 else 'PRIME' if ppi >= 60 else 'TRAP' if ppi >= 45 else 'DEEP' if ppi >= 30 else 'KILL'
-    # Base depth before gap overrides — must mirror _calculate_ppi rec ladder (v11)
-    _base_rd = 5 if ppi >= 85 else 5 if ppi >= 60 else 6 if ppi >= 45 else 7 if ppi >= 30 else 0
+    tier = 'WALL' if ppi >= 85 else 'PRIME' if ppi >= 60 else 'TRAP' if ppi >= 50 else 'DEEP' if ppi >= 40 else 'FLOOR' if ppi >= 30 else 'KILL'
+    # Base depth before gap overrides — must mirror _calculate_ppi rec ladder (v12)
+    _base_rd = 5 if ppi >= 85 else 5 if ppi >= 60 else 6 if ppi >= 50 else 7 if ppi >= 40 else 8 if ppi >= 30 else 0
     _gap_bumped = rd > _base_rd and rd > 0
     reasons = [f'PPI {ppi} {tier}: D={ppi_det.get("d",0)} S={ppi_det.get("s",0)} T={ppi_det.get("t",0)} (gaps={ppi_det.get("fg",0)})']
     if _gap_bumped:
@@ -4533,28 +4533,55 @@ class TennisWSManager:
 
         def on_open(ws):
             self._connected = True
-            self._reconnect_count = 0
+            # Don't reset _reconnect_count here — server has been accepting connections
+            # and immediately sending close frames. Resetting on connect (not on real
+            # data) means backoff stays at 5s forever and floods the log. Move the
+            # reset to on_message so it only fires after we actually receive data.
             print('🎾 API Tennis WS connected')
 
         def on_message(ws, message):
+            # Strip whitespace; server sends empty/whitespace bodies on rejected
+            # connections that slip past the falsy check (e.g. '\n', ' ', b'').
+            _msg = message.strip() if isinstance(message, (str, bytes)) else message
+            if not _msg:
+                return
             try:
-                if not message:
-                    return
-                data = json.loads(message)
-                self._handle_message(data)
-            except Exception as e:
-                print(f'⚠ Tennis WS parse error: {e}')
+                data = json.loads(_msg)
+            except Exception:
+                # Server sometimes pushes non-JSON heartbeat/close-prelude frames
+                # before sending the actual close. They aren't actionable — silence
+                # the log to avoid spam. Connection health is tracked by whether
+                # _reconnect_count gets reset (only on successful data dispatch).
+                return
+            # Real data flowing — connection is healthy, reset backoff counter
+            self._reconnect_count = 0
+            self._handle_message(data)
 
         def on_error(ws, error):
-            print(f'⚠ Tennis WS error: {error}')
             self._connected = False
+            # Suppress "error" that is just a close frame (opcode=8) — websocket-client
+            # surfaces server-sent close frames through on_error before on_close, and
+            # logging both is noise. on_close handles the reconnect.
+            err_str = str(error)
+            if 'opcode=8' in err_str or 'fin=1 opcode=8' in err_str:
+                return
+            print(f'⚠ Tennis WS error: {error}')
 
         def on_close(ws, code, msg):
             self._connected = False
-            print(f'🎾 Tennis WS closed: {code} {msg}')
-            # Exponential backoff: 5, 10, 20, 40, 60s cap
-            delay = min(60, 5 * (2 ** min(self._reconnect_count, 4)))
+            # Exponential backoff: 30, 60, 120, 240, 600s cap. Bumped floor from 5s
+            # to 30s — server keeps slamming connections shut, no point hammering.
+            delay = min(600, 30 * (2 ** min(self._reconnect_count, 4)))
             self._reconnect_count += 1
+            # Only log first failure + every 10th retry to keep the log clean
+            if self._reconnect_count <= 1 or self._reconnect_count % 10 == 0:
+                print(f'🎾 Tennis WS closed (retry #{self._reconnect_count} in {delay}s): {code} {msg}')
+            # After 30 consecutive failed attempts (no message ever received between
+            # them), stop trying — REST fallback handles the data, WS is just an
+            # optimization. User can manually restart server to retry.
+            if self._reconnect_count >= 30:
+                print(f'❌ Tennis WS giving up after {self._reconnect_count} failed reconnects — REST fallback active. Restart server to retry.')
+                return
             threading.Timer(delay, self.start).start()
 
         try:
@@ -5027,8 +5054,11 @@ def _ws_phantom_price_floor(ticker, yes_bid, no_bid):
 
         dog_side = bot.get('dog_side', '')
         dog_bid = (yes_bid if dog_side == 'yes' else no_bid)
-        if dog_bid <= 0 or dog_bid >= 2:
+        if dog_bid >= 2:
             continue
+        # bid <= 1 (including 0): still cancel-and-check. Was previously skipped at
+        # bid==0, leaving the monitor handler to abandon the order without reconciling
+        # cancel-race fills → orphans during market-collapse moments.
 
         dog_oid = bot.get('dog_order_id')
         if not dog_oid:
@@ -8009,14 +8039,16 @@ def _calculate_ppi(ticker, fav_side, dog_side):
     _raw = d_pts + g_pts + s_pts + t_pts               # v6 original: D(40)+G(25)+S(20)+T(15) = max 100
     ppi = max(0, min(100, round(_raw)))                # divisor 100 — v6 was already 0-100 normalized
 
-    # PPI → depth rec. v11 (2026-04-27): PRIME widened down to 60 to recover the
-    # 60-69 sweet spot (110 trades, avg 145c/trade, was demoted to 6c TRAP under v10).
-    # FLOOR removed — 8c posts catch game-changing events not sweeps. Tennis median
-    # PPI=68 now lands at 5c PRIME instead of 6c TRAP.
+    # PPI → depth rec. v12 (2026-04-28): restore Apr 17 ladder shape (best day
+    # of month: +$102.52, 69% win) but drop 4c WALL (lifetime +$14.68 / 270 trades
+    # ≈ scratch). 5c is the workhorse — owns 40 pts (WALL 85+ and PRIME 60-84).
+    # 6c/7c/8c get equal 10-pt steps. FLOOR restored — 8c is a profitable bucket
+    # in lifetime data (+$31 / 69 trades) when fed by reasonable PPI floor.
     if ppi >= 85: rec = 5                              # WALL: shares 5c with PRIME (15 pts)
-    elif ppi >= 60: rec = 5                            # PRIME: 60-84 (25 pts) — the workhorse zone
-    elif ppi >= 45: rec = 6                            # TRAP: 45-59 (15 pts)
-    elif ppi >= 30: rec = 7                            # DEEP: 30-44 (15 pts)
+    elif ppi >= 60: rec = 5                            # PRIME: 60-84 (25 pts) — workhorse
+    elif ppi >= 50: rec = 6                            # TRAP: 50-59 (10 pts)
+    elif ppi >= 40: rec = 7                            # DEEP: 40-49 (10 pts)
+    elif ppi >= 30: rec = 8                            # FLOOR: 30-39 (10 pts)
     else: rec = 0                                      # KILL: pull
     # Fav gaps override (only when not KILL — gaps don't save a toxic book)
     if rec > 0:
@@ -9160,7 +9192,12 @@ APEX_MM_SLOW_VELOCITY_MULT = 3.0          # Slow + live phase: 3x slower walk
 # forever waiting for sellers to cross. After this window, the walker creeps
 # past WALL into small-loss territory to force a fill before market settles.
 APEX_MM_WALL_ESCAPE_AFTER_S = 300         # 5 min at WALL before escape kicks in
-APEX_MM_WALL_ESCAPE_INTERVAL_S = 60       # 1c escalation per minute (capped at stop_loss-1)
+APEX_MM_WALL_ESCAPE_INTERVAL_S = 60       # 1c escalation per minute
+APEX_MM_WALL_ESCAPE_MAX_LOSS_C = 2         # Cap escape at -2c past wall (combined<=102c).
+                                            # Without cap, escape drifts to stop_loss-1c (-5c+ loss
+                                            # on width-6 bots), which is worse than the binary
+                                            # settlement coin-flip (held wins +60c / loses -avg).
+                                            # -2c says: take the small scratch over the gamble.
 
 
 def _apex_mm_game_phase(ticker):
@@ -10486,7 +10523,9 @@ def _apex_mm_walk_up(bot_id, bot):
         if wall_age >= APEX_MM_WALL_ESCAPE_AFTER_S:
             stop_combined = 100 + max(width, bot.get('min_sl_margin', 0))
             escalations = int((wall_age - APEX_MM_WALL_ESCAPE_AFTER_S) // APEX_MM_WALL_ESCAPE_INTERVAL_S) + 1
-            target_combined = min(stop_combined - 1, 100 + escalations)
+            # Cap at min(stop_loss-1, wall+MAX_LOSS, wall+escalations).
+            # MAX_LOSS_C bound prevents drift to worst-allowed loss when bid never returns.
+            target_combined = min(stop_combined - 1, 100 + APEX_MM_WALL_ESCAPE_MAX_LOSS_C, 100 + escalations)
             target_price_escape = max(current_price + 1, target_combined - avg_held)
             target_price_escape = max(1, min(98, target_price_escape))
             # Snap to live bid if it's at or above target (instant fill possible),
@@ -16111,13 +16150,46 @@ def _handle_phantom(bot_id, bot, actions):
                     current_dog_ask = _best_ask(ob, dog_side)
 
             if current_dog_bid <= 0:
-                # No market — pull and wait for recovery or settlement
+                # No market — cancel dog order (check for race fills) before pulling.
+                # Without the cancel-and-check, fills that landed in the seconds before
+                # the bid hit 0 get silently abandoned (the previous bug: monitor cleared
+                # dog_order_id without canceling, and Kalshi held the position as orphan).
+                # Even at combined>100c, NO@99c+ usually fills as a safe pre-settlement bet.
+                dog_oid = bot.get('dog_order_id')
+                bot['dog_order_id'] = None
+                if dog_oid:
+                    try:
+                        _nm_result = _safe_cancel(dog_oid, f'monitor_no_market_{bot_id}')
+                    except Exception as _nm_e:
+                        _nm_result = None
+                        print(f'⚠ NO MARKET cancel error: {bot_id} {_nm_e}')
+                    if isinstance(_nm_result, tuple) and _nm_result[0] == 'filled':
+                        _nm_fills = _nm_result[1]
+                        with ws_fill_lock:
+                            if bot.get('_hedge_fired'):
+                                save_state()
+                                return  # WS handler already got it
+                            bot['_hedge_fired'] = True
+                        bot['dog_fill_qty'] = max(bot.get('dog_fill_qty', 0), _nm_fills)
+                        bot[f'{dog_side}_fill_qty'] = bot['dog_fill_qty']
+                        bot['status'] = 'dog_filled'
+                        bot['dog_filled_at'] = time.time()
+                        _qty = bot.get('quantity', 1)
+                        if _nm_fills < _qty:
+                            bot['_original_qty'] = _qty
+                            bot['_partial_hedge_qty'] = _nm_fills
+                        _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
+                        print(f'🚨 NO MARKET FILL: {bot_id} {_nm_fills} fills on cancel — hedge fired!')
+                        bot_log('PHANTOM_NO_MARKET_FILL', bot_id, {
+                            'fills': _nm_fills, 'dog_bid': 0,
+                        }, level='WARN')
+                        save_state()
+                        return
                 bot['status'] = 'dog_anchor_posted'
                 bot['_price_floor_pulled'] = True
                 bot['_pull_reason'] = 'no market (bid 0¢)'
                 if not bot.get('_price_floor_since'):
                     bot['_price_floor_since'] = now
-                bot['dog_order_id'] = None
                 if not bot.get('_drift_pull_logged'):
                     bot['_drift_pull_logged'] = True
                     print(f'⏸ PHANTOM NO MARKET: {bot_id} dog_bid=0 — pulled, waiting for settlement')
@@ -16650,7 +16722,10 @@ def _handle_apex(bot_id, bot, actions):
     # drift guard fires or market settles, then 5-min purge.
     # Gated to flat + (pulled/active) so we don't interrupt an active exit
     # (mm_exiting) or an already-settling bot (awaiting_settlement).
-    if status in ('mm_depth_pulled', 'market_making_active') and \
+    # Includes waiting_repeat: bot can get stranded there if fresh_ladder
+    # repeatedly fails on drift_guard while market settles in the background.
+    # Without this, no settlement check fires and bot zombies until manual cancel.
+    if status in ('mm_depth_pulled', 'market_making_active', 'waiting_repeat') and \
        bot.get('net_yes', 0) == 0 and bot.get('net_no', 0) == 0:
         # Settlement poll (30s cadence) — transition when Kalshi confirms settled
         if now - bot.get('_last_settle_check_global', 0) >= 30:
@@ -16671,11 +16746,15 @@ def _handle_apex(bot_id, bot, actions):
                                 try: _safe_cancel(_oid, f'apex_mm_flat_settle_{bot_id}')
                                 except Exception: pass
                                 _lvl['oid'] = None
-                    bot['status'] = 'awaiting_settlement'
-                    bot['awaiting_since'] = now
+                    # Flat bot — go straight to completed. awaiting_settlement is for
+                    # bots with held inventory waiting for payout; flat has nothing to
+                    # wait for, and the intermediate state gets stuck because the
+                    # global settle loop skips bots that already have _market_settled_at.
+                    bot['status'] = 'completed'
+                    bot['completed_at'] = now
                     bot['_market_settled_at'] = now
                     bot['_smart_stop_reason'] = 'final'
-                    print(f'🏁 APEX MM FLAT→SETTLED: {bot_id} market {_fp_status} — transitioning to awaiting_settlement')
+                    print(f'🏁 APEX MM FLAT→SETTLED: {bot_id} market {_fp_status} — completed (5-min purge)')
                     save_state()
                     return
             except Exception:
@@ -17730,6 +17809,18 @@ def _run_monitor():
         _settle_check_now = time.time()
         for _sc_id, _sc_bot in list(active_bots.items()):
             if _sc_bot.get('status') not in ('completed', 'stopped', 'awaiting_settlement'):
+                continue
+            # Already-settled awaiting_settlement Apex MM rescue: if _market_settled_at
+            # is set but bot is still awaiting_settlement and FLAT, transition to
+            # completed so the 5-min purge can clear it. Without this, bots get stuck
+            # forever (the skip-gate below prevents re-querying Kalshi for them).
+            if _sc_bot.get('_market_settled_at') and _sc_bot.get('status') == 'awaiting_settlement' \
+               and _sc_bot.get('bot_category') == 'ladder_arb' \
+               and (_sc_bot.get('net_yes', 0) or 0) == 0 and (_sc_bot.get('net_no', 0) or 0) == 0:
+                _sc_bot['status'] = 'completed'
+                _sc_bot['completed_at'] = _settle_check_now
+                print(f'🏁 APEX MM RESCUE: {_sc_id} awaiting_settlement (flat) → completed')
+                save_state()
                 continue
             if _sc_bot.get('_market_settled_at'):
                 continue

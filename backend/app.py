@@ -6005,12 +6005,120 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     bot['yes_fill_qty'] = bot['dog_fill_qty']
                 else:
                     bot['no_fill_qty'] = bot['dog_fill_qty']
+                # Cancel-race handler — defined once for both full-fill and partial-fill paths.
+                # Partial path: dog still has unfilled qty → cancel the live dog order.
+                # Full path: dog count_fp may exceed declared qty (Mar 2026 fractional rollout) or
+                # old reposted dog orders may still match → cancel anyway to slam the door.
+                # If extras come back, amend live fav up. If fav already fully filled,
+                # fire a supplemental hedge IMMEDIATELY at original fav_price instead of
+                # parking until PHANTOM_DOG_RECONCILE picks it up 60-120s later (by which
+                # time the fav bid has moved 20-40c against us).
+                def _cancel_and_reconcile(oid, bot_id_ref=bot_id, partial_q=None, qty_bot_ref=qty_bot):
+                    _result = _safe_cancel(oid, f'sweep_cancel_{bot_id_ref}')
+                    if not (isinstance(_result, tuple) and _result[0] == 'filled'):
+                        return
+                    _actual = _result[1]
+                    _b = active_bots.get(bot_id_ref)
+                    if not _b:
+                        return
+                    _pq = partial_q if partial_q is not None else (_b.get('_partial_hedge_qty') or qty_bot_ref)
+                    _extra = _actual - _pq
+                    if _extra <= 0:
+                        return
+                    _dog_side = _b.get('dog_side', 'no')
+                    _b['dog_fill_qty'] = max(_b.get('dog_fill_qty', 0), _actual)
+                    _b[f'{_dog_side}_fill_qty'] = _b['dog_fill_qty']
+                    _fav_oid = _b.get('fav_order_id')
+                    _fav_filled = _b.get('fav_fill_qty') or 0
+                    _fav_side = _b.get('fav_side', 'no')
+                    _fav_price = _b.get('fav_price')
+                    _hticker = _b.get('hedge_ticker') or _b.get('ticker')
+                    if _fav_oid and _fav_filled < _pq:
+                        # Amend path: fav still has resting qty — bump count at original price.
+                        try:
+                            api_rate_limiter.wait(priority=True)
+                            _amend_kw = {f'{_fav_side}_price': _fav_price}
+                            _amend_resp = kalshi_client.amend_order(
+                                _fav_oid, ticker=_hticker,
+                                side=_fav_side, count=_actual, **_amend_kw
+                            )
+                            _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
+                            _new_oid = _amend_ord.get('order_id', '')
+                            if _new_oid and _new_oid != _fav_oid:
+                                _b.setdefault('_all_hedge_order_ids', []).append(_fav_oid)
+                                _b['fav_order_id'] = _new_oid
+                                if _fav_side == 'yes': _b['yes_order_id'] = _new_oid
+                                else: _b['no_order_id'] = _new_oid
+                            _b['_partial_hedge_qty'] = _actual
+                            _b['_active_fav_qty'] = _actual
+                            print(f'✅ CANCEL-RACE AMEND: {bot_id_ref} hedge qty {_pq}→{_actual} @{_fav_price}¢ (extra {_extra} absorbed)')
+                            bot_log('PHANTOM_CANCEL_RACE_AMEND', bot_id_ref, {
+                                'old_qty': _pq, 'new_qty': _actual, 'extra': _extra, 'fav_price': _fav_price,
+                            })
+                        except Exception as _e:
+                            print(f'⚠ CANCEL-RACE AMEND FAILED: {bot_id_ref} {_e} — reconcile will supplemental later')
+                            bot_log('PHANTOM_CANCEL_RACE_AMEND_FAIL', bot_id_ref, {
+                                'old_qty': _pq, 'new_qty': _actual, 'error': str(_e)[:200],
+                            }, level='WARN')
+                    else:
+                        # Supplemental path: fav already fully filled — fire a NEW hedge order
+                        # for the extras now, at original fav_price (or live bid if better).
+                        # Integer-only: sub-contract residue is handled by completion-path tolerance.
+                        _supp_qty_int = int(_extra)
+                        if _supp_qty_int < 1:
+                            return
+                        try:
+                            _live_bid = 0
+                            if ws_manager:
+                                _wsd = ws_manager.get_price(_hticker)
+                                if _wsd:
+                                    _live_bid = _wsd.get(f'{_fav_side}_bid', 0)
+                            # Use original fav_price unless live bid is strictly better (lower for buy).
+                            _supp_price = _fav_price
+                            if _live_bid > 0 and _live_bid < _fav_price:
+                                _supp_price = _live_bid
+                            api_rate_limiter.wait(priority=True)
+                            _supp_resp, _supp_actual_price = create_order_maker(
+                                ticker=_hticker, side=_fav_side, action='buy',
+                                count=_supp_qty_int, price=_supp_price, priority=True,
+                            )
+                            _supp_oid = _supp_resp['order']['order_id']
+                            _b.setdefault('_all_hedge_order_ids', []).append(_b.get('fav_order_id'))
+                            _b['fav_order_id'] = _supp_oid
+                            if _fav_side == 'yes': _b['yes_order_id'] = _supp_oid
+                            else: _b['no_order_id'] = _supp_oid
+                            _b['_partial_hedge_qty'] = _actual
+                            _b['_active_fav_qty'] = _supp_qty_int
+                            _b['_last_supp_at'] = time.time()
+                            _b['fav_price'] = _supp_actual_price
+                            _b['status'] = 'fav_hedge_posted'
+                            _b['_trade_recorded'] = False  # let completion re-fire after this fills
+                            print(f'⚡ CANCEL-RACE SUPP: {bot_id_ref} +{_supp_qty_int} {_fav_side} @{_supp_actual_price}¢ (post-fill extras hedged)')
+                            bot_log('PHANTOM_CANCEL_RACE_SUPP', bot_id_ref, {
+                                'extra_qty': _supp_qty_int, 'price': _supp_actual_price,
+                                'order_id': _supp_oid[:12], 'partial_q': _pq, 'actual': _actual,
+                            }, level='WARN')
+                        except Exception as _e:
+                            print(f'⚠ CANCEL-RACE SUPP FAILED: {bot_id_ref} {_e}')
+                            bot_log('PHANTOM_CANCEL_RACE_SUPP_FAIL', bot_id_ref, {
+                                'extra_qty': _supp_qty_int, 'error': str(_e)[:200],
+                            }, level='ERROR')
+
                 if bot['dog_fill_qty'] >= qty_bot and not bot.get('_hedge_fired'):
                     # SPEED CRITICAL — hedge worker gets the job IMMEDIATELY, log after
                     bot['_hedge_fired'] = True
                     bot['dog_filled_at'] = time.time()
+                    bot['_partial_hedge_qty'] = qty_bot
                     bot['status'] = 'dog_filled'
                     _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
+                    # Slam the dog order shut — fractional fp residue or cancel-race fills
+                    # on a "fully filled" order otherwise leak in 60-120s later as orphans.
+                    _full_cancel_oid = bot.get('dog_order_id')
+                    if _full_cancel_oid:
+                        threading.Thread(target=_cancel_and_reconcile,
+                                         args=(_full_cancel_oid,),
+                                         kwargs={'partial_q': qty_bot},
+                                         daemon=True).start()
                     # Skip save_state — json.dump GIL contention blocks hedge worker (deferred to hedge fn line 3508)
                     break
                 elif bot['dog_fill_qty'] >= 1.0 and not bot.get('_hedge_fired'):
@@ -6030,57 +6138,10 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     _cancel_oid = bot.get('dog_order_id') if bot['dog_fill_qty'] < qty_bot else None
                     _partial_q_snap = bot['dog_fill_qty']
                     if _cancel_oid:
-                        # Cancel-race handler: if the dog order filled more between partial-hedge
-                        # and cancel (classic KUKRIE/ATLTIG race), amend the resting fav hedge
-                        # to cover the extra qty at the ORIGINAL fav price instead of letting
-                        # the late reconcile post a supplemental at a worse price.
-                        def _cancel_and_reconcile(oid, bot_id_ref=bot_id, partial_q=_partial_q_snap, qty_bot_ref=qty_bot):
-                            _result = _safe_cancel(oid, f'partial_fill_{bot_id_ref}')
-                            if not (isinstance(_result, tuple) and _result[0] == 'filled'):
-                                return
-                            _actual = _result[1]
-                            _extra = _actual - partial_q
-                            if _extra <= 0:
-                                return
-                            _b = active_bots.get(bot_id_ref)
-                            if not _b:
-                                return
-                            _dog_side = _b.get('dog_side', 'no')
-                            _b['dog_fill_qty'] = max(_b.get('dog_fill_qty', 0), _actual)
-                            _b[f'{_dog_side}_fill_qty'] = _b['dog_fill_qty']
-                            _fav_oid = _b.get('fav_order_id')
-                            _fav_filled = _b.get('fav_fill_qty') or 0
-                            # Amend path: fav still has resting qty — bump count at original price.
-                            # If fav already fully filled, fall through to existing reconcile-supplemental at completion.
-                            if _fav_oid and _fav_filled < partial_q:
-                                _fav_side = _b.get('fav_side', 'no')
-                                _fav_price = _b.get('fav_price')
-                                try:
-                                    api_rate_limiter.wait(priority=True)
-                                    _amend_kw = {f'{_fav_side}_price': _fav_price}
-                                    _amend_resp = kalshi_client.amend_order(
-                                        _fav_oid, ticker=_b.get('hedge_ticker') or _b.get('ticker'),
-                                        side=_fav_side, count=_actual, **_amend_kw
-                                    )
-                                    _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
-                                    _new_oid = _amend_ord.get('order_id', '')
-                                    if _new_oid and _new_oid != _fav_oid:
-                                        _b.setdefault('_all_hedge_order_ids', []).append(_fav_oid)
-                                        _b['fav_order_id'] = _new_oid
-                                        if _fav_side == 'yes': _b['yes_order_id'] = _new_oid
-                                        else: _b['no_order_id'] = _new_oid
-                                    _b['_partial_hedge_qty'] = _actual
-                                    _b['_active_fav_qty'] = _actual
-                                    print(f'✅ CANCEL-RACE AMEND: {bot_id_ref} hedge qty {partial_q}→{_actual} @{_fav_price}¢ (extra {_extra} absorbed)')
-                                    bot_log('PHANTOM_CANCEL_RACE_AMEND', bot_id_ref, {
-                                        'old_qty': partial_q, 'new_qty': _actual, 'extra': _extra, 'fav_price': _fav_price,
-                                    })
-                                except Exception as _e:
-                                    print(f'⚠ CANCEL-RACE AMEND FAILED: {bot_id_ref} {_e} — reconcile will supplemental later')
-                                    bot_log('PHANTOM_CANCEL_RACE_AMEND_FAIL', bot_id_ref, {
-                                        'old_qty': partial_q, 'new_qty': _actual, 'error': str(_e)[:200],
-                                    }, level='WARN')
-                        threading.Thread(target=_cancel_and_reconcile, args=(_cancel_oid,), daemon=True).start()
+                        threading.Thread(target=_cancel_and_reconcile,
+                                         args=(_cancel_oid,),
+                                         kwargs={'partial_q': _partial_q_snap},
+                                         daemon=True).start()
                     print(f'⚡ WS PHANTOM PARTIAL HEDGE: {bot_id} {bot["dog_fill_qty"]}/{qty_bot} filled → hedging now, cancelling rest async')
                     # Skip save_state — deferred to hedge fn (line 3508)
                     break
@@ -6203,8 +6264,11 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 if _new_fills <= 0:
                     print(f'👻 APEX MM LATE FILL DEDUP: {bot_id} {side.upper()} order {order_id[:12]} has {_late_verified_fills} fills but {_already_counted} already counted — skipping')
                     continue
-                # Record that we've counted these fills
-                bot.setdefault('_counted_order_fills', {})[order_id] = _late_verified_fills
+                # Don't write _counted_order_fills here — the locked re-check below
+                # would then read this thread's own write and dedup-skip ITSELF (which
+                # caused the LEOTAG orphan: 3 NO from a fill got dropped because the
+                # outside-lock write made the inside-lock recheck see _recheck=full).
+                # The locked block (line ~6285) handles the write atomically.
                 matched_side = side
                 matched_price = _late_price
                 count = _new_fills  # Only add the delta, not total
@@ -11595,16 +11659,49 @@ def _apex_mm_begin_exit_inner(bot_id, bot, reason):
                     break
             _kalshi_yes = max(0, _kalshi_pos)
             _kalshi_no = max(0, -_kalshi_pos)
+            # Symmetric reconcile: clamp DOWN if bot tracked more than Kalshi has
+            # (cancel-race ghost), and ADOPT UP if Kalshi has more than bot tracked
+            # (orphan from missed fill — the LEOTAG case where late-fill dedup
+            # erroneously skipped a real fill, abandoning 3 contracts on Kalshi).
             if net_yes > _kalshi_yes:
                 print(f'🛡️ APEX MM EXIT CLAMP: {bot_id} bot_yes={net_yes} kalshi_yes={_kalshi_yes} — clamping')
                 net_yes = _kalshi_yes
                 bot['net_yes'] = net_yes
+            elif _kalshi_yes > net_yes:
+                _adopt = _kalshi_yes - net_yes
+                print(f'🚨 APEX MM EXIT ADOPT: {bot_id} bot_yes={net_yes} < kalshi_yes={_kalshi_yes} — adopting {_adopt} orphan(s)')
+                # Avg cost guess: live bid (last known price) or 50c if no quote.
+                # P&L tagging may be slightly off but the inventory exits cleanly.
+                if bot.get('avg_yes_cost', 0) <= 0:
+                    bot['avg_yes_cost'] = bot.get('live_yes_bid', 0) or 50
+                    bot['total_yes_cost'] = bot['avg_yes_cost'] * _kalshi_yes
+                net_yes = _kalshi_yes
+                bot['net_yes'] = net_yes
+                bot_log('APEX_MM_EXIT_ADOPT', bot_id, {
+                    'side': 'yes', 'adopted_qty': _adopt, 'kalshi_qty': _kalshi_yes,
+                    'avg_cost': bot['avg_yes_cost'],
+                }, level='WARN')
             if net_no > _kalshi_no:
                 print(f'🛡️ APEX MM EXIT CLAMP: {bot_id} bot_no={net_no} kalshi_no={_kalshi_no} — clamping')
                 net_no = _kalshi_no
                 bot['net_no'] = net_no
-            if net_yes == 0 and net_no == 0:
-                print(f'🛡️ APEX MM EXIT PHANTOM: {bot_id} kalshi=0, all inventory was phantom — completing')
+            elif _kalshi_no > net_no:
+                _adopt = _kalshi_no - net_no
+                print(f'🚨 APEX MM EXIT ADOPT: {bot_id} bot_no={net_no} < kalshi_no={_kalshi_no} — adopting {_adopt} orphan(s)')
+                if bot.get('avg_no_cost', 0) <= 0:
+                    bot['avg_no_cost'] = bot.get('live_no_bid', 0) or 50
+                    bot['total_no_cost'] = bot['avg_no_cost'] * _kalshi_no
+                net_no = _kalshi_no
+                bot['net_no'] = net_no
+                bot_log('APEX_MM_EXIT_ADOPT', bot_id, {
+                    'side': 'no', 'adopted_qty': _adopt, 'kalshi_qty': _kalshi_no,
+                    'avg_cost': bot['avg_no_cost'],
+                }, level='WARN')
+            # PHANTOM: only declare if Kalshi truly shows zero on both sides.
+            # Bot's net_yes/net_no after the symmetric reconcile above match Kalshi,
+            # so this also covers the previous net_yes==0 && net_no==0 case correctly.
+            if _kalshi_yes == 0 and _kalshi_no == 0:
+                print(f'🛡️ APEX MM EXIT PHANTOM: {bot_id} kalshi=0 (both sides), all inventory was phantom — completing')
                 bot['status'] = 'completed'
                 bot['completed_at'] = time.time()
                 save_state()
@@ -15373,6 +15470,31 @@ def _handle_phantom(bot_id, bot, actions):
             bot['fav_price'] = actual_fav_price
             dog_price = bot['dog_price']
 
+            # Dog side: same exact-cents aggregation as fav. Without this, multi-
+            # price dog fills (e.g. 37×20 + 38×20 → avg 37.5 rounds to 38) get
+            # multiplied as (rounded_avg × qty), overstating cost by up to qty/2¢
+            # and reporting losses larger than Kalshi's actual settlement.
+            _all_dog_oids = list(set(filter(None, (bot.get('_all_dog_order_ids') or []) + [bot.get('dog_order_id')])))
+            _dog_total_cents = 0
+            _dog_total_qty = 0
+            for _doid in _all_dog_oids:
+                try:
+                    api_read_limiter.wait()
+                    _do = kalshi_client.get_order(_doid)
+                    _do = _do.get('order', _do) if isinstance(_do, dict) else {}
+                    _dc = int(float(_do.get('fill_count_fp', '0')))
+                    if _dc <= 0:
+                        continue
+                    _dp = get_actual_fill_price(_doid, dog_side) or 0
+                    if _dp <= 0:
+                        continue
+                    _dog_total_cents += _dp * _dc
+                    _dog_total_qty += _dc
+                except Exception as _de:
+                    print(f'⚠ dog order {_doid[:12]} lookup failed: {_de}')
+            if _dog_total_qty > 0:
+                bot['_dog_price_precise'] = round(_dog_total_cents / _dog_total_qty, 2)
+
             if fav_side == 'yes':
                 yes_p, no_p = actual_fav_price, dog_price
             else:
@@ -15380,11 +15502,13 @@ def _handle_phantom(bot_id, bot, actions):
             bot['yes_price'] = yes_p
             bot['no_price'] = no_p
 
-            # Compute pnl from total cents, not rounded wavg × qty. Rounding the
-            # fav wavg before multiplying by qty loses up to ~qty/2 cents of
-            # real money (e.g. 70-qty trade with 72.17 wavg rounds to 72,
-            # overstates pnl by 12¢). Use the unrounded sum directly.
-            if _fav_total_qty > 0 and _fav_total_qty == qty:
+            # Compute pnl from total cents on BOTH legs when available, not
+            # (rounded avg × qty). Rounding the avg before multiplying loses
+            # up to qty/2¢ per leg of real money. Falls back gracefully when
+            # only fav totals are available, then to fully-rounded.
+            if _fav_total_qty == qty and _dog_total_qty == qty:
+                pnl_cents = (100 * qty) - _dog_total_cents - _fav_total_cents
+            elif _fav_total_qty > 0 and _fav_total_qty == qty:
                 pnl_cents = (100 * qty) - (dog_price * qty) - _fav_total_cents
             else:
                 pnl_cents = (100 - yes_p - no_p) * qty

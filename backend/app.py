@@ -1600,7 +1600,7 @@ def get_depth_rec(ticker):
         ppi, rd, ppi_det = 0, 0, {}
     tier = 'WALL' if ppi >= 90 else 'PRIME' if ppi >= 55 else 'TRAP' if ppi >= 45 else 'DEEP' if ppi >= 40 else 'FLOOR' if ppi >= 35 else 'KILL'
     # Base depth before gap overrides — must mirror _calculate_ppi rec ladder (v8)
-    _base_rd = 4 if ppi >= 90 else 5 if ppi >= 55 else 7 if ppi >= 45 else 7 if ppi >= 40 else 8 if ppi >= 35 else 0
+    _base_rd = 5 if ppi >= 90 else 5 if ppi >= 55 else 7 if ppi >= 45 else 7 if ppi >= 40 else 8 if ppi >= 35 else 0
     _gap_bumped = rd > _base_rd and rd > 0
     reasons = [f'PPI {ppi} {tier}: D={ppi_det.get("d",0)} S={ppi_det.get("s",0)} T={ppi_det.get("t",0)} (gaps={ppi_det.get("fg",0)})']
     if _gap_bumped:
@@ -8088,8 +8088,9 @@ def _calculate_ppi(ticker, fav_side, dog_side):
 
     # PPI → depth rec (v8 — RESTORED 2026-04-28 after v10/v11/v12 lost ~$194 of edge in 3 days).
     # WALL threshold 90 (raised from 85): pristine book only.
-    # PRIME 55-89: workhorse 5c. TRAP/DEEP equal 7c, FLOOR 8c last stop.
-    if ppi >= 90: rec = 4                              # WALL: pristine book only
+    # WALL depth = 5c (was 4c in original v8): killed per 928-trade lifetime analysis
+    # (commit 0c13c22) — 4c lifetime +$0.004/trade @ 56% WR, WALL@4c -$14.57 @ 45% WR.
+    if ppi >= 90: rec = 5                              # WALL: pristine book only (5c — no 4c posts)
     elif ppi >= 55: rec = 5                            # PRIME: money zone workhorse
     elif ppi >= 45: rec = 7                            # TRAP: caution zone → 7c adverse-selection cushion
     elif ppi >= 40: rec = 7                            # DEEP: recovery buffer
@@ -8132,12 +8133,33 @@ _PHANTOM_DEATH_ZONE = {
 
 
 def _tennis_death_zone_check(match_data):
-    """Tennis death zone DISABLED 2026-04-26. 7d data: set-3 phantom trades (n=92)
-    netted +$49 / 65% WR — historically profitable. Death zone was blocking trades
-    that the data said were +EV. v10 PPI's S inversion + D cap should de-rate the
-    truly toxic clean-book set-3 setups; let the rest trade through.
-    Returns (False, '') always — disabled."""
-    return False, ''
+    """Tennis death zone = ENTIRE DECIDING SET (set 3 of BO3, set 5 of BO5).
+    RESTORED 2026-04-28: was disabled 2026-04-26 with rationale 'v10 PPI's S
+    inversion + D cap will catch toxic set-3 setups' — but PPI reverted to v8
+    so that rationale no longer holds. Peak performance days (Apr 23-24, +$87)
+    had this enabled alongside v8 PPI; restoring the working combo.
+
+    Fires once both players have won (sets_to_win - 1) sets — the current set
+    will end the match. Sets 1-2 of BO3 (sets 1-4 of BO5) never trigger, even
+    at match point: opponent can save and force the next set, so spike is
+    'blowout-style' not 'match-ending'.
+    Returns (True, reason) or (False, '')."""
+    scores = match_data.get('scores', [])
+    if not scores:
+        return False, ''
+    # Count completed sets (winning side has 6+ games with 2+ margin, or 7)
+    p1_sets = sum(1 for s in scores if _set_won(s, 'first'))
+    p2_sets = sum(1 for s in scores if _set_won(s, 'second'))
+    # BO3 vs BO5 (BO5 only at Grand Slams — infer from set count)
+    sets_to_win = 3 if (p1_sets >= 3 or p2_sets >= 3 or len(scores) > 3) else 2
+    # Deciding set = both players have won (sets_to_win - 1) sets
+    if p1_sets != sets_to_win - 1 or p2_sets != sets_to_win - 1:
+        return False, ''
+    cur = scores[-1]
+    g1 = int(float(cur.get('score_first', 0)))
+    g2 = int(float(cur.get('score_second', 0)))
+    set_label = 'set 5' if sets_to_win == 3 else 'set 3'
+    return True, f'{set_label} deciding (sets {p1_sets}-{p2_sets}, games {g1}-{g2})'
 
 
 def _tennis_blowout_check(match_data):
@@ -9652,17 +9674,26 @@ def _apex_mm_reconcile_inventory(bot_id, bot):
         _fl = [f for f in bot.get('_fill_log', []) if f.get('side') == 'yes' and not f.get('is_exit')]
         _fb = _fl[-1]['price'] if _fl else bot.get('midpoint', 50)
         _ec = _infer_orphan_cost(bot.get('yes_orders', {}), _m, _fb)
+        # Rebase total from prev_avg × prev_qty (bounded 0-99c × qty) not from
+        # bot['total_yes_cost'] which can be stale/corrupted from prior cycles.
+        # Prevents the "avg balloons past 99c" bug seen on ZECGER (avg=372c).
+        _prev_avg = bot.get('avg_yes_cost', 0) or 0
+        _prev_avg = min(99, max(0, _prev_avg))  # clamp to valid range
+        _new_total = (_prev_avg * _bot_yes) + (_ec * _m)
         bot['net_yes'] = _ky
-        bot['total_yes_cost'] = bot.get('total_yes_cost', 0) + (_ec * _m)
-        bot['avg_yes_cost'] = round(bot['total_yes_cost'] / _ky) if _ky > 0 else 0
+        bot['total_yes_cost'] = _new_total
+        bot['avg_yes_cost'] = round(_new_total / _ky) if _ky > 0 else 0
     if _kn > _bot_no:
         _m = _kn - _bot_no
         _fl = [f for f in bot.get('_fill_log', []) if f.get('side') == 'no' and not f.get('is_exit')]
         _fb = _fl[-1]['price'] if _fl else (100 - bot.get('midpoint', 50))
         _ec = _infer_orphan_cost(bot.get('no_orders', {}), _m, _fb)
+        _prev_avg = bot.get('avg_no_cost', 0) or 0
+        _prev_avg = min(99, max(0, _prev_avg))
+        _new_total = (_prev_avg * _bot_no) + (_ec * _m)
         bot['net_no'] = _kn
-        bot['total_no_cost'] = bot.get('total_no_cost', 0) + (_ec * _m)
-        bot['avg_no_cost'] = round(bot['total_no_cost'] / _kn) if _kn > 0 else 0
+        bot['total_no_cost'] = _new_total
+        bot['avg_no_cost'] = round(_new_total / _kn) if _kn > 0 else 0
     if _ky < _bot_yes:
         print(f'🛡️ RECONCILE CLAMP DOWN: {bot_id} YES {_bot_yes}→{_ky} (Kalshi authoritative)')
         bot['net_yes'] = _ky
@@ -10477,16 +10508,33 @@ def _apex_mm_walk_up(bot_id, bot):
     # returns the highest where OTHERS have depth.
     _market_best_bid = _apex_mm_market_best_bid(bot, exit_side)
     _max_profitable_price = max(1, 99 - avg_held)
-    _green_snap = min(_market_best_bid + 1, _max_profitable_price) if _market_best_bid > 0 else 0
-    # Skip snap-up when we're alone at the top (no real bidder to outbid) or
-    # the snap target isn't an improvement.
-    if live_combined <= 99 and _market_best_bid > 0 and _green_snap > current_price:
-        # Light gate to avoid amend spam during ws price oscillation (Kalshi
-        # rate limits) — 2s between snaps is plenty for a mover-style exit.
+    # Two snap modes:
+    #   A. Real bidder above us → snap to bid+1 (reclaim BBO immediately, 2s gate).
+    #   B. Alone at top with combined << 99c → time-gated walk-up creep toward
+    #      max_profitable_price (1c per APEX_MM_WALK_INTERVAL_BY_PHASE seconds).
+    #      Won't race self because each tick increments only 1c then waits the gate.
+    _snap_target = 0
+    _walk_iv = 2
+    _walk_mode = ''
+    if _market_best_bid > 0:
+        _bid_plus_one = min(_market_best_bid + 1, _max_profitable_price)
+        if _bid_plus_one > current_price:
+            _snap_target = _bid_plus_one
+            _walk_mode = f'bid+1 (real top {_market_best_bid}c)'
+            _walk_iv = 2
+    if _snap_target == 0 and live_combined <= 99 and current_price < _max_profitable_price:
+        # Walk-up creep — bot is alone at top OR market_best is at/below us.
+        # Phase-dependent cadence: pregame 30s, mid/early 8s, late 5s, end 3s, OT 2s.
+        _walk_iv = APEX_MM_WALK_INTERVAL_BY_PHASE.get(_phase, 8)
+        _snap_target = min(current_price + 1, _max_profitable_price)
+        _walk_mode = f'walk +1c ({_phase}, alone at top)'
+
+    if live_combined <= 99 and _snap_target > current_price:
+        # Phase-aware rate gate: bid+1 mode = 2s, walk-up creep = phase interval.
         _last_walk = bot.get('_last_walk_at', 0) or bot.get('_exit_soak_start', now)
-        if now - _last_walk < 2:
+        if now - _last_walk < _walk_iv:
             return
-        _walk_iv = 2  # log-only — kept for output formatting compatibility
+        _green_snap = _snap_target  # rename for downstream code reuse
         try:
             price_kwarg = {f'{exit_side}_price': _green_snap}
             api_rate_limiter.wait()
@@ -10502,11 +10550,13 @@ def _apex_mm_walk_up(bot_id, bot):
             bot['_exit_walk_count'] = bot.get('_exit_walk_count', 0) + (_green_snap - old_price)
             bot['_last_walk_at'] = now  # gate next step by regime interval
             _snap_combined = avg_held + _green_snap
-            print(f'💚 APEX MM SNAP-PROFIT: {bot_id} {exit_side.upper()} {old_price}→{_green_snap}c (combined={_snap_combined}c, +{100 - _snap_combined}c profit, bid={live_exit_bid}c, phase={_phase}, iv={_walk_iv:.0f}s)')
+            print(f'💚 APEX MM SNAP-PROFIT: {bot_id} {exit_side.upper()} {old_price}→{_green_snap}c (combined={_snap_combined}c, +{100 - _snap_combined}c profit, mode={_walk_mode}, iv={_walk_iv}s)')
             bot_log('APEX_MM_SNAP_PROFIT', bot_id, {
                 'old': old_price, 'new': _green_snap, 'bid': live_exit_bid,
+                'market_best': _market_best_bid,
                 'combined': _snap_combined, 'profit': 100 - _snap_combined,
-                'target': target_price, 'phase': _phase, 'walk_iv': _walk_iv,
+                'target': target_price, 'phase': _phase,
+                'walk_iv': _walk_iv, 'mode': _walk_mode,
             })
         except Exception as e:
             if 'filled' in str(e).lower():
@@ -16680,35 +16730,124 @@ def _handle_apex(bot_id, bot, actions):
         save_state()
         return
 
-    # ── INVENTORY SANITIZE: floor fractional residues to int ──
-    # Contracts are integer-only on Kalshi. Any fractional net_yes/net_no is a
-    # data-corruption residue (seen: 0.38 held after a round-trip). Floor it so
-    # < 1 contract → 0, preventing stuck exit orders + UI bar rendering when
-    # bot is effectively flat. Also zero the avg cost if net went to 0.
+    # ── INVENTORY SANITIZE: floor fractional residues, but ONLY if Kalshi
+    #    confirms the position is also zero. Kalshi reports position_fp as
+    #    fractional contracts (1 contract = 100 shares; partial fills land as
+    #    e.g. 0.66 = 66 shares). Naively flooring 0<x<1 → 0 abandoned real
+    #    fractional inventory (SEI orphan: bot zeroed 0.66 YES while Kalshi
+    #    still held 66 shares). Now: query Kalshi, only zero if Kalshi=0,
+    #    otherwise round to integer matching Kalshi truth (or keep float).
+    _need_kalshi_check = False
     for _s in ('yes', 'no'):
         _net = bot.get(f'net_{_s}', 0) or 0
         if _net != int(_net) or (0 < _net < 1):
-            _floored = int(_net) if _net >= 1 else 0
-            if _floored != _net:
-                print(f'🧹 APEX MM INV SANITIZE: {bot_id} net_{_s} {_net}→{_floored}')
-                bot[f'net_{_s}'] = _floored
-                if _floored == 0:
-                    bot[f'avg_{_s}_cost'] = 0
-                    bot[f'total_{_s}_cost'] = 0
-                    # Clear any stale exit order tied to this side going flat
-                    _stale_oid = bot.get(f'_{_s}_exit_oid')
-                    if _stale_oid:
-                        try:
-                            _safe_cancel(_stale_oid, f'apex_mm_flat_cleanup_{bot_id}')
-                        except Exception:
-                            pass
-                        bot[f'_{_s}_exit_oid'] = None
-                        print(f'🧹 APEX MM: cleared stale {_s} exit OID (inventory sanitized to 0)')
+            _need_kalshi_check = True
+            break
+    if _need_kalshi_check:
+        _kalshi_yes_real, _kalshi_no_real = None, None
+        try:
+            api_read_limiter.wait()
+            _pos_resp = kalshi_client.get_positions(ticker=ticker)
+            _plist = _pos_resp.get('market_positions', _pos_resp.get('positions', []))
+            for _p in _plist:
+                if _p.get('ticker') == ticker:
+                    _pf = float(_p.get('position_fp', '0'))
+                    _kalshi_yes_real = max(0, _pf)
+                    _kalshi_no_real = max(0, -_pf)
+                    break
+            if _kalshi_yes_real is None: _kalshi_yes_real, _kalshi_no_real = 0, 0
+        except Exception:
+            _kalshi_yes_real, _kalshi_no_real = None, None  # query failed — be conservative
+
+        for _s in ('yes', 'no'):
+            _net = bot.get(f'net_{_s}', 0) or 0
+            if _net == int(_net) and not (0 < _net < 1):
+                continue  # already integer, fine
+            _kalshi = _kalshi_yes_real if _s == 'yes' else _kalshi_no_real
+            # Conservative: if Kalshi query failed, keep current (don't risk wiping)
+            if _kalshi is None:
+                continue
+            if _kalshi >= 0.5:
+                # Kalshi confirms real fractional position — keep tracking it
+                # at the Kalshi-reported value rather than floor to 0.
+                if abs(_net - _kalshi) > 0.01:
+                    print(f'🧹 APEX MM INV ALIGN: {bot_id} net_{_s} {_net}→{_kalshi} (kalshi truth)')
+                    bot[f'net_{_s}'] = _kalshi
+                # Recompute total to match if missing
+                if (bot.get(f'total_{_s}_cost', 0) or 0) <= 0 and bot.get(f'avg_{_s}_cost', 0) > 0:
+                    bot[f'total_{_s}_cost'] = bot[f'avg_{_s}_cost'] * _kalshi
+            elif _kalshi == 0:
+                # Kalshi confirms zero — safe to zero out bot tracking too
+                print(f'🧹 APEX MM INV SANITIZE: {bot_id} net_{_s} {_net}→0 (kalshi confirms zero)')
+                bot[f'net_{_s}'] = 0
+                bot[f'avg_{_s}_cost'] = 0
+                bot[f'total_{_s}_cost'] = 0
+                _stale_oid = bot.get(f'_{_s}_exit_oid')
+                if _stale_oid:
+                    try: _safe_cancel(_stale_oid, f'apex_mm_flat_cleanup_{bot_id}')
+                    except Exception: pass
+                    bot[f'_{_s}_exit_oid'] = None
+                    print(f'🧹 APEX MM: cleared stale {_s} exit OID')
+            else:
+                # Kalshi shows < 0.5 — too small to track, zero it.
+                # (Kalshi's own dust thresholds round these out anyway.)
+                print(f'🧹 APEX MM INV SANITIZE: {bot_id} net_{_s} {_net}→0 (kalshi {_kalshi} below 0.5 threshold)')
+                bot[f'net_{_s}'] = 0
+                bot[f'avg_{_s}_cost'] = 0
+                bot[f'total_{_s}_cost'] = 0
     # If fully flat now, clear skew state so UI stops rendering exit artifacts
     if bot.get('net_yes', 0) == 0 and bot.get('net_no', 0) == 0:
         if bot.get('_skew_active') or bot.get('_skew_direction'):
             bot['_skew_active'] = False
             bot['_skew_direction'] = ''
+
+    # ── AVG-COST SANITY: clamp impossible avg costs (>99c is unreachable on
+    # Kalshi). When triggered, prefer Kalshi's actual cost basis
+    # (total_cost_dollars / total_traded_shares) over a live-bid guess so
+    # realized P&L stays accurate. ZECGER's +81c P&L drift came from using
+    # live_bid (6c) when Kalshi said the actual avg was higher.
+    _need_avg_sanity = any((bot.get(f'avg_{_s}_cost', 0) or 0) > 99 for _s in ('yes', 'no'))
+    if _need_avg_sanity:
+        # One Kalshi positions query covers both sides
+        _ksh_avg_yes, _ksh_avg_no = None, None
+        try:
+            api_read_limiter.wait()
+            _pos = kalshi_client.get_positions(ticker=ticker)
+            _pl = _pos.get('market_positions', _pos.get('positions', []))
+            for _p in _pl:
+                if _p.get('ticker') != ticker:
+                    continue
+                _pf = float(_p.get('position_fp', '0'))
+                _tcd = float(_p.get('total_traded_dollars', 0) or 0)  # cost basis for currently-held side
+                # Kalshi total_traded_dollars is in dollars; * 100 → cents.
+                # Position_fp is in contracts (fractional). Avg = cost / qty.
+                if _pf > 0 and abs(_pf) > 0.01:
+                    _ksh_avg_yes = (_tcd * 100) / _pf if _pf > 0 else 0
+                elif _pf < 0 and abs(_pf) > 0.01:
+                    _ksh_avg_no = (_tcd * 100) / abs(_pf) if _pf < 0 else 0
+                break
+        except Exception:
+            pass
+        for _s in ('yes', 'no'):
+            _avg = bot.get(f'avg_{_s}_cost', 0) or 0
+            _net = bot.get(f'net_{_s}', 0) or 0
+            if _avg <= 99:
+                continue
+            _ksh = _ksh_avg_yes if _s == 'yes' else _ksh_avg_no
+            if _ksh is not None and 1 <= _ksh <= 99:
+                _safe = round(_ksh, 2)
+                _src = 'kalshi'
+            else:
+                _live_bid = bot.get(f'live_{_s}_bid', 0) or 0
+                _safe = _live_bid if 1 <= _live_bid <= 99 else 50
+                _src = 'live_bid_fallback'
+            print(f'⚠ APEX MM AVG SANITIZE: {bot_id} avg_{_s}_cost={_avg}c (impossible) → {_safe}c via {_src}, total recomputed for net={_net}')
+            bot[f'avg_{_s}_cost'] = _safe
+            bot[f'total_{_s}_cost'] = _safe * _net
+            bot_log('APEX_MM_AVG_SANITIZE', bot_id, {
+                'side': _s, 'old_avg': _avg, 'new_avg': _safe,
+                'net': _net, 'source': _src,
+            }, level='WARN')
 
     # ── FLOAT PRECISION CLEANUP: round stored P&L + log qtys to 2 decimals ──
     # Kalshi fractional positions + float arithmetic produce values like

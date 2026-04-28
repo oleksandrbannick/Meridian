@@ -3857,10 +3857,11 @@ function displayOrderbookLadder(orderbook) {
     const roomCol = hedgeRoom >= 4 ? '#00ff88' : hedgeRoom >= 2 ? '#ffaa00' : '#ff4444';
     const roomLabel = hedgeRoom >= 4 ? 'wide spread' : hedgeRoom >= 2 ? 'ok spread' : 'tight — fav mirrors dog';
     let verdict = '', verdictCol = '';
-    // ── v8 depth ladder (RESTORED 2026-04-28). WALL=4c pristine only, PRIME=5c workhorse,
-    //    TRAP/DEEP=7c adverse-selection cushion, FLOOR=8c last stop, <35=KILL. ──
+    // ── v8 depth ladder (RESTORED 2026-04-28). WALL=5c pristine only (was 4c in original
+    //    v8, killed per 928-trade lifetime analysis), PRIME=5c workhorse, TRAP/DEEP=7c
+    //    adverse-selection cushion, FLOOR=8c last stop, <35=KILL. ──
     let _recDepth;
-    if (catchScore >= 90) _recDepth = 4;                                   // WALL: pristine book only
+    if (catchScore >= 90) _recDepth = 5;                                   // WALL: pristine book only (no 4c)
     else if (catchScore >= 55) _recDepth = 5;                              // PRIME: money zone workhorse
     else if (catchScore >= 45) _recDepth = 7;                              // TRAP: caution → 7c cushion
     else if (catchScore >= 40) _recDepth = 7;                              // DEEP: recovery buffer
@@ -3946,7 +3947,7 @@ function displayOrderbookLadder(orderbook) {
             PPI v8: <span style="color:#00ff88;">D 40</span> + <span style="color:#00ccff;">S 20</span> + <span style="color:#ffaa00;">T 15</span> ×100/75 · G shown for telemetry / depth-override
         </div>
         <div style="display:flex;flex-wrap:wrap;gap:4px 5px;margin-bottom:6px;font-size:9px;font-weight:700;justify-content:center;">
-            <span style="color:#00ff88;background:#00ff8815;padding:2px 6px;border-radius:4px;">90+ WALL 4¢</span>
+            <span style="color:#00ff88;background:#00ff8815;padding:2px 6px;border-radius:4px;">90+ WALL 5¢</span>
             <span style="color:#00ccff;background:#00ccff15;padding:2px 6px;border-radius:4px;">55+ PRIME 5¢</span>
             <span style="color:#ff8800;background:#ff880015;padding:2px 6px;border-radius:4px;">45+ TRAP 7¢</span>
             <span style="color:#ff6600;background:#ff660015;padding:2px 6px;border-radius:4px;">40+ DEEP 7¢</span>
@@ -4809,7 +4810,7 @@ function updateAnchorPreview() {
             const _ppiScore = _obCache.catchScore || 0;
             const _ppiTier = _obCache.ppiTier || (_ppiScore >= 90 ? 'WALL' : _ppiScore >= 55 ? 'PRIME' : _ppiScore >= 45 ? 'TRAP' : _ppiScore >= 40 ? 'DEEP' : _ppiScore >= 35 ? 'FLOOR' : 'KILL');
             const _ppiTierCol = _ppiScore >= 90 ? '#00ff88' : _ppiScore >= 55 ? '#00ccff' : _ppiScore >= 45 ? '#ff8800' : _ppiScore >= 40 ? '#ff6600' : _ppiScore >= 35 ? '#ff4400' : '#ff4444';
-            const _creBaseD = _ppiScore >= 90 ? 4 : _ppiScore >= 55 ? 5 : _ppiScore >= 45 ? 7 : _ppiScore >= 40 ? 7 : _ppiScore >= 35 ? 8 : 0;
+            const _creBaseD = _ppiScore >= 90 ? 5 : _ppiScore >= 55 ? 5 : _ppiScore >= 45 ? 7 : _ppiScore >= 40 ? 7 : _ppiScore >= 35 ? 8 : 0;
             const _creGapBump = recDepth > _creBaseD && _creBaseD > 0 ? ` <span style="color:#ff8800;font-size:9px;font-weight:700;">gaps→${recDepth}¢</span>` : '';
             depthRec = `<div style="margin-top:3px;padding:3px 6px;background:#ff66aa11;border:1px solid ${recCol}33;border-radius:4px;font-size:10px;">` +
                 `<span style="color:${_ppiTierCol};font-weight:700;">PPI ${_ppiScore} ${_ppiTier}</span>${_creGapBump} ` +

@@ -6005,14 +6005,17 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     bot['yes_fill_qty'] = bot['dog_fill_qty']
                 else:
                     bot['no_fill_qty'] = bot['dog_fill_qty']
-                # Cancel-race handler — defined once for both full-fill and partial-fill paths.
-                # Partial path: dog still has unfilled qty → cancel the live dog order.
-                # Full path: dog count_fp may exceed declared qty (Mar 2026 fractional rollout) or
-                # old reposted dog orders may still match → cancel anyway to slam the door.
-                # If extras come back, amend live fav up. If fav already fully filled,
-                # fire a supplemental hedge IMMEDIATELY at original fav_price instead of
-                # parking until PHANTOM_DOG_RECONCILE picks it up 60-120s later (by which
-                # time the fav bid has moved 20-40c against us).
+                # Cancel-race handler — used by partial-fill sweep path.
+                # Dog partially fills (e.g. 24/50), hedge fires for 24, cancel issued for
+                # the remaining 26. Between the hedge-fire and the cancel reaching Kalshi,
+                # 1+ more contracts can match (24 → 24.63). _safe_cancel returns
+                # ('filled', 24.63). Two outcomes:
+                #   - Fav still has unfilled qty: amend live fav up to 24.63 at original price.
+                #   - Fav already fully filled: fire a NEW supplemental hedge for the extras
+                #     at original fav_price (or live bid if better). Without this branch,
+                #     extras parked until PHANTOM_DOG_RECONCILE 60-120s later, by which
+                #     time fav bid had moved 20-40c — source of -98c, -862c late "orphan"
+                #     hedges (CHEROD-CHE today).
                 def _cancel_and_reconcile(oid, bot_id_ref=bot_id, partial_q=None, qty_bot_ref=qty_bot):
                     _result = _safe_cancel(oid, f'sweep_cancel_{bot_id_ref}')
                     if not (isinstance(_result, tuple) and _result[0] == 'filled'):
@@ -6108,17 +6111,8 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     # SPEED CRITICAL — hedge worker gets the job IMMEDIATELY, log after
                     bot['_hedge_fired'] = True
                     bot['dog_filled_at'] = time.time()
-                    bot['_partial_hedge_qty'] = qty_bot
                     bot['status'] = 'dog_filled'
                     _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
-                    # Slam the dog order shut — fractional fp residue or cancel-race fills
-                    # on a "fully filled" order otherwise leak in 60-120s later as orphans.
-                    _full_cancel_oid = bot.get('dog_order_id')
-                    if _full_cancel_oid:
-                        threading.Thread(target=_cancel_and_reconcile,
-                                         args=(_full_cancel_oid,),
-                                         kwargs={'partial_q': qty_bot},
-                                         daemon=True).start()
                     # Skip save_state — json.dump GIL contention blocks hedge worker (deferred to hedge fn line 3508)
                     break
                 elif bot['dog_fill_qty'] >= 1.0 and not bot.get('_hedge_fired'):

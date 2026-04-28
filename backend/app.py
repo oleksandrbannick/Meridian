@@ -8133,16 +8133,16 @@ _PHANTOM_DEATH_ZONE = {
 
 
 def _tennis_death_zone_check(match_data):
-    """Tennis death zone = ENTIRE DECIDING SET (set 3 of BO3, set 5 of BO5).
-    RESTORED 2026-04-28: was disabled 2026-04-26 with rationale 'v10 PPI's S
-    inversion + D cap will catch toxic set-3 setups' — but PPI reverted to v8
-    so that rationale no longer holds. Peak performance days (Apr 23-24, +$87)
-    had this enabled alongside v8 PPI; restoring the working combo.
+    """Tennis death zone = MATCH-ENDING MOMENTS in the deciding set only.
+    Fires ONLY when:
+      1. We're in the deciding set (set 3 of BO3, set 5 of BO5), AND
+      2. Either player has 5+ games (1 game from set/match win) OR set is in tiebreak
+    Does NOT trigger on the entire deciding set — early deciding-set games (0-0
+    to 4-4) trade through normally. Only the late-set window where a single
+    game can end the match is the death zone.
 
-    Fires once both players have won (sets_to_win - 1) sets — the current set
-    will end the match. Sets 1-2 of BO3 (sets 1-4 of BO5) never trigger, even
-    at match point: opponent can save and force the next set, so spike is
-    'blowout-style' not 'match-ending'.
+    Earlier sets (sets 1-2 of BO3, sets 1-4 of BO5) never trigger — opponent
+    can save and force the next set, so spike is 'blowout-style' not match-ending.
     Returns (True, reason) or (False, '')."""
     scores = match_data.get('scores', [])
     if not scores:
@@ -8158,8 +8158,12 @@ def _tennis_death_zone_check(match_data):
     cur = scores[-1]
     g1 = int(float(cur.get('score_first', 0)))
     g2 = int(float(cur.get('score_second', 0)))
+    # Match-ending moment: either side has 5+ games (1 game from set win = match win
+    # in deciding set) OR we're in a tiebreak (6-6 or 7-6/6-7 in progress).
+    if max(g1, g2) < 5:
+        return False, ''
     set_label = 'set 5' if sets_to_win == 3 else 'set 3'
-    return True, f'{set_label} deciding (sets {p1_sets}-{p2_sets}, games {g1}-{g2})'
+    return True, f'{set_label} match-ending ({g1}-{g2})'
 
 
 def _tennis_blowout_check(match_data):

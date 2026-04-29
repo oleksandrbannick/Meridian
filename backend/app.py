@@ -7212,19 +7212,24 @@ def _refresh_milestones_cache():
                 resp = kalshi_client.get_events(status='open', with_milestones=True, series_ticker=series)
                 milestones = resp.get('milestones', [])
                 events = resp.get('events', [])
+                # ITF uses single-letter codes ('P' = in progress, 'SCH' = scheduled,
+                # 'PP' = paused/postponed). ATP/WTA use long-form ('live', 'ended').
+                # Normalize so _is_milestone_live's status=='live' check works for both.
+                def _norm(s):
+                    return 'live' if s == 'P' else s
                 if not milestones:
                     print(f'🎾 DEBUG {series}: no milestones key. keys={list(resp.keys())[:5]}, events={len(events)}')
                     for ev in events:
                         ev_milestones = ev.get('milestones', [])
                         for ms in ev_milestones:
-                            ms_status = ms.get('details', {}).get('status', 'not_started')
+                            ms_status = _norm(ms.get('details', {}).get('status', 'not_started'))
                             start_date = ms.get('start_date', '')
                             et = ev.get('event_ticker', '')
                             if et:
                                 event_info[et] = {'status': ms_status, 'start_date': start_date}
                 else:
                     for m in milestones:
-                        ms_status = m.get('details', {}).get('status', 'not_started')
+                        ms_status = _norm(m.get('details', {}).get('status', 'not_started'))
                         start_date = m.get('start_date', '')
                         for et in m.get('related_event_tickers', []):
                             event_info[et] = {'status': ms_status, 'start_date': start_date}

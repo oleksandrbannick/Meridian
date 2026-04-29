@@ -4385,9 +4385,13 @@ class KalshiWSManager:
                             'ts':      _prev.get('ts', 0),
                             '_local_ts': time.time(),
                         }
-                        # Fire phantom snap-up on every BBO change. Ticker
-                        # events miss BBO moves that don't print trades.
+                        # Fire phantom snap-up AND drop on every BBO change.
+                        # Ticker events miss BBO moves that don't print trades —
+                        # drop has the self-exclusion logic that keeps us off
+                        # alone-at-bid, so it has to fire tick-by-tick too.
                         threading.Thread(target=_ws_phantom_instant_snap_up,
+                                         args=(ticker, yb, nb, ya, na), daemon=True).start()
+                        threading.Thread(target=_ws_phantom_instant_drop,
                                          args=(ticker, yb, nb, ya, na), daemon=True).start()
                     except Exception:
                         pass

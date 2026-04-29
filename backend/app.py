@@ -26492,10 +26492,28 @@ def get_live_kalshi_markets_endpoint():
         _refresh_milestones_cache()
 
         live_markets = []
+        _months = {'JAN':1,'FEB':2,'MAR':3,'APR':4,'MAY':5,'JUN':6,
+                   'JUL':7,'AUG':8,'SEP':9,'OCT':10,'NOV':11,'DEC':12}
+        _now = datetime.now(timezone.utc)
         for m in cached:
             ticker = m.get('ticker', '')
             sport = _detect_sport(ticker)
             if sport_filter and sport != sport_filter:
+                continue
+
+            # Date gate: ticker must encode a date that's roughly "now".
+            # Skips futures markets (KXNBAMVP-26-*, KXMARMAD-27-*) and
+            # future-dated games (May 1 EPL while it's Apr 29).
+            _dm = re.search(r'-(\d{2})([A-Z]{3})(\d{2})', ticker)
+            if not _dm:
+                continue
+            try:
+                _ev_date = datetime(2000+int(_dm.group(1)), _months[_dm.group(2)],
+                                    int(_dm.group(3)), 12, tzinfo=timezone.utc)
+                _hours = (_ev_date - _now).total_seconds() / 3600
+                if _hours > 12 or _hours < -36:
+                    continue
+            except (ValueError, KeyError):
                 continue
 
             is_live = False

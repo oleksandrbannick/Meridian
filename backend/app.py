@@ -7201,7 +7201,9 @@ def _refresh_milestones_cache():
     if not kalshi_client:
         return
     event_info = {}  # event_ticker → {status, start_date}
-    for i, series in enumerate(('KXATPCHALLENGERMATCH', 'KXWTACHALLENGERMATCH', 'KXATPMATCH', 'KXWTAMATCH')):
+    for i, series in enumerate(('KXATPCHALLENGERMATCH', 'KXWTACHALLENGERMATCH',
+                                'KXATPMATCH', 'KXWTAMATCH',
+                                'KXITFMATCH', 'KXITFWMATCH')):
         for attempt in range(2):
             try:
                 if i > 0 or attempt > 0:
@@ -24222,21 +24224,28 @@ def scan_arb_opportunities():
             # No ask data (total 198) → essentially 0
             liquidity = round(min(1.0, 2.0 / max(1, total_spread)), 3)
 
-            # ── Live game detection (use market data we already have) ─
+            # ── Live game detection ──────────────────────────────────
+            # Tennis: trust Kalshi milestones (covers ATP/WTA/ITF). Non-tennis:
+            # short expiration window heuristic. The old 20h tennis window
+            # was flagging pregame matches as live in the scanner.
             ticker_str = m.get('ticker', '')
             event_ticker = m.get('event_ticker', '')
             is_live = False
-            exp_str = m.get('expected_expiration_time', '')
-            if exp_str:
-                try:
-                    exp_time = datetime.fromisoformat(exp_str.replace('Z', '+00:00'))
-                    hours_until_exp = (exp_time - datetime.now(timezone.utc)).total_seconds() / 3600.0
-                    is_tennis = ticker_str.startswith('KXATP') or ticker_str.startswith('KXWTA')
-                    max_hours = 20.0 if is_tennis else 3.5
-                    if -0.5 < hours_until_exp < max_hours:
-                        is_live = True
-                except Exception:
-                    pass
+            is_tennis_scan = ticker_str.startswith(('KXATP', 'KXWTA', 'KXITF'))
+            if is_tennis_scan:
+                parts_t = ticker_str.split('-')
+                if len(parts_t) >= 2:
+                    is_live = (_get_milestone_status('-'.join(parts_t[:2])) == 'live')
+            else:
+                exp_str = m.get('expected_expiration_time', '')
+                if exp_str:
+                    try:
+                        exp_time = datetime.fromisoformat(exp_str.replace('Z', '+00:00'))
+                        hours_until_exp = (exp_time - datetime.now(timezone.utc)).total_seconds() / 3600.0
+                        if -0.5 < hours_until_exp < 3.5:
+                            is_live = True
+                    except Exception:
+                        pass
 
             # ── Game date & time ───────────────────────────────────
             game_date = _parse_game_date(event_ticker)

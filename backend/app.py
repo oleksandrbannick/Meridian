@@ -4671,8 +4671,33 @@ def _ws_phantom_retreat(ticker, yes_bid, no_bid):
             gap = dog_bid - dog_price
             # Retreat when bid is within 1¢ of our order (about to fill at bad price)
             if 0 <= gap <= 1:
-                # Amend to restore full depth — order stays live, same ID
-                new_price = max(1, dog_bid - depth)
+                _proposed_new_price = dog_bid - depth
+                # Price floor (2026-04-29): if retreat would clamp to 1c (proposed < 2),
+                # PULL the order instead of posting at 1c. Posting at 1c is fair-value
+                # adverse selection — phantom only profits from below-fair-value fills.
+                # Lets monitor-loop's price_floor recovery system re-arm when bid recovers.
+                if _proposed_new_price < 2:
+                    qty = bot.get('quantity', 1)
+                    def _retreat_floor_pull(oid, bot_id_ref=bot_id, _bid=dog_bid, _depth=depth):
+                        _result = _safe_cancel(oid, f'ws_retreat_floor_{bot_id_ref}')
+                        _b = active_bots.get(bot_id_ref)
+                        if not _b:
+                            return
+                        if isinstance(_result, tuple) and _result[0] == 'filled':
+                            # Cancel raced — order already filled. Let WS handler / reconcile catch it.
+                            return
+                        _b['dog_order_id'] = None
+                        _b['_price_floor_pulled'] = True
+                        _b['_price_floor_since'] = time.time()
+                        _b['_pull_reason'] = f'retreat below floor (bid {_bid}¢ - depth {_depth}¢ = post < 2¢)'
+                        bot_log('PHANTOM_WS_RETREAT_FLOOR_PULL', bot_id_ref, {
+                            'dog_bid': _bid, 'depth': _depth, 'proposed_price': _bid - _depth,
+                        }, level='WARN')
+                        save_state()
+                    threading.Thread(target=_retreat_floor_pull, args=(dog_order_id,), daemon=True).start()
+                    print(f'⏸ WS RETREAT FLOOR PULL: {bot_id} bid={dog_bid}¢ - depth={depth}¢ → would post < 2¢, pulling')
+                    continue
+                new_price = max(1, _proposed_new_price)  # safety floor (shouldn't hit after guard above)
                 if new_price >= dog_price:
                     continue  # can't go deeper, skip
                 qty = bot.get('quantity', 1)

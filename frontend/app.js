@@ -6070,13 +6070,16 @@ function _resetAutoBtnStyle(selected) {
     const autoBtn = document.querySelector('.mm-width-btn[data-width="auto"]');
     if (!autoBtn) return;
     if (selected) {
+        // Selected: bright green
         autoBtn.style.background = '#00ff8844';
         autoBtn.style.borderColor = '#00ff88';
         autoBtn.style.color = '#00ff88';
     } else {
-        autoBtn.style.background = '#00ff8818';
-        autoBtn.style.borderColor = '#00ff8866';
-        autoBtn.style.color = '#00ff88';
+        // Unselected: gray/dim like the numeric width buttons. Was previously
+        // green-tinted regardless of state, making it look perpetually selected.
+        autoBtn.style.background = 'transparent';
+        autoBtn.style.borderColor = '#1e2740';
+        autoBtn.style.color = '#556';
     }
 }
 
@@ -6360,7 +6363,10 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
     const _isSmartStopped = bot._smart_stopped;
     const _isDeathZone = bot._death_zone_stopped;
     const _isAwaitingSettlement = status === 'awaiting_settlement' || (status === 'completed' && bot.cross_market && !bot._positions_cleared);
-    const _isCompletedSummary = (status === 'completed' || status === 'stopped') || _isAwaitingSettlement || _isSmartStopped;
+    // Don't collapse to compact summary if hedge is still live — user needs to watch it fill.
+    // _smart_stopped + fav_hedge_posted/dog_filled = "stopping after this hedge fills" — show full view.
+    const _stillHedging = status === 'fav_hedge_posted' || status === 'dog_filled' || status === 'ladder_filled_no_fav';
+    const _isCompletedSummary = (status === 'completed' || status === 'stopped') || _isAwaitingSettlement || (_isSmartStopped && !_stillHedging);
     // Stop reason for header display
     let _stopReason = '';
     if (_isCompletedSummary) {
@@ -7083,12 +7089,26 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         // Order: YES always on left
         const leftBox = longSide === 'YES' ? entryBox : exitBox;
         const rightBox = longSide === 'YES' ? exitBox : entryBox;
+        // BBO state badge — shows whether bot is alone at top, queue-joined, or price-improving
+        let bboBadge = '';
+        const _bboState = bot._bbo_state;
+        const _marketBest = bot._bbo_market_best;
+        if (effExitPrice > 0 && _bboState) {
+            if (_bboState === 'alone') {
+                bboBadge = `<span style="background:#00ff8818;color:#00ff88;padding:1px 5px;border-radius:3px;font-size:8px;font-weight:700;" title="Bot is alone at top of book — setting BBO">ALONE</span>`;
+            } else if (_bboState === 'queue') {
+                bboBadge = `<span style="background:#ffaa0018;color:#ffaa00;padding:1px 5px;border-radius:3px;font-size:8px;font-weight:700;" title="Other bidder(s) at same price — queue-joined">QUEUE</span>`;
+            } else if (_bboState === 'bbo_plus_one') {
+                bboBadge = `<span style="background:#00d4ff18;color:#00d4ff;padding:1px 5px;border-radius:3px;font-size:8px;font-weight:700;" title="Price-improved past real top at ${_marketBest}c">BBO+1</span>`;
+            }
+        }
         positionBarHtml = `<div style="margin-bottom:8px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
                 <div style="display:flex;align-items:baseline;gap:8px;">
                     <span style="color:${headerOrderCol};font-weight:800;font-size:16px;">${combined}c</span>
                     ${liveCombined < 999 && !_zoneMerged ? `<span style="color:${headerLiveCol};font-size:11px;font-weight:700;">${liveCombined}c</span>` : ''}
                     ${walkBadge}
+                    ${bboBadge}
                 </div>
                 ${skewSec > 0 ? `<span style="color:#445;font-size:9px;">${timeStr}</span>` : ''}
             </div>

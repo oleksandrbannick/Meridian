@@ -4365,9 +4365,21 @@ class KalshiWSManager:
             if ticker:
                 ob = _get_or_create_orderbook(ticker)
                 top_changed = ob.update(msg)
-                # Record depth snapshot periodically for vanishing-liquidity detection
                 if top_changed:
                     ob.record_depth_snapshot()
+                    # Fire phantom snap-up on every BBO change. Ticker events
+                    # miss BBO moves that don't print trades (maker arrivals,
+                    # pulls, queue shifts) — leaving fav hedge stuck at the
+                    # old bid until the 2s monitor catches up.
+                    try:
+                        yb = ob.get_best_bid('yes')
+                        nb = ob.get_best_bid('no')
+                        ya = ob.get_best_ask('yes')
+                        na = ob.get_best_ask('no')
+                        threading.Thread(target=_ws_phantom_instant_snap_up,
+                                         args=(ticker, yb, nb, ya, na), daemon=True).start()
+                    except Exception:
+                        pass
             return
 
         if msg_type == 'ticker':

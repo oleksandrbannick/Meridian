@@ -15767,12 +15767,12 @@ def _handle_phantom(bot_id, bot, actions):
                 _supp_parent['_supplementals_merged'] = (_supp_parent.get('_supplementals_merged') or 0) + 1
                 # Audit row in trades.jsonl — flagged so display layers can ignore it
                 try:
-                    _audit = dict(_new_record)
-                    _audit['_supplemental_merged_into'] = _supp_parent.get('_trade_id')
-                    _audit['_parent_dog_price'] = dog_price
+                    _supp_audit_row = dict(_new_record)
+                    _supp_audit_row['_supplemental_merged_into'] = _supp_parent.get('_trade_id')
+                    _supp_audit_row['_parent_dog_price'] = dog_price
                     with _save_lock:
                         with open(TRADES_FILE, 'a') as _tf:
-                            _tf.write(json.dumps(_audit, default=str) + '\n')
+                            _tf.write(json.dumps(_supp_audit_row, default=str) + '\n')
                 except Exception as _te:
                     print(f'⚠ supplemental audit append failed: {_te}')
                 print(f'📊 PHANTOM SUPPLEMENTAL MERGE: {bot_id} +{qty:.2f}x @ {actual_fav_price}¢ → parent qty={_supp_parent["quantity"]:.2f} pnl={_merged_pnl:+.2f}c')

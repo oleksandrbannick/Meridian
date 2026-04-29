@@ -4367,15 +4367,26 @@ class KalshiWSManager:
                 top_changed = ob.update(msg)
                 if top_changed:
                     ob.record_depth_snapshot()
-                    # Fire phantom snap-up on every BBO change. Ticker events
-                    # miss BBO moves that don't print trades (maker arrivals,
-                    # pulls, queue shifts) — leaving fav hedge stuck at the
-                    # old bid until the 2s monitor catches up.
                     try:
                         yb = ob.get_best_bid('yes')
                         nb = ob.get_best_bid('no')
-                        ya = ob.get_best_ask('yes')
-                        na = ob.get_best_ask('no')
+                        ya = ob.get_best_ask('yes') or ((100 - nb) if nb > 0 else 0)
+                        na = ob.get_best_ask('no')  or ((100 - yb) if yb > 0 else 0)
+                        # Push BBO into ticker_cache so /api/bot/list (and the
+                        # bot card display) reflects orderbook moves, not just
+                        # trade prints. Without this the displayed bid lags up
+                        # to 2s behind the hedge.
+                        _prev = self.ticker_cache.get(ticker, {})
+                        self.ticker_cache[ticker] = {
+                            'yes_bid': yb, 'yes_ask': ya,
+                            'no_bid':  nb, 'no_ask':  na,
+                            'price':   _prev.get('price', 0),
+                            'volume':  _prev.get('volume', 0),
+                            'ts':      _prev.get('ts', 0),
+                            '_local_ts': time.time(),
+                        }
+                        # Fire phantom snap-up on every BBO change. Ticker
+                        # events miss BBO moves that don't print trades.
                         threading.Thread(target=_ws_phantom_instant_snap_up,
                                          args=(ticker, yb, nb, ya, na), daemon=True).start()
                     except Exception:
@@ -4901,24 +4912,6 @@ def _phantom_lock_for(bot_id):
     return lk
 
 
-def _fav_bid_excluding_self(ticker, fav_side, our_price, our_remaining_qty):
-    """Best bid on fav_side, excluding the bot's own resting order.
-    If depth at our_price <= our_remaining_qty, we're alone there — skip it and return
-    the next level down. Prevents 'self-bid' where our stale order IS the top of book
-    while the real market sits several cents below."""
-    lob = _local_orderbooks.get(ticker)
-    if not lob:
-        return 0
-    with lob._lock:
-        book = lob.yes if fav_side == 'yes' else lob.no
-        if not book:
-            return 0
-        for price, qty in sorted(book.items(), key=lambda x: -x[0]):
-            if price == our_price and qty <= our_remaining_qty:
-                continue
-            return price
-        return 0
-
 def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
     """Instant drop: if any phantom bot's hedge is above the fav bid, amend down immediately.
     Called on every WS price tick — must be fast. Only acts when price > bid (overpaying)."""
@@ -4941,73 +4934,6 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
         fav_bid = (yes_bid if fav_side == 'yes' else no_bid) if hedge_ticker == ticker else 0
         if fav_bid <= 0:
             continue
-
-        # ── Stranding drop ──────────────────────────────────────────────
-        # We ARE the bid (fav_price == fav_bid) but there's a meaningful
-        # gap below us to the next real bid. Defends against walk-up-then-
-        # cancel where ghost bidders push us up and leave us stranded.
-        # 3c gap threshold filters book breathing; 3s hysteresis filters
-        # HFT priority wars. Floor at _fav_bid_at_anchor so we only reclaim
-        # original margin, never chase a falling knife.
-        # IMPORTANT: only reset _alone_since when the GAP closes (someone joined),
-        # NOT on transient fav_price != fav_bid moments during snap-up amends —
-        # that race was wiping the 3s timer on every bid move.
-        _hedge_qty = bot.get('_active_fav_qty') or bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1))
-        _next_real = _fav_bid_excluding_self(hedge_ticker, fav_side, fav_price, _hedge_qty)
-        _gap = fav_price - _next_real if _next_real > 0 else 0
-        if fav_price == fav_bid and _gap >= 3:
-            if not bot.get('_alone_since'):
-                bot['_alone_since'] = time.time()
-                bot_log('PHANTOM_STRANDING_DETECTED', bot_id, {
-                    'fav_price': fav_price, 'next_real_bid': _next_real, 'gap': _gap,
-                })
-            elif time.time() - bot['_alone_since'] >= 3:
-                    _floor = bot.get('_fav_bid_at_anchor') or 0
-                    _drop_target = max(_next_real + 1, _floor)
-                    if _drop_target < fav_price and _phantom_lock_for(bot_id).acquire(blocking=False):
-                        try:
-                            _str_oid = bot.get('fav_order_id')
-                            if _str_oid:
-                                api_rate_limiter.wait(priority=True)
-                                _str_resp = kalshi_client.amend_order(_str_oid, ticker=hedge_ticker, side=fav_side,
-                                                                       count=_hedge_qty, **{f'{fav_side}_price': _drop_target})
-                                _str_ord = _str_resp.get('order', _str_resp) if isinstance(_str_resp, dict) else {}
-                                _str_new_oid = _str_ord.get('order_id', '')
-                                if _str_new_oid and _str_new_oid != _str_oid:
-                                    bot['fav_order_id'] = _str_new_oid
-                                    _str_hids = bot.setdefault('_all_hedge_order_ids', [])
-                                    if _str_oid not in _str_hids: _str_hids.append(_str_oid)
-                                    if _str_new_oid not in _str_hids: _str_hids.append(_str_new_oid)
-                                    if fav_side == 'yes':
-                                        bot['yes_order_id'] = _str_new_oid
-                                    else:
-                                        bot['no_order_id'] = _str_new_oid
-                                bot['fav_price'] = _drop_target
-                                if fav_side == 'yes':
-                                    bot['yes_price'] = _drop_target
-                                else:
-                                    bot['no_price'] = _drop_target
-                                bot['fav_last_walk_at'] = time.time()
-                                bot['fav_walk_count'] = bot.get('fav_walk_count', 0) + 1
-                                bot['_alone_since'] = None
-                                _str_dog_p = bot.get('dog_price', 0)
-                                print(f'⚡ WS PHANTOM STRANDING DROP: {bot_id} fav {fav_price}→{_drop_target}¢ (next_real={_next_real}¢ gap={_gap}¢ combined={_str_dog_p+_drop_target}¢)')
-                                bot_log('PHANTOM_WS_STRANDING_DROP', bot_id, {
-                                    'old_price': fav_price, 'new_price': _drop_target,
-                                    'next_real_bid': _next_real, 'gap': _gap,
-                                    'fav_anchor_floor': _floor,
-                                })
-                                save_state_throttled()
-                        except Exception as _str_e:
-                            if '404' not in str(_str_e):
-                                print(f'⚠ WS PHANTOM STRANDING DROP FAIL: {bot_id}: {_str_e}')
-                        finally:
-                            _phantom_lock_for(bot_id).release()
-                        continue
-            else:
-                bot['_alone_since'] = None
-        else:
-            bot['_alone_since'] = None
 
         # Stay parked at bid — even when alone at top of book.
         # Phantom is a speed play: queue priority compounds, oscillating
@@ -13352,6 +13278,8 @@ def get_actual_fill_price(order_id, side='yes', retries=2):
     Returns price in cents, or None if not available.
     Retries up to `retries` times with a short delay to handle Kalshi fill latency.
     """
+    if not order_id:
+        return None
     for attempt in range(retries + 1):
       try:
         api_read_limiter.wait()
@@ -14716,7 +14644,6 @@ def _handle_phantom(bot_id, bot, actions):
             bot['_dog_bid_at_pull'] = None
             bot['_sympathy_combined_at_pull'] = None
             bot['_fav_runaway_at_pull'] = None
-            bot['_alone_since'] = None
             print(f'🔧 SYMPATHY FLAG CLEAR: {bot_id} had stale _sympathy_pulled with live dog order — re-armed sympathy guard')
 
         # Game ending: cancel to free capital
@@ -16722,7 +16649,6 @@ def _handle_phantom(bot_id, bot, actions):
             bot['_dog_bid_at_pull'] = None
             bot['_sympathy_combined_at_pull'] = None
             bot['_fav_runaway_at_pull'] = None
-            bot['_alone_since'] = None
             bot['_price_floor_pulled'] = False
             bot['_pull_reason'] = None
             bot['_drift_pull_logged'] = False
@@ -26562,8 +26488,8 @@ def get_live_kalshi_markets_endpoint():
                 title = (m.get('title', '') + ' ' + ticker).upper()
                 is_live = any(abbr in title for abbr in live_abbrs)
 
-            # Fallback: expiration time heuristic
-            if not is_live:
+            # Fallback: expiration time heuristic — skipped for tennis (milestone-gated only)
+            if not is_live and not is_tennis:
                 exp = m.get('expected_expiration_time', '')
                 if exp:
                     try:

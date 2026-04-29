@@ -15698,7 +15698,31 @@ def _handle_phantom(bot_id, bot, actions):
             if dog_fill_at and not bot.get('hedge_fill_latency_ms'):
                 bot['hedge_fill_latency_ms'] = round((now - dog_fill_at) * 1000, 1)
 
-            _record_trade({
+            # ── Supplemental merge ─────────────────────────────────────
+            # Cancel-race fragments (tiny qty, same dog_price, same bot, within
+            # 5 min of last cycle) used to land as standalone trade rows — a
+            # 0.08-contract -$0.68 fee-eating loss next to a real +$1.20 win.
+            # Detect early and merge into the parent trade record in-place
+            # instead of writing a new row. trades.jsonl gets a flagged audit
+            # entry but the displayed trade_history shows the merged parent.
+            _rh_state = bot.get('_run_history') or []
+            _rh_last_state = _rh_state[-1] if _rh_state else None
+            _is_supp_completion = (
+                _rh_last_state is not None
+                and (now - (_rh_last_state.get('ts') or 0)) < 300
+                and _rh_last_state.get('dog_price') == dog_price
+            )
+            _supp_parent = None
+            if _is_supp_completion:
+                for _t in trade_history:
+                    if (_t.get('bot_id') == bot_id
+                        and _t.get('dog_price') == dog_price
+                        and (now - (_t.get('timestamp') or 0)) < 300
+                        and not _t.get('_supplemental_merged_into')):
+                        _supp_parent = _t
+                        break
+
+            _new_record = {
                 'bot_id': bot_id, 'ticker': ticker,
                 'yes_price': yes_p, 'no_price': no_p,
                 'quantity': qty,
@@ -15727,14 +15751,50 @@ def _handle_phantom(bot_id, bot, actions):
                 'cross_market': bot.get('cross_market', False),
                 'hedge_ticker': bot.get('hedge_ticker', ''),
                 'obi_at_fill': bot.get('_obi_at_fill'),
-            }, bot)
+            }
 
-            # Only update session P&L and mark recorded AFTER successful trade record
-            if net_pnl >= 0:
-                session_pnl['gross_profit_cents'] += net_pnl
+            if _supp_parent is not None:
+                # Merge into parent record in-place (UI reads trade_history)
+                _old_qty = _supp_parent.get('quantity') or 0
+                _old_fee = _supp_parent.get('fee_cents') or 0
+                _old_pnl = (_supp_parent.get('profit_cents') or 0) - (_supp_parent.get('loss_cents') or 0)
+                _merged_pnl = _old_pnl + net_pnl
+                _supp_parent['quantity'] = _old_qty + qty
+                _supp_parent['fee_cents'] = _old_fee + fee
+                _supp_parent['profit_cents'] = _merged_pnl if _merged_pnl >= 0 else 0
+                _supp_parent['loss_cents'] = abs(_merged_pnl) if _merged_pnl < 0 else 0
+                _supp_parent['result'] = 'completed' if _merged_pnl >= 0 else 'arb_loss'
+                _supp_parent['_supplementals_merged'] = (_supp_parent.get('_supplementals_merged') or 0) + 1
+                # Audit row in trades.jsonl — flagged so display layers can ignore it
+                try:
+                    _audit = dict(_new_record)
+                    _audit['_supplemental_merged_into'] = _supp_parent.get('_trade_id')
+                    _audit['_parent_dog_price'] = dog_price
+                    with _save_lock:
+                        with open(TRADES_FILE, 'a') as _tf:
+                            _tf.write(json.dumps(_audit, default=str) + '\n')
+                except Exception as _te:
+                    print(f'⚠ supplemental audit append failed: {_te}')
+                print(f'📊 PHANTOM SUPPLEMENTAL MERGE: {bot_id} +{qty:.2f}x @ {actual_fav_price}¢ → parent qty={_supp_parent["quantity"]:.2f} pnl={_merged_pnl:+.2f}c')
+                bot_log('PHANTOM_TRADE_SUPPLEMENTAL_MERGE', bot_id, {
+                    'parent_trade_id': _supp_parent.get('_trade_id'),
+                    'added_qty': qty, 'added_pnl': net_pnl, 'added_fee': fee,
+                    'parent_total_qty': _supp_parent['quantity'],
+                    'parent_total_pnl': _merged_pnl,
+                })
+                # Session P&L: add only the delta — parent already counted
+                if net_pnl >= 0:
+                    session_pnl['gross_profit_cents'] += net_pnl
+                else:
+                    session_pnl['gross_loss_cents'] += abs(net_pnl)
+                # Don't bump completed_bots — parent already counted
             else:
-                session_pnl['gross_loss_cents'] += abs(net_pnl)
-            session_pnl['completed_bots'] += 1
+                _record_trade(_new_record, bot)
+                if net_pnl >= 0:
+                    session_pnl['gross_profit_cents'] += net_pnl
+                else:
+                    session_pnl['gross_loss_cents'] += abs(net_pnl)
+                session_pnl['completed_bots'] += 1
             bot['_trade_recorded'] = True
             bot_log('ANCHOR_COMPLETE', bot_id, {
                 'dog': dog_price, 'fav': actual_fav_price,

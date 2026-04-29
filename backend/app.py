@@ -4912,9 +4912,29 @@ def _phantom_lock_for(bot_id):
     return lk
 
 
+def _fav_bid_excluding_self(ticker, fav_side, our_price, our_remaining_qty):
+    """Best bid on fav_side, excluding the bot's own resting order.
+    If depth at our_price <= our_remaining_qty, we're alone there — skip it and return
+    the next level down. Prevents 'self-bid' where our stale order IS the top of book
+    while the real market sits several cents below."""
+    lob = _local_orderbooks.get(ticker)
+    if not lob:
+        return 0
+    with lob._lock:
+        book = lob.yes if fav_side == 'yes' else lob.no
+        if not book:
+            return 0
+        for price, qty in sorted(book.items(), key=lambda x: -x[0]):
+            if price == our_price and qty <= our_remaining_qty:
+                continue
+            return price
+        return 0
+
+
 def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
-    """Instant drop: if any phantom bot's hedge is above the fav bid, amend down immediately.
-    Called on every WS price tick — must be fast. Only acts when price > bid (overpaying)."""
+    """Instant drop: if any phantom bot's hedge is above the effective (non-self) bid,
+    amend down immediately. Called on every WS price tick — must be fast.
+    Self-exclusion: when we're alone at fav_bid, the real market is one level down."""
     for bot_id, bot in list(active_bots.items()):
         if bot.get('bot_category') != 'anchor_dog':
             continue
@@ -4935,16 +4955,21 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
         if fav_bid <= 0:
             continue
 
-        # Stay parked at bid — even when alone at top of book.
-        # Phantom is a speed play: queue priority compounds, oscillating
-        # off-bid (self-alone drop) → on-bid (snap up) shreds priority and
-        # rarely ends up filled. Drop only when an external bid genuinely
-        # below fav_price appears (i.e., our order is above the highest bid).
-        if fav_price <= fav_bid:
+        # Self-exclusion: if we're alone at fav_bid, the "bid" we see is just our own
+        # order — real market bid is the next level down. Walk the book to find it.
+        _fav_fills = bot.get('fav_fill_qty', 0)
+        _bot_qty = bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1))
+        _remaining = max(1, _bot_qty - _fav_fills)
+        effective_bid = _fav_bid_excluding_self(hedge_ticker, fav_side, fav_price, _remaining)
+        if effective_bid <= 0:
+            effective_bid = fav_bid  # fallback to WS bid if orderbook unavailable
+
+        # Only drop if hedge is ABOVE the effective (non-self) bid
+        if fav_price <= effective_bid:
             continue
 
         fav_ask_now = yes_ask if fav_side == 'yes' else no_ask
-        drop_target = fav_bid
+        drop_target = effective_bid
 
         if drop_target <= 0 or drop_target >= fav_price:
             continue
@@ -4986,10 +5011,12 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 bot['no_price'] = drop_target
             bot['fav_last_walk_at'] = time.time()
             bot['fav_walk_count'] = bot.get('fav_walk_count', 0) + 1
-            print(f'⚡ WS PHANTOM DROP: {bot_id} fav {fav_price}→{drop_target}¢ (bid={fav_bid}¢)')
+            _alone_tag = ' SELF-ALONE' if effective_bid < fav_bid else ''
+            print(f'⚡ WS PHANTOM DROP: {bot_id} fav {fav_price}→{drop_target}¢ (bid={fav_bid}¢, effective={effective_bid}¢{_alone_tag})')
             bot_log('PHANTOM_WS_INSTANT_DROP', bot_id, {
                 'old_price': fav_price, 'new_price': drop_target,
                 'fav_bid': fav_bid, 'fav_ask': fav_ask_now,
+                'effective_bid': effective_bid, 'self_alone': effective_bid < fav_bid,
             })
             save_state_throttled()
         except Exception as e:

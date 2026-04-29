@@ -5779,9 +5779,13 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
             net_held = abs(net_yes - net_no)
             snap_price = 0
             snap_dir = ''
-            if exit_bid < current_price:
-                # Snap-down — chase cheaper exit price (more profit)
-                snap_price = max(1, exit_bid)
+            # Use market-best (excludes own resting exit) for snap-down too —
+            # if we're alone above demand, exit_bid (WS cache) shows our own
+            # price and snap-down never fires. Same fix as the monitor walker.
+            _ws_real_top = _apex_mm_market_best_bid(bot, exit_side)
+            if _ws_real_top > 0 and _ws_real_top < current_price:
+                # Snap-down — real top below us, follow it for better fill
+                snap_price = max(1, _ws_real_top)
                 snap_dir = 'DOWN'
             elif exit_bid > current_price:
                 # Snap-up — bid moved above us (regime shift); reclaim BBO by posting
@@ -10493,9 +10497,11 @@ def _apex_mm_walk_up(bot_id, bot):
     # While in soak AND profitable/breakeven, hold at target. Let it fill.
     # Only bypass soak when underwater (combined > 100) — need to walk to wall.
     if age < SOAK_SECONDS and live_combined <= 100:
-        # Even during soak, follow bid DOWN for better profit (snap-back)
-        if live_exit_bid < current_price and live_exit_bid > 0:
-            snap_price = max(1, live_exit_bid)
+        # Even during soak, follow real top DOWN (excluding own — same own-order
+        # racing fix as the post-soak path).
+        _soak_real_top = _apex_mm_market_best_bid(bot, exit_side)
+        if _soak_real_top > 0 and _soak_real_top < current_price:
+            snap_price = max(1, _soak_real_top)
             try:
                 price_kwarg = {f'{exit_side}_price': snap_price}
                 api_rate_limiter.wait()
@@ -10508,8 +10514,8 @@ def _apex_mm_walk_up(bot_id, bot):
                 bot['_exit_price'] = snap_price
                 bot['_wall_parked'] = False
                 # No soak reset — follow price freely
-                print(f'📊 APEX MM SNAP-BACK (soak): {bot_id} {exit_side.upper()} {current_price}→{snap_price}c (bid improved, combined={avg_held + snap_price}c)')
-                bot_log('APEX_MM_SNAP_BACK', bot_id, {'old': current_price, 'new': snap_price, 'bid': live_exit_bid, 'combined': avg_held + snap_price, 'in_soak': True})
+                print(f'📊 APEX MM SNAP-BACK (soak): {bot_id} {exit_side.upper()} {current_price}→{snap_price}c (real top {_soak_real_top}c, combined={avg_held + snap_price}c)')
+                bot_log('APEX_MM_SNAP_BACK', bot_id, {'old': current_price, 'new': snap_price, 'real_top': _soak_real_top, 'combined': avg_held + snap_price, 'in_soak': True})
             except Exception as e:
                 if 'filled' in str(e).lower():
                     print(f'⚡ APEX MM SNAP-BACK FILLED (soak): {bot_id}')
@@ -10525,9 +10531,15 @@ def _apex_mm_walk_up(bot_id, bot):
             bot['_exit_soak_start'] = now  # one extension, capped by MAX_SOAK_SECONDS
         return
 
-    # ── SNAP-BACK: bid improved, follow it down for better fill ──
-    if live_exit_bid < current_price:
-        snap_price = max(1, live_exit_bid)
+    # ── SNAP-BACK: real top dropped below us, follow it down for better fill ──
+    # CRITICAL: live_exit_bid (WS cache) INCLUDES our own resting exit. When
+    # we're alone at top with real bidders far below, live_exit_bid = our own
+    # price → live_exit_bid < current_price never triggers, bot sits high
+    # forever above demand. Use _apex_mm_market_best_bid which walks LOB
+    # excluding own contribution. If real top is below us, snap down to it.
+    _real_top_for_snapback = _apex_mm_market_best_bid(bot, exit_side)
+    if _real_top_for_snapback > 0 and _real_top_for_snapback < current_price:
+        snap_price = max(1, _real_top_for_snapback)
         try:
             price_kwarg = {f'{exit_side}_price': snap_price}
             api_rate_limiter.wait()
@@ -10539,11 +10551,8 @@ def _apex_mm_walk_up(bot_id, bot):
                 bot[f'_{exit_side}_exit_oid'] = _new_oid
             bot['_exit_price'] = snap_price
             bot['_wall_parked'] = False
-            # Never reset soak on snap-back — soak is a one-time patience window.
-            # If price drops to 35c and rebounds to 44c, we want to follow it back up
-            # immediately, not sit at 35c for 25s while the market runs away.
-            print(f'📊 APEX MM SNAP-BACK: {bot_id} {exit_side.upper()} {current_price}→{snap_price}c (bid improved, combined={avg_held + snap_price}c)')
-            bot_log('APEX_MM_SNAP_BACK', bot_id, {'old': current_price, 'new': snap_price, 'bid': live_exit_bid, 'combined': avg_held + snap_price})
+            print(f'📊 APEX MM SNAP-BACK: {bot_id} {exit_side.upper()} {current_price}→{snap_price}c (real top {_real_top_for_snapback}c, was alone above demand, combined={avg_held + snap_price}c)')
+            bot_log('APEX_MM_SNAP_BACK', bot_id, {'old': current_price, 'new': snap_price, 'real_top': _real_top_for_snapback, 'combined': avg_held + snap_price})
         except Exception as e:
             if 'filled' in str(e).lower():
                 print(f'⚡ APEX MM SNAP-BACK FILLED: {bot_id}')

@@ -10273,9 +10273,17 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
         # Re-read cost basis — concurrent WS fills may have shifted avg since top of function
         _fallback_cost = midpoint if held_side == 'yes' else (100 - midpoint)
         avg_held = bot.get(f'avg_{held_side}_cost') or _fallback_cost
-        net_held = abs(bot.get('net_yes', 0) - bot.get('net_no', 0))
+        _net_held_raw = abs(bot.get('net_yes', 0) - bot.get('net_no', 0))
+        # FLOOR fractional inventory before posting exit. ZECGER had 1.67 NO →
+        # buy_opp tried count=2 YES (ceil) → Kalshi 400'd it (likely position
+        # limit or self-match). Floor to 1 → close 1 clean arb pair, leave 0.67
+        # fractional residue to settle binary or get cleaned up via reconcile.
+        # Skip post entirely if floor=0 (only fractional held).
+        net_held = int(_net_held_raw)
         if net_held <= 0:
-            return  # went flat during processing
+            if _net_held_raw > 0:
+                print(f'⚠ APEX MM EXIT FRACTIONAL ONLY: {bot_id} held={_net_held_raw:.3f} (< 1 contract) — skipping exit post, will settle binary')
+            return  # went flat or only fractional residue
 
         # Calculate exit price: breakeven with profit target (half width).
         # Lock exit width on first acquisition so entry-side auto-width can shrink
@@ -10284,6 +10292,16 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
             bot['_exit_locked_width'] = bot.get('start_gap', 4) * 2
         width = bot['_exit_locked_width']
         exit_price = max(1, min(98, 100 - avg_held - width))
+        # CLAMP target below market ask: post_only buy at price >= ask is rejected
+        # by Kalshi (would cross). ZECGER hit this — wanted YES@71c but YES ask
+        # was 56c. create_order_maker only retries 2 steps (71→70→69), can't reach
+        # 55c needed. Use live ask cache to bound target at ask-1.
+        _ask_key = f'live_{exit_side}_ask'
+        _live_ask = bot.get(_ask_key, 0) or 0
+        if 1 < _live_ask <= 99 and exit_price >= _live_ask:
+            _capped_price = max(1, _live_ask - 1)
+            print(f'📐 APEX MM EXIT TARGET CLAMP: {bot_id} target {exit_price}c >= ask {_live_ask}c → {_capped_price}c (avoid post_only reject)')
+            exit_price = _capped_price
         exit_oid = bot.get(f'_{exit_side}_exit_oid')
         price_kwarg = {f'{exit_side}_price': exit_price}
 
@@ -10515,23 +10533,62 @@ def _apex_mm_walk_up(bot_id, bot):
     # Two snap modes:
     #   A. Real bidder above us → snap to bid+1 (reclaim BBO immediately, 2s gate).
     #   B. Alone at top with combined << 99c → time-gated walk-up creep toward
-    #      max_profitable_price (1c per APEX_MM_WALK_INTERVAL_BY_PHASE seconds).
-    #      Won't race self because each tick increments only 1c then waits the gate.
+    #      max_profitable_price. Cadence accelerates the longer we sit:
+    #        0-60s post-soak:   base interval (30s for default phase)
+    #        60-180s:           base/2  (15s)
+    #        180-300s:          base/3  (10s)
+    #        300s+:             base/4  (7s, capped at floor of 2s)
+    #      Logic: if market hasn't come back to fill us by now, walk faster to
+    #      capture profit before bid drops further.
     _snap_target = 0
     _walk_iv = 2
     _walk_mode = ''
+    _bbo_state = 'unknown'
     if _market_best_bid > 0:
         _bid_plus_one = min(_market_best_bid + 1, _max_profitable_price)
         if _bid_plus_one > current_price:
             _snap_target = _bid_plus_one
             _walk_mode = f'bid+1 (real top {_market_best_bid}c)'
             _walk_iv = 2
-    if _snap_target == 0 and live_combined <= 99 and current_price < _max_profitable_price:
-        # Walk-up creep — bot is alone at top OR market_best is at/below us.
-        # Phase-dependent cadence: pregame 30s, mid/early 8s, late 5s, end 3s, OT 2s.
-        _walk_iv = APEX_MM_WALK_INTERVAL_BY_PHASE.get(_phase, 8)
+            _bbo_state = 'bbo_plus_one'
+        elif _market_best_bid == current_price:
+            # Same price as real top — queue-joined behind/with them
+            _bbo_state = 'queue'
+        else:
+            # Real top is below us, we're above
+            _bbo_state = 'alone'
+    else:
+        _bbo_state = 'alone'
+    # Walk-up creep: only fires when real demand exists AND we're within headroom
+    # of it. Without this gate, alone-at-top bots walk themselves toward 99c
+    # combined regardless of whether there's anyone willing to buy.
+    # _market_best_bid == 0  → no real bidders at all, no demand → hold
+    # gap > WALK_HEADROOM    → we've outrun the real top → hold
+    # gap <= WALK_HEADROOM   → close enough to demand, walk +1c to test
+    APEX_MM_WALK_HEADROOM_C = 2
+    if _snap_target == 0 and live_combined <= 99 and current_price < _max_profitable_price \
+       and _market_best_bid > 0 and current_price <= _market_best_bid + APEX_MM_WALK_HEADROOM_C:
+        # Walk-up creep with progressive acceleration based on dwell time.
+        _walk_iv_base = APEX_MM_WALK_INTERVAL_BY_PHASE.get(_phase, 8)
+        _walk_age = now - (bot.get('_exit_soak_start') or bot.get('_exit_posted_at', now))
+        if _walk_age > 300:
+            _walk_iv = max(2, _walk_iv_base // 4)
+            _accel = '4x'
+        elif _walk_age > 180:
+            _walk_iv = max(2, _walk_iv_base // 3)
+            _accel = '3x'
+        elif _walk_age > 60:
+            _walk_iv = max(2, _walk_iv_base // 2)
+            _accel = '2x'
+        else:
+            _walk_iv = _walk_iv_base
+            _accel = '1x'
         _snap_target = min(current_price + 1, _max_profitable_price)
-        _walk_mode = f'walk +1c ({_phase}, alone at top)'
+        _walk_mode = f'walk +1c ({_phase} {_accel}, +{current_price - _market_best_bid}c above real top, age={_walk_age:.0f}s)'
+
+    # Expose BBO state for UI (read by frontend to render ALONE / JOIN / BBO+1 badge)
+    bot['_bbo_state'] = _bbo_state
+    bot['_bbo_market_best'] = _market_best_bid
 
     if live_combined <= 99 and _snap_target > current_price:
         # Phase-aware rate gate: bid+1 mode = 2s, walk-up creep = phase interval.
@@ -11795,6 +11852,66 @@ def _apex_mm_exit_tick(bot_id, bot):
     now = time.time()
     ticker = bot['ticker']
     all_sold = True
+
+    # ── PERIODIC KALSHI-TRUTH CLAMP (every 30s) ──
+    # mm_exiting bots stay in this status until exits fill or kalshi confirms zero
+    # position. begin_exit's clamp only runs once at entry. Without periodic
+    # re-check, bots stay stuck forever after their underlying market settled
+    # (positions cleared on Kalshi side but bot still tracks them).
+    # Pulls Kalshi position; clamps bot.net_X down + completes if both zero.
+    if now - bot.get('_last_exit_clamp', 0) >= 30:
+        bot['_last_exit_clamp'] = now
+        try:
+            api_read_limiter.wait()
+            _pos = kalshi_client.get_positions(ticker=ticker)
+            _pl = _pos.get('market_positions', _pos.get('positions', []))
+            _ksh_y, _ksh_n = 0, 0
+            for _p in _pl:
+                if _p.get('ticker') == ticker:
+                    _pf = float(_p.get('position_fp', '0'))
+                    _ksh_y = max(0, _pf)
+                    _ksh_n = max(0, -_pf)
+                    break
+            _bot_y = bot.get('net_yes', 0) or 0
+            _bot_n = bot.get('net_no', 0) or 0
+            # Clamp DOWN if bot tracks more than Kalshi has (cancel-race ghost or settled)
+            if _bot_y > _ksh_y:
+                print(f'🛡️ APEX MM EXIT TICK CLAMP: {bot_id} net_yes {_bot_y}→{_ksh_y}')
+                bot['net_yes'] = _ksh_y
+                if _ksh_y == 0:
+                    bot['avg_yes_cost'] = 0
+                    bot['total_yes_cost'] = 0
+            if _bot_n > _ksh_n:
+                print(f'🛡️ APEX MM EXIT TICK CLAMP: {bot_id} net_no {_bot_n}→{_ksh_n}')
+                bot['net_no'] = _ksh_n
+                if _ksh_n == 0:
+                    bot['avg_no_cost'] = 0
+                    bot['total_no_cost'] = 0
+            # If Kalshi says zero on both sides → bot has nothing to exit, complete
+            if _ksh_y == 0 and _ksh_n == 0:
+                # Cancel any live exit orders before completing
+                for _eo_key in ('_yes_exit_oid', '_no_exit_oid'):
+                    _eo = bot.get(_eo_key)
+                    if _eo:
+                        try: _safe_cancel(_eo, f'apex_mm_exit_complete_{bot_id}')
+                        except Exception: pass
+                        bot[_eo_key] = None
+                for _info in (bot.get('_exit_sell_oids') or {}).values():
+                    _eo = _info.get('oid') if _info else None
+                    if _eo:
+                        try: _safe_cancel(_eo, f'apex_mm_exit_complete_{bot_id}')
+                        except Exception: pass
+                        _info['oid'] = None
+                bot['status'] = 'completed'
+                bot['completed_at'] = now
+                bot['_market_settled_at'] = now
+                bot['_smart_stop_reason'] = 'final'
+                print(f'✅ APEX MM EXIT TICK COMPLETE: {bot_id} kalshi shows 0/0 — completing')
+                bot_log('APEX_MM_EXIT_TICK_COMPLETE', bot_id, {'reason': 'kalshi zero'})
+                save_state()
+                return
+        except Exception:
+            pass
 
     # ── FLIP TO BUY-OPPOSITE: if sell-held is stuck but buy-opp @ bid is profitable, switch ──
     # In wide markets (50c+ spread) a sell-held at the ask waits for someone to cross the whole
@@ -16324,6 +16441,25 @@ def _handle_phantom(bot_id, bot, actions):
                         print(f'⚠ NO MARKET cancel error: {bot_id} {_nm_e}')
                     if isinstance(_nm_result, tuple) and _nm_result[0] == 'filled':
                         _nm_fills = _nm_result[1]
+                        # Ghost-hedge guard (2026-04-29): if the bot has already
+                        # recorded a trade for the current cycle (`_trade_recorded`)
+                        # OR is in a post-completion status, the cancel-race fills
+                        # are STALE — they belong to the just-completed cycle and
+                        # were already hedged. Firing a hedge here would double-buy
+                        # fav at 99c+ on already-balanced inventory (CHEROD-CHE
+                        # -$8.62, WATITO-WAT, SEMOHX-SEM, RENYUX-YUX bug pattern).
+                        if bot.get('_trade_recorded') or bot.get('status') in (
+                            'completed', 'waiting_repeat', 'stopped',
+                        ):
+                            bot_log('PHANTOM_NO_MARKET_FILL_SKIP', bot_id, {
+                                'reason': 'cycle_already_completed',
+                                'stale_fills': _nm_fills,
+                                'status': bot.get('status'),
+                                '_trade_recorded': bool(bot.get('_trade_recorded')),
+                            }, level='WARN')
+                            print(f'🛡️ NO MARKET GHOST GUARD: {bot_id} {_nm_fills} stale fills on cancel — skipping (cycle done)')
+                            save_state()
+                            return
                         with ws_fill_lock:
                             if bot.get('_hedge_fired'):
                                 save_state()
@@ -16800,10 +16936,28 @@ def _handle_apex(bot_id, bot, actions):
                 bot[f'avg_{_s}_cost'] = 0
                 bot[f'total_{_s}_cost'] = 0
     # If fully flat now, clear skew state so UI stops rendering exit artifacts
+    # AND clear stale side-pause flags. Side pauses are inventory-management
+    # only — meaningless when holding nothing. Without this, a bot that hit
+    # inventory limit on one side can stay paused after RT closes, causing
+    # one-sided posting on a flat bot (SEIJON: held NO → YES paused → RT
+    # closed → flat but YES still paused). Also clears any stale exit OIDs
+    # left over from earlier closed positions.
     if bot.get('net_yes', 0) == 0 and bot.get('net_no', 0) == 0:
         if bot.get('_skew_active') or bot.get('_skew_direction'):
             bot['_skew_active'] = False
             bot['_skew_direction'] = ''
+        if bot.get('_yes_side_paused') or bot.get('_no_side_paused'):
+            print(f'🧹 APEX MM PAUSE CLEAR: {bot_id} flat — clearing stale side pauses (was y={bot.get("_yes_side_paused")} n={bot.get("_no_side_paused")})')
+            bot['_yes_side_paused'] = False
+            bot['_no_side_paused'] = False
+        # Clear stale exit OIDs that never got cleaned up after RT close
+        for _exit_side in ('yes', 'no'):
+            _stale_oid = bot.get(f'_{_exit_side}_exit_oid')
+            if _stale_oid:
+                try: _safe_cancel(_stale_oid, f'apex_mm_flat_stale_exit_{bot_id}')
+                except Exception: pass
+                bot[f'_{_exit_side}_exit_oid'] = None
+                print(f'🧹 APEX MM: cleared stale {_exit_side} exit OID on flat bot')
 
     # ── AVG-COST SANITY: clamp impossible avg costs (>99c is unreachable on
     # Kalshi). When triggered, prefer Kalshi's actual cost basis
@@ -16952,6 +17106,36 @@ def _handle_apex(bot_id, bot, actions):
     if now - bot.get('_last_reconcile', 0) >= 60:
         bot['_last_reconcile'] = now
         _apex_mm_reconcile_inventory(bot_id, bot)
+
+    # ── P&L KALSHI-TRUTH SYNC: 60s cadence, ground bot's realized_pnl_cents
+    # to Kalshi's authoritative realized_pnl_dollars per ticker. Without this,
+    # cost-basis sanitize events (avg→clamp) cause drift: bot books artificially
+    # high profits because avg_held was rewritten to a lower-than-actual value.
+    # ZECGER drifted +$0.93 from this. Periodic resync keeps stored P&L
+    # bounded to reality. Per-RT detail still lives in trades.jsonl + _rt_log.
+    if now - bot.get('_last_pnl_sync', 0) >= 60:
+        bot['_last_pnl_sync'] = now
+        try:
+            api_read_limiter.wait()
+            _pnl_resp = kalshi_client.get_positions(ticker=ticker)
+            _pnl_list = _pnl_resp.get('market_positions', _pnl_resp.get('positions', []))
+            for _pp in _pnl_list:
+                if _pp.get('ticker') != ticker:
+                    continue
+                _ksh_pnl_c = float(_pp.get('realized_pnl_dollars', 0) or 0) * 100
+                _stored = bot.get('realized_pnl_cents', 0) or 0
+                _drift = _ksh_pnl_c - _stored
+                # Only override on >0.5c drift to avoid floating-point noise
+                if abs(_drift) > 0.5:
+                    print(f'📊 APEX MM PNL SYNC: {bot_id} stored={_stored:.2f}c → kalshi={_ksh_pnl_c:.2f}c (drift {_drift:+.2f}c)')
+                    bot['realized_pnl_cents'] = round(_ksh_pnl_c, 2)
+                    bot_log('APEX_MM_PNL_SYNC', bot_id, {
+                        'old_stored': _stored, 'new_stored': _ksh_pnl_c,
+                        'drift_cents': _drift,
+                    })
+                break
+        except Exception:
+            pass  # silent fail — no-op until next cycle
 
     # ── AUTO-WIDTH LIVE SYNC: keep bot['start_gap'] current even while pulled ──
     # Without this, a pulled auto bot would show stale width on the card (last
@@ -21318,11 +21502,23 @@ def list_bots():
 
     # Tennis phase fix: game_phase is frozen at creation time, but milestones
     # are unreliable. Re-evaluate using _is_game_live (now checks API Tennis).
+    # BIDIRECTIONAL: also regress live → pregame when match hasn't started yet.
+    # ZECGER showed "LIVE" on the card despite the match being scheduled 14h
+    # in the future because game_phase only ever flipped pregame→live, never
+    # back. _is_game_live consults api-tennis + Kalshi expiration window, so
+    # respect both directions.
     for bid, bot in active_bots.items():
-        if bot.get('game_phase') == 'pregame' and bot.get('status') not in ('completed', 'cancelled', 'error'):
-            ticker = bot.get('ticker', '')
-            if ticker.startswith(('KXATP', 'KXWTA', 'KXITF')) and _is_game_live(ticker):
-                bot['game_phase'] = 'live'
+        if bot.get('status') in ('completed', 'cancelled', 'error'):
+            continue
+        ticker = bot.get('ticker', '')
+        if not ticker.startswith(('KXATP', 'KXWTA', 'KXITF')):
+            continue
+        _is_live = _is_game_live(ticker)
+        _cur_phase = bot.get('game_phase', 'pregame')
+        if _cur_phase == 'pregame' and _is_live:
+            bot['game_phase'] = 'live'
+        elif _cur_phase == 'live' and not _is_live:
+            bot['game_phase'] = 'pregame'
 
     return jsonify({'bots': active_bots, 'game_scores': game_scores})
 

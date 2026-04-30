@@ -1483,10 +1483,11 @@ function isKalshiLive(market) {
 
     // ── Tennis: milestone_status only — pregame tennis has active books,
     // so price-based detection creates massive false positives ──
-    const isTennis = /KXATP|KXWTA/i.test(ticker);
+    // Backend injects milestone_status='live' for any tennis market that's
+    // either live in Kalshi milestones OR has a live API-Tennis score.
+    const isTennis = /KXATP|KXWTA|KXITF/i.test(ticker);
     if (isTennis) {
-        if (market.milestone_status) return market.milestone_status === 'live';
-        return false;
+        return market.milestone_status === 'live';
     }
 
     const expStr = market.expected_expiration_time;
@@ -1523,26 +1524,17 @@ function isKalshiLive(market) {
             if (diffDays > 1 || diffDays < -1) return false;
         }
 
-        // Cross-check ESPN: Kalshi sometimes sets batch expiration times
-        // (e.g. 8pm UTC for ALL day's games) that fall within the 5-hour
-        // window well before actual tip-off. ESPN is authoritative for
-        // game state when available.
+        // Cross-check live scoreboard: only positive score data for an
+        // in-progress game counts as live. The expiration window alone
+        // includes pregame markets (Kalshi opens trading hours before
+        // tip-off and the expiration sits in the same 5-hour bucket),
+        // so we never trust it as a standalone live signal — that was
+        // surfacing future games as "live".
         const gameId = extractGameId(ticker);
         const sport = detectSport(ticker);
         const espnData = getGameScore(gameId, sport);
-        if (espnData) {
-            // ESPN has data — trust it: only live if game is in progress
-            return espnData.state === 'in';
-        }
-        // No ESPN data for this game. For sports ESPN covers (NBA, NCAAB,
-        // NFL, NHL, MLB, MLS, NCAAW), absence means ESPN doesn't list
-        // this game — don't guess from expiration alone.
-        const espnSports = new Set(['NBA','NCAAB','NCAAW','NFL','NHL','MLB','MLS','EPL','UCL']);
-        if (espnSports.has(sport)) return false;
-
-        // For sports ESPN doesn't cover (intl leagues, etc.), the
-        // expiration heuristic is the only signal — trust it.
-        return true;
+        if (espnData && espnData.state === 'in') return true;
+        return false;
     } catch (e) {
         // Ignore parse errors
     }

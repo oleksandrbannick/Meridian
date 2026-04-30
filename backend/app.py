@@ -26551,7 +26551,22 @@ def get_live_kalshi_markets_endpoint():
         # Refresh ESPN to know which games are live
         _refresh_espn_cache()
         espn = _espn_cache.get('data', {})
-        live_abbrs = {abbr for abbr, info in espn.items() if info.get('live')}
+
+        # Build live game pairs (home, away). A ticker counts as live only if
+        # BOTH team codes of a currently-live ESPN game appear in it. This is
+        # tighter than the old "any abbr substring matches" check, which would
+        # flag every ticker containing 'HOU' as live whenever Houston was
+        # playing — including tomorrow's HOU game and unrelated prop markets.
+        live_pairs = set()
+        for k, v in espn.items():
+            if ':' in k:  # skip sport-qualified duplicate keys
+                continue
+            if not v.get('live'):
+                continue
+            h = (v.get('home_team') or '').upper()
+            a = (v.get('away_team') or '').upper()
+            if h and a and h != a:
+                live_pairs.add(frozenset({h, a}))
 
         # Refresh milestones for tennis live detection
         _refresh_milestones_cache()
@@ -26593,22 +26608,13 @@ def get_live_kalshi_markets_endpoint():
                     if ms_status is not None:
                         is_live = (ms_status == 'live')
 
-            # Other sports: check ESPN team abbreviations
-            if not is_live and not is_tennis:
-                title = (m.get('title', '') + ' ' + ticker).upper()
-                is_live = any(abbr in title for abbr in live_abbrs)
-
-            # Fallback: expiration time heuristic — skipped for tennis (milestone-gated only)
-            if not is_live and not is_tennis:
-                exp = m.get('expected_expiration_time', '')
-                if exp:
-                    try:
-                        exp_dt = datetime.fromisoformat(exp.replace('Z', '+00:00'))
-                        hours_until = (exp_dt - datetime.now(timezone.utc)).total_seconds() / 3600
-                        if 0 < hours_until < 4:
-                            is_live = True
-                    except Exception:
-                        pass
+            # Other sports: ticker must contain BOTH teams of a live ESPN game
+            if not is_live and not is_tennis and live_pairs:
+                upper_str = (m.get('title', '') + ' ' + ticker).upper()
+                for pair in live_pairs:
+                    if all(t in upper_str for t in pair):
+                        is_live = True
+                        break
             if is_live:
                 live_markets.append({
                     'ticker': ticker,

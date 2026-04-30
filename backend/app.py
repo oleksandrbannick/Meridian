@@ -881,8 +881,14 @@ def get_markets():
         _tennis_prefixes = ('KXATP', 'KXWTA')
         _7d_ago = _us_now - timedelta(days=7)
         _7d_ord = int(_7d_ago.strftime('%y')) * 10000 + _month_map.get(_7d_ago.strftime('%b').upper(), 0) * 100 + int(_7d_ago.strftime('%d'))
+        # Non-tennis: allow yesterday's tickers so suspended/resumed games (rain delays,
+        # extra innings rolling past midnight, doubleheader nightcaps still in progress)
+        # survive the date cutoff. The expiration/volume check below still cuts truly
+        # stale settled markets.
+        _yesterday = _us_now - timedelta(days=1)
+        _yesterday_ord = int(_yesterday.strftime('%y')) * 10000 + _month_map.get(_yesterday.strftime('%b').upper(), 0) * 100 + int(_yesterday.strftime('%d'))
         for m in unique_markets:
-            # Filter by ticker date — remove yesterday's unsettled markets
+            # Filter by ticker date — remove tickers older than the cutoff
             _ticker = m.get('event_ticker', m.get('ticker', ''))
             import re as _re
             _dm = _re.search(r'(\d{2})([A-Z]{3})(\d{2})', _ticker)
@@ -890,7 +896,7 @@ def get_markets():
                 _yr, _mon, _day = _dm.group(1), _dm.group(2), _dm.group(3)
                 _ticker_ord = int(_yr) * 10000 + _month_map.get(_mon, 0) * 100 + int(_day)
                 _is_tennis = _ticker.startswith(_tennis_prefixes)
-                _cutoff = _7d_ord if _is_tennis else _today_ord
+                _cutoff = _7d_ord if _is_tennis else _yesterday_ord
                 if _ticker_ord < _cutoff:
                     continue  # too old — skip
             exp_str = m.get('expected_expiration_time', '')

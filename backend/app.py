@@ -8223,12 +8223,14 @@ _PHANTOM_DEATH_ZONE = {
 
 
 def _tennis_death_zone_check(match_data):
-    """Tennis death zone = ENTIRE DECIDING SET (set 3 of BO3, set 5 of BO5).
-    Once both players have won (sets_to_win - 1) sets, every point is a
-    high-variance swing and the API data feed lags courtside info by 1-3s —
-    makers become exit liquidity for whoever sees the point first. Stay out
-    for the entire deciding set, no recovery. Earlier sets (sets 1-2 of BO3,
-    sets 1-4 of BO5) never trigger.
+    """Tennis death zone = MATCH-ENDING MOMENTS in the deciding set only.
+    Fires when:
+      1. We're in the deciding set (set 3 of BO3, set 5 of BO5), AND
+      2. max(g1, g2) >= 5 — one player is 1 game from set/match win, OR
+         set is in tiebreak (6-6, 7-6, 6-7).
+    Early deciding set (0-0 to 4-4) trades through — no immediate match-ending
+    threat, market microstructure intact, that's where +EV lives. Earlier sets
+    (sets 1-2 of BO3, sets 1-4 of BO5) never trigger.
     Returns (True, reason) or (False, '')."""
     scores = match_data.get('scores', [])
     if not scores:
@@ -8248,8 +8250,11 @@ def _tennis_death_zone_check(match_data):
     cur = scores[-1]
     g1 = int(float(cur.get('score_first', 0)))
     g2 = int(float(cur.get('score_second', 0)))
+    # Early deciding set (0-0 to 4-4): trade through — no match-ending threat yet
+    if max(g1, g2) < 5:
+        return False, ''
     set_label = 'set 5' if sets_to_win == 3 else 'set 3'
-    return True, f'{set_label} deciding (sets {p1_sets}-{p2_sets}, games {g1}-{g2})'
+    return True, f'{set_label} match-ending ({g1}-{g2})'
 
 
 def _tennis_blowout_check(match_data):

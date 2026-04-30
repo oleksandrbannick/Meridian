@@ -14642,10 +14642,23 @@ def _handle_phantom(bot_id, bot, actions):
 
             # Post the fav hedge at target-width-capped price (maker)
             try:
+                # Record raw hedge speed RIGHT before API call — same as WS
+                # hot path. Without this, runs that hedged via monitor (rather
+                # than WS hot path) show blank speed in run_history.
+                _mon_raw_fill_at = bot.get('dog_filled_at')
+                _mon_is_retry = bot.get('raw_hedge_ms') is not None
+                if _mon_raw_fill_at and not _mon_is_retry:
+                    _mon_raw_ms = (time.time() - _mon_raw_fill_at) * 1000
+                    bot['raw_hedge_ms'] = round(_mon_raw_ms, 1)
+                    _record_latency('raw_hedge_phantom', _mon_raw_ms, {'bot_id': bot_id, 'type': 'phantom', 'path': 'monitor'})
                 fav_resp, actual_fav_price = create_order_maker(
                     ticker=hedge_ticker, side=fav_side, action='buy',
                     count=qty, price=hedge_price
                 )
+                _mon_rt_ms = (time.time() - _mon_raw_fill_at) * 1000 if _mon_raw_fill_at and not _mon_is_retry else None
+                if _mon_rt_ms is not None:
+                    bot['hedge_latency_ms'] = round(_mon_rt_ms, 1)
+                    _record_latency('fill_to_hedge_phantom', _mon_rt_ms, {'bot_id': bot_id, 'type': 'phantom', 'path': 'monitor'})
                 fav_order_id = fav_resp['order']['order_id']
                 bot['fav_order_id'] = fav_order_id
                 bot['fav_price'] = actual_fav_price

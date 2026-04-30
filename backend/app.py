@@ -8225,11 +8225,17 @@ def _tennis_death_zone_check(match_data):
     scores = match_data.get('scores', [])
     if not scores:
         return False, ''
-    # Count completed sets (winning side has 6+ games with 2+ margin, or 7)
-    p1_sets = sum(1 for s in scores if _set_won(s, 'first'))
-    p2_sets = sum(1 for s in scores if _set_won(s, 'second'))
+    # Count completed sets EXCLUDING the last (in-progress) set. Without
+    # excluding it, a set at 6+ games with 2+ margin gets counted as won
+    # AND treated as the current set — false-positives "deciding set"
+    # when only set 2 is in progress (RENHER 2026-04-29: set 2 hit 6-1
+    # → counted as won → "deciding set" passed → labeled "set 3 match-
+    # ending (1-6)" while actually set 2 with games 1-1 to come).
+    completed = scores[:-1]
+    p1_sets = sum(1 for s in completed if _set_won(s, 'first'))
+    p2_sets = sum(1 for s in completed if _set_won(s, 'second'))
     # BO3 vs BO5 (BO5 only at Grand Slams — infer from set count)
-    sets_to_win = 3 if (p1_sets >= 3 or p2_sets >= 3 or len(scores) > 3) else 2
+    sets_to_win = 3 if (p1_sets >= 3 or p2_sets >= 3 or len(completed) > 3) else 2
     # Deciding set = both players have won (sets_to_win - 1) sets
     if p1_sets != sets_to_win - 1 or p2_sets != sets_to_win - 1:
         return False, ''

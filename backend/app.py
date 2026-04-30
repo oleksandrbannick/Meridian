@@ -4418,39 +4418,9 @@ class KalshiWSManager:
             if ticker:
                 ob = _get_or_create_orderbook(ticker)
                 top_changed = ob.update(msg)
+                # Record depth snapshot periodically for vanishing-liquidity detection
                 if top_changed:
                     ob.record_depth_snapshot()
-                    try:
-                        yb = ob.get_best_bid('yes')
-                        nb = ob.get_best_bid('no')
-                        # Derive asks from opposite-side bids — guarantees no crossed
-                        # display (yb + nb > 99). Skip ticker_cache write entirely if
-                        # LOB is in transient crossed state across split deltas.
-                        if yb > 0 and nb > 0 and yb + nb <= 99:
-                            ya = 100 - nb
-                            na = 100 - yb
-                            _prev = self.ticker_cache.get(ticker, {})
-                            self.ticker_cache[ticker] = {
-                                'yes_bid': yb, 'yes_ask': ya,
-                                'no_bid':  nb, 'no_ask':  na,
-                                'price':   _prev.get('price', 0),
-                                'volume':  _prev.get('volume', 0),
-                                'ts':      _prev.get('ts', 0),
-                                '_local_ts': time.time(),
-                            }
-                        else:
-                            ya = (100 - nb) if nb > 0 else 0
-                            na = (100 - yb) if yb > 0 else 0
-                        # Fire phantom snap-up AND drop on every BBO change.
-                        # Ticker events miss BBO moves that don't print trades —
-                        # drop has the self-exclusion logic that keeps us off
-                        # alone-at-bid, so it has to fire tick-by-tick too.
-                        threading.Thread(target=_ws_phantom_instant_snap_up,
-                                         args=(ticker, yb, nb, ya, na), daemon=True).start()
-                        threading.Thread(target=_ws_phantom_instant_drop,
-                                         args=(ticker, yb, nb, ya, na), daemon=True).start()
-                    except Exception:
-                        pass
             return
 
         if msg_type == 'ticker':
@@ -5015,19 +4985,21 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
         if fav_bid <= 0:
             continue
 
-        # Stay parked at bid — even when alone at top of book.
-        # Phantom is a speed play: queue priority compounds, oscillating
-        # off-bid (self-alone drop) → on-bid (snap up) shreds priority and
-        # rarely ends up filled. Drop only when an external bid genuinely
-        # below fav_price appears (i.e., our order is above the highest bid).
-        # Self-exclusion was removed 2026-04-30 — it kept dropping us off
-        # the BBO whenever we were alone at top, killing queue priority.
-        # See feedback_phantom_park_at_bid_alone.md.
-        if fav_price <= fav_bid:
+        # Self-exclusion: if we're alone at fav_bid, the "bid" we see is just our own
+        # order — real market bid is the next level down. Walk the book to find it.
+        _fav_fills = bot.get('fav_fill_qty', 0)
+        _bot_qty = bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1))
+        _remaining = max(1, _bot_qty - _fav_fills)
+        effective_bid = _fav_bid_excluding_self(hedge_ticker, fav_side, fav_price, _remaining)
+        if effective_bid <= 0:
+            effective_bid = fav_bid  # fallback to WS bid if orderbook unavailable
+
+        # Only drop if hedge is ABOVE the effective (non-self) bid
+        if fav_price <= effective_bid:
             continue
 
         fav_ask_now = yes_ask if fav_side == 'yes' else no_ask
-        drop_target = fav_bid
+        drop_target = effective_bid
 
         if drop_target <= 0 or drop_target >= fav_price:
             continue
@@ -8251,16 +8223,12 @@ _PHANTOM_DEATH_ZONE = {
 
 
 def _tennis_death_zone_check(match_data):
-    """Tennis death zone = MATCH-ENDING MOMENTS in the deciding set only.
-    Fires ONLY when:
-      1. We're in the deciding set (set 3 of BO3, set 5 of BO5), AND
-      2. Either player has 5+ games (1 game from set/match win) OR set is in tiebreak
-    Does NOT trigger on the entire deciding set — early deciding-set games (0-0
-    to 4-4) trade through normally. Only the late-set window where a single
-    game can end the match is the death zone.
-
-    Earlier sets (sets 1-2 of BO3, sets 1-4 of BO5) never trigger — opponent
-    can save and force the next set, so spike is 'blowout-style' not match-ending.
+    """Tennis death zone = ENTIRE DECIDING SET (set 3 of BO3, set 5 of BO5).
+    Once both players have won (sets_to_win - 1) sets, every point is a
+    high-variance swing and the API data feed lags courtside info by 1-3s —
+    makers become exit liquidity for whoever sees the point first. Stay out
+    for the entire deciding set, no recovery. Earlier sets (sets 1-2 of BO3,
+    sets 1-4 of BO5) never trigger.
     Returns (True, reason) or (False, '')."""
     scores = match_data.get('scores', [])
     if not scores:
@@ -8268,9 +8236,7 @@ def _tennis_death_zone_check(match_data):
     # Count completed sets EXCLUDING the last (in-progress) set. Without
     # excluding it, a set at 6+ games with 2+ margin gets counted as won
     # AND treated as the current set — false-positives "deciding set"
-    # when only set 2 is in progress (RENHER 2026-04-29: set 2 hit 6-1
-    # → counted as won → "deciding set" passed → labeled "set 3 match-
-    # ending (1-6)" while actually set 2 with games 1-1 to come).
+    # when only set 2 is in progress (RENHER 2026-04-29).
     completed = scores[:-1]
     p1_sets = sum(1 for s in completed if _set_won(s, 'first'))
     p2_sets = sum(1 for s in completed if _set_won(s, 'second'))
@@ -8282,12 +8248,8 @@ def _tennis_death_zone_check(match_data):
     cur = scores[-1]
     g1 = int(float(cur.get('score_first', 0)))
     g2 = int(float(cur.get('score_second', 0)))
-    # Match-ending moment: either side has 5+ games (1 game from set win = match win
-    # in deciding set) OR we're in a tiebreak (6-6 or 7-6/6-7 in progress).
-    if max(g1, g2) < 5:
-        return False, ''
     set_label = 'set 5' if sets_to_win == 3 else 'set 3'
-    return True, f'{set_label} match-ending ({g1}-{g2})'
+    return True, f'{set_label} deciding (sets {p1_sets}-{p2_sets}, games {g1}-{g2})'
 
 
 def _tennis_blowout_check(match_data):

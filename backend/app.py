@@ -26581,18 +26581,30 @@ def get_live_kalshi_markets_endpoint():
             if sport_filter and sport != sport_filter:
                 continue
 
-            # Date gate: ticker must encode a date that's roughly "now".
-            # Skips futures markets (KXNBAMVP-26-*, KXMARMAD-27-*) and
-            # future-dated games (May 1 EPL while it's Apr 29).
-            _dm = re.search(r'-(\d{2})([A-Z]{3})(\d{2})', ticker)
+            # Date/time gate: ticker must encode a start time that's plausible
+            # for "live now". Tickers like KXMLBGAME-26APR291910WSHNYM include
+            # YYMMMDDHHMM (Apr 29 19:10 UTC). For these we require start_time
+            # within (now-6h, now+30min) — covers MLB games up to ~6h long
+            # without flagging tomorrow's same-pair rematch as live.
+            # For tickers with date only (NBA/NHL): allow if same UTC day or
+            # within 6h prior (covers early-AM UTC for evening US games).
+            _dm = re.search(r'-(\d{2})([A-Z]{3})(\d{2})(\d{4})?', ticker)
             if not _dm:
                 continue
             try:
-                _ev_date = datetime(2000+int(_dm.group(1)), _months[_dm.group(2)],
-                                    int(_dm.group(3)), 12, tzinfo=timezone.utc)
-                _hours = (_ev_date - _now).total_seconds() / 3600
-                if _hours > 12 or _hours < -36:
-                    continue
+                _yy, _mon, _dd, _hhmm = _dm.group(1), _dm.group(2), _dm.group(3), _dm.group(4)
+                if _hhmm:
+                    _start = datetime(2000+int(_yy), _months[_mon], int(_dd),
+                                      int(_hhmm[:2]), int(_hhmm[2:]), tzinfo=timezone.utc)
+                    _h = (_start - _now).total_seconds() / 3600
+                    if _h > 0.5 or _h < -6:
+                        continue
+                else:
+                    _ev_date = datetime(2000+int(_yy), _months[_mon], int(_dd),
+                                        12, tzinfo=timezone.utc)
+                    _h = (_ev_date - _now).total_seconds() / 3600
+                    if _h > 12 or _h < -18:
+                        continue
             except (ValueError, KeyError):
                 continue
 

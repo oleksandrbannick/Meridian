@@ -8192,9 +8192,13 @@ def _calculate_ppi(ticker, fav_side, dog_side):
         if period >= max_p: t_pts = 0
         elif period >= max_p - 1: t_pts = 5
         elif period >= max_p // 2: t_pts = 10
-    elif sport in ('Tennis','Soccer','IntlBB') and not sc:
-        # No score data — Challenger tennis, intl basketball, or soccer markets
-        # without live score feed. Can't detect game phase = flying blind.
+    elif sport in ('Tennis','Soccer','IntlBB') and (not sc or sc.get('status') != 'in'):
+        # No LIVE score data — Challenger tennis, intl basketball, or soccer
+        # markets without live score feed. Can't detect game phase = flying blind.
+        # Without the status='in' check, stale/partial entries (pregame, finished,
+        # interrupted) made `sc` truthy and skipped the penalty even though we
+        # had no live game data — same series getting t=15 in some bots and t=5
+        # in others depending on whether some lookup returned an old record.
         t_pts = 5
 
     _raw = d_pts + s_pts + t_pts                       # v8: G removed from score (depth-override carries gap protection)

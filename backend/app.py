@@ -4372,19 +4372,6 @@ class KalshiWSManager:
                         nb = ob.get_best_bid('no')
                         ya = ob.get_best_ask('yes') or ((100 - nb) if nb > 0 else 0)
                         na = ob.get_best_ask('no')  or ((100 - yb) if yb > 0 else 0)
-                        # Push BBO into ticker_cache so /api/bot/list (and the
-                        # bot card display) reflects orderbook moves, not just
-                        # trade prints. Without this the displayed bid lags up
-                        # to 2s behind the hedge.
-                        _prev = self.ticker_cache.get(ticker, {})
-                        self.ticker_cache[ticker] = {
-                            'yes_bid': yb, 'yes_ask': ya,
-                            'no_bid':  nb, 'no_ask':  na,
-                            'price':   _prev.get('price', 0),
-                            'volume':  _prev.get('volume', 0),
-                            'ts':      _prev.get('ts', 0),
-                            '_local_ts': time.time(),
-                        }
                         # Fire phantom snap-up AND drop on every BBO change.
                         # Ticker events miss BBO moves that don't print trades —
                         # drop has the self-exclusion logic that keeps us off

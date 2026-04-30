@@ -569,7 +569,8 @@ _GAME_SERIES = {'KXNBAGAME','KXNHLGAME','KXNFLGAME','KXMLBGAME','KXMLSGAME',
                 'KXITFMATCH','KXITFWMATCH',
                 'KXWBCGAME','KXVTBGAME',
                 'KXBSLGAME','KXABAGAME','KXMLBSTGAME',
-                'KXKBOGAME','KXNPBGAME'}
+                'KXKBOGAME','KXNPBGAME',
+                'KXWNBAGAME','KXCONMEBOLLIBGAME'}
 
 def _capture_opening_lines(markets):
     """Record first-seen YES price for each GAME market — never overwrite once stored."""
@@ -713,6 +714,8 @@ def get_markets():
             'nhl': ['KXNHLGAME', 'KXNHLSPREAD', 'KXNHLTOTAL', 'KXNHLGOAL'],
             'mlb': ['KXMLBGAME', 'KXMLBSPREAD', 'KXMLBTOTAL', 'KXMLBSTGAME'],
             'mls': ['KXMLSGAME', 'KXMLSSPREAD', 'KXMLSTOTAL', 'KXMLSBTTS'],
+            'wnba': ['KXWNBAGAME', 'KXWNBASPREAD', 'KXWNBATOTAL'],
+            'libertadores': ['KXCONMEBOLLIBGAME'],
             'ncaab': ['KXNCAAMBGAME', 'KXNCAAMBSPREAD', 'KXNCAAMBTOTAL',
                       'KXNCAAMB1HWINNER', 'KXNCAAMB1HSPREAD', 'KXNCAAMB1HTOTAL',
                       'KXNCAAMBPTS', 'KXNCAAMBREB', 'KXNCAAMBAST',
@@ -739,7 +742,8 @@ def get_markets():
                        'KXUCLGAME', 'KXUCLSPREAD', 'KXUCLTOTAL', 'KXUCLGOAL', 'KXUCLBTTS',
                        'KXLALIGAGAME', 'KXLIGAMXGAME', 'KXSERIEAGAME',
                        'KXBUNDESLIGAGAME', 'KXLIGUE1GAME',
-                       'KXMLSGAME', 'KXMLSSPREAD', 'KXMLSTOTAL', 'KXMLSBTTS'],
+                       'KXMLSGAME', 'KXMLSSPREAD', 'KXMLSTOTAL', 'KXMLSBTTS',
+                       'KXCONMEBOLLIBGAME'],
             'ufc': ['KXUFCFIGHT'],
             'f1': ['KXF1RACE'],
             'cricket': ['KXIPL'],
@@ -2735,6 +2739,8 @@ def get_scoreboard(sport):
         'ligue1':     'soccer/fra.1',
         'seriea':     'soccer/ita.1',
         'ligamx':     'soccer/mex.1',
+        'wnba':         'basketball/wnba',
+        'libertadores': 'soccer/conmebol.libertadores',
     }
     # Intl basketball leagues — ESPN doesn't cover these; served from api-sports.io cache
     _INTL_BB_KEYS = {
@@ -7427,6 +7433,8 @@ def _refresh_espn_cache():
         'ucl': 'soccer/uefa.champions',
         'atp': 'tennis/atp',
         'wta': 'tennis/wta',
+        'wnba': 'basketball/wnba',
+        'libertadores': 'soccer/conmebol.libertadores',
     }
     for sport, path in sport_paths.items():
         try:
@@ -7655,6 +7663,8 @@ SPORT_MAP = {
     'KXNHLGAME':'NHL','KXNHLSPREAD':'NHL','KXNHLTOTAL':'NHL','KXNHLGOAL':'NHL',
     'KXMLBGAME':'MLB','KXMLBSPREAD':'MLB','KXMLBTOTAL':'MLB','KXMLBSTGAME':'MLB',
     'KXMLSGAME':'MLS','KXMLSSPREAD':'MLS','KXMLSTOTAL':'MLS','KXMLSBTTS':'MLS',
+    'KXWNBAGAME':'WNBA','KXWNBASPREAD':'WNBA','KXWNBATOTAL':'WNBA',
+    'KXCONMEBOLLIBGAME':'Libertadores',
     'KXNCAAMBGAME':'NCAAB','KXNCAAMBSPREAD':'NCAAB','KXNCAAMBTOTAL':'NCAAB',
     'KXNCAAMBPTS':'NCAAB','KXNCAAMBREB':'NCAAB','KXNCAAMBAST':'NCAAB',
     'KXNCAAMB3PT':'NCAAB','KXNCAAMBSTL':'NCAAB','KXNCAAMBBLK':'NCAAB',
@@ -7854,7 +7864,7 @@ def _is_game_live(ticker: str) -> bool:
         # No live signal found — fall through to expiration check
 
     # ── OTHER SPORTS: Check ESPN first (authoritative "game in progress") ──
-    is_sports = any(ticker.startswith(p) for p in ('KXNBA', 'KXNCAA', 'KXNHL', 'KXMLB', 'KXMLS', 'KXEPL', 'KXUCL', 'KXKBO', 'KXNPB', 'KXNBL', 'KXLALIGA', 'KXBUNDESLIGA', 'KXLIGUE1', 'KXSERIEA', 'KXLIGAMX'))
+    is_sports = any(ticker.startswith(p) for p in ('KXNBA', 'KXNCAA', 'KXNHL', 'KXMLB', 'KXMLS', 'KXEPL', 'KXUCL', 'KXKBO', 'KXNPB', 'KXNBL', 'KXLALIGA', 'KXBUNDESLIGA', 'KXLIGUE1', 'KXSERIEA', 'KXLIGAMX', 'KXWNBA', 'KXCONMEBOLLIB'))
     if is_sports:
         try:
             _refresh_espn_cache()
@@ -7967,7 +7977,7 @@ def _is_game_over_cached(ticker: str) -> bool:
         # No milestone data — check date (if ticker date is in the past, game is likely over)
 
     # ESPN sports: check cache
-    is_sports = any(ticker.startswith(p) for p in ('KXNBA', 'KXNCAA', 'KXNHL', 'KXMLB', 'KXMLS', 'KXEPL', 'KXUCL', 'KXKBO', 'KXNPB', 'KXNBL', 'KXLALIGA', 'KXBUNDESLIGA', 'KXLIGUE1', 'KXSERIEA', 'KXLIGAMX'))
+    is_sports = any(ticker.startswith(p) for p in ('KXNBA', 'KXNCAA', 'KXNHL', 'KXMLB', 'KXMLS', 'KXEPL', 'KXUCL', 'KXKBO', 'KXNPB', 'KXNBL', 'KXLALIGA', 'KXBUNDESLIGA', 'KXLIGUE1', 'KXSERIEA', 'KXLIGAMX', 'KXWNBA', 'KXCONMEBOLLIB'))
     if is_sports:
         info = _espn_cache.get('data', {})
         if info:
@@ -8155,7 +8165,8 @@ def _calculate_ppi(ticker, fav_side, dog_side):
     elif 'KXKBO' in tu: sport = 'KBO'
     elif 'KXNPB' in tu: sport = 'NPB'
     elif 'KXATP' in tu or 'KXWTA' in tu or 'KXITF' in tu: sport = 'Tennis'
-    elif any(x in tu for x in ('KXMLS','KXEPL','KXUCL','KXLALIGA','KXLIGAMX','KXLIGUE1','KXSERIEA','KXBUNDESLIGA')): sport = 'Soccer'
+    elif any(x in tu for x in ('KXMLS','KXEPL','KXUCL','KXLALIGA','KXLIGAMX','KXLIGUE1','KXSERIEA','KXBUNDESLIGA','KXCONMEBOLLIB')): sport = 'Soccer'
+    elif 'KXWNBA' in tu: sport = 'WNBA'
     elif any(x in tu for x in ('KXNBL','KXVTB','KXBSL','KXABA','KXKBL','KXCBA','KXEUROLEAGUE','KXBBL','KXGBL','KXACB','KXJBLEAGUE','KXLNBELITE')): sport = 'IntlBB'
     sc = _get_game_score_for_ticker(ticker)
     if sc and sc.get('status') == 'in':
@@ -24243,6 +24254,8 @@ def scan_arb_opportunities():
             'nhl': ['KXNHLGAME', 'KXNHLSPREAD', 'KXNHLTOTAL', 'KXNHLGOAL'],
             'mlb': ['KXMLBGAME', 'KXMLBSPREAD', 'KXMLBTOTAL', 'KXMLBSTGAME'],
             'mls': ['KXMLSGAME', 'KXMLSSPREAD', 'KXMLSTOTAL', 'KXMLSBTTS'],
+            'wnba': ['KXWNBAGAME', 'KXWNBASPREAD', 'KXWNBATOTAL'],
+            'libertadores': ['KXCONMEBOLLIBGAME'],
             'ncaab': ['KXNCAAMBGAME', 'KXNCAAMBSPREAD', 'KXNCAAMBTOTAL',
                       'KXNCAAMB1HWINNER', 'KXNCAAMB1HSPREAD', 'KXNCAAMB1HTOTAL',
                       'KXNCAAMBPTS', 'KXNCAAMBREB', 'KXNCAAMBAST',
@@ -24268,7 +24281,8 @@ def scan_arb_opportunities():
                        'KXUCLGAME', 'KXUCLSPREAD', 'KXUCLTOTAL', 'KXUCLGOAL', 'KXUCLBTTS',
                        'KXLALIGAGAME', 'KXLIGAMXGAME', 'KXSERIEAGAME',
                        'KXBUNDESLIGAGAME', 'KXLIGUE1GAME',
-                       'KXMLSGAME', 'KXMLSSPREAD', 'KXMLSTOTAL', 'KXMLSBTTS'],
+                       'KXMLSGAME', 'KXMLSSPREAD', 'KXMLSTOTAL', 'KXMLSBTTS',
+                       'KXCONMEBOLLIBGAME'],
             'ufc': ['KXUFCFIGHT'],
             'f1': ['KXF1RACE'],
             'cricket': ['KXIPL'],

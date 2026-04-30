@@ -472,6 +472,8 @@ async function loadLiveScores() {
             { key: 'ligue1',     sport: 'Ligue1' },
             { key: 'seriea',     sport: 'SerieA' },
             { key: 'ligamx',     sport: 'LigaMX' },
+            { key: 'wnba',         sport: 'WNBA' },
+            { key: 'libertadores', sport: 'Libertadores' },
             // Intl basketball (api-sports.io) — ESPN doesn't cover these leagues
             { key: 'acb',        sport: 'ACB' },
             { key: 'bbl',        sport: 'BBL' },
@@ -2035,6 +2037,8 @@ function detectSport(eventTicker) {
     if (upper.includes('KXMLS')) return 'MLS';
     if (upper.includes('KXEPL')) return 'EPL';
     if (upper.includes('KXUCL')) return 'UCL';
+    if (upper.includes('KXCONMEBOLLIB')) return 'Libertadores';
+    if (upper.includes('KXWNBA')) return 'WNBA';
     if (upper.includes('KXATP') || upper.includes('KXWTA') || upper.includes('KXITF')) return 'Tennis';
     if (upper.includes('KXPGA') || upper.includes('KXTGL') || upper.includes('KXGOLF') || upper.includes('KXLIV')) return 'Golf';
     if (upper.includes('KXNBL')) return 'NBL';

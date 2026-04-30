@@ -4370,8 +4370,24 @@ class KalshiWSManager:
                     try:
                         yb = ob.get_best_bid('yes')
                         nb = ob.get_best_bid('no')
-                        ya = ob.get_best_ask('yes') or ((100 - nb) if nb > 0 else 0)
-                        na = ob.get_best_ask('no')  or ((100 - yb) if yb > 0 else 0)
+                        # Derive asks from opposite-side bids — guarantees no crossed
+                        # display (yb + nb > 99). Skip ticker_cache write entirely if
+                        # LOB is in transient crossed state across split deltas.
+                        if yb > 0 and nb > 0 and yb + nb <= 99:
+                            ya = 100 - nb
+                            na = 100 - yb
+                            _prev = self.ticker_cache.get(ticker, {})
+                            self.ticker_cache[ticker] = {
+                                'yes_bid': yb, 'yes_ask': ya,
+                                'no_bid':  nb, 'no_ask':  na,
+                                'price':   _prev.get('price', 0),
+                                'volume':  _prev.get('volume', 0),
+                                'ts':      _prev.get('ts', 0),
+                                '_local_ts': time.time(),
+                            }
+                        else:
+                            ya = (100 - nb) if nb > 0 else 0
+                            na = (100 - yb) if yb > 0 else 0
                         # Fire phantom snap-up AND drop on every BBO change.
                         # Ticker events miss BBO moves that don't print trades —
                         # drop has the self-exclusion logic that keeps us off

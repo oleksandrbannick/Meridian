@@ -21564,6 +21564,11 @@ def list_bots():
     # ── Enrich stopped bots with pending maker sell data ──
     now_ts = time.time()
     for bid, bot in list(active_bots.items()):
+        # Always clear stale display state. Without this, _pending_sells set
+        # while the bot was stopped persists across stopped→active transitions
+        # (e.g., smart-repeat continue), making active bots show "📤 SELLING"
+        # for sells that completed minutes ago.
+        bot.pop('_pending_sells', None)
         if bot.get('status') != 'stopped':
             continue
         ticker = bot.get('ticker', '')

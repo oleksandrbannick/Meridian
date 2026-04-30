@@ -6186,7 +6186,31 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 if bot['fav_fill_qty'] >= _qty_thresh and not bot.get('_fav_fully_filled'):
                     bot['_fav_fully_filled'] = True
                     bot['_ws_fav_filled_at'] = time.time()
-                    print(f'⚡ WS PHANTOM FAV FULLY FILLED: {bot_id} {bot["fav_fill_qty"]}/{qty_bot} — snap-up disabled, monitor will complete')
+                    print(f'⚡ WS PHANTOM FAV FULLY FILLED: {bot_id} {bot["fav_fill_qty"]}/{qty_bot} — triggering instant completion')
+                    # Trigger the full _handle_phantom completion path now,
+                    # instead of waiting up to ~2-30s for the next monitor
+                    # cycle. _handle_phantom owns all phantom-specific
+                    # completion logic (verify-rehedge, supplemental merge,
+                    # cross-market settled qty, run history, smart_repeat).
+                    # Don't hold the phantom_lock around _handle_phantom —
+                    # it acquires that lock internally for amends and would
+                    # deadlock. Use _ws_completion_running as a re-entry
+                    # guard, and rely on _trade_recorded inside _handle_phantom
+                    # to dedupe against the monitor cycle's parallel call.
+                    def _instant_complete(_bid=bot_id):
+                        _b = active_bots.get(_bid)
+                        if not _b: return
+                        if _b.get('_trade_recorded'): return
+                        if _b.get('status') != 'fav_hedge_posted': return
+                        if _b.get('_ws_completion_running'): return
+                        _b['_ws_completion_running'] = True
+                        try:
+                            _handle_phantom(_bid, _b, [])
+                        except Exception as _ic_err:
+                            print(f'⚠ WS INSTANT COMPLETION FAILED: {_bid} {_ic_err} — monitor cycle will retry')
+                        finally:
+                            _b.pop('_ws_completion_running', None)
+                    threading.Thread(target=_instant_complete, daemon=True).start()
             save_state()
         break
 

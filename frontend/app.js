@@ -2530,12 +2530,11 @@ function displayEventRow(eventData, container) {
     card.appendChild(header);
 
     // ── Scoreboard widget (live score / pregame time / final score) ──
-    // Trust the score provider when available: if gameScore exists, render its
-    // state (pre/in/post). Only fall back to the Kalshi-live banner when we
-    // genuinely have no provider data — otherwise sports like JBLeague show
-    // "LIVE / no score feed" hours before tipoff.
-    const _hasReliableScoreSource = !NO_SCORE_SPORTS.has(sport);
-    if (gameScore && !(gameScore.state === 'pre' && kalshiLive && !_hasReliableScoreSource)) {
+    // Trust the score provider for in-progress / final state. But when Kalshi
+    // says the match is live and the provider still says 'pre' (common for
+    // API-Tennis on lower-tier ITF where state updates lag), fall through to
+    // the LIVE banner instead of rendering a misleading pregame start time.
+    if (gameScore && !(gameScore.state === 'pre' && kalshiLive)) {
         const scoreboard = buildScoreboard(gameScore);
         if (scoreboard) card.appendChild(scoreboard);
     } else if (kalshiLive) {
@@ -2547,10 +2546,12 @@ function displayEventRow(eventData, container) {
         const _itfLowerTier = /KXITFMATCH|KXITFWMATCH/i.test(eventData.eventTicker || '');
         const liveBanner = document.createElement('div');
         liveBanner.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:8px;background:linear-gradient(135deg,#0a1a0a,#0f1f12);border:1px solid #00ff88;border-radius:8px;padding:10px 16px;margin-bottom:12px;';
-        const bannerNote = NO_SCORE_SPORTS.has(sport) ? 'Kalshi-reported (no score feed)' : 'Score unavailable';
-        const bannerTitle = _itfLowerTier ? 'ITF lower-tier (W15/W25/W35/etc.) tournaments not tracked by API Tennis'
+        const bannerNote = _itfLowerTier ? 'ITF lower-tier — no score feed'
+                          : NO_SCORE_SPORTS.has(sport) ? 'Kalshi-reported (no score feed)'
+                          : 'Score unavailable';
+        const bannerTitle = _itfLowerTier ? 'API Tennis does not track W15/W25/W35-tier ITF tournaments. Live status comes from Kalshi.'
                           : NO_SCORE_SPORTS.has(sport) ? `${sport} has no live-score provider`
-                          : '';
+                          : 'Score provider has not yet picked up the live state for this match';
         liveBanner.innerHTML = `<span style="color:#ff3333;font-size:10px;font-weight:800;letter-spacing:1px;display:flex;align-items:center;gap:4px;"><span style="animation:pulse 1.5s infinite;">●</span> LIVE</span><span style="color:#8892a6;font-size:12px;" title="${bannerTitle}">${bannerNote}</span>`;
         card.appendChild(liveBanner);
     } else if (!gameScore && eventData.markets && eventData.markets.length > 0) {

@@ -18224,6 +18224,13 @@ def _run_monitor():
         # ── Pending maker sells: follow bid until filled ──
         for _sk, _sv in list(_pending_maker_sells.items()):
             try:
+                # Repost-fail backoff: when execute_maker_sell can't repost
+                # (no ask side liquidity), don't re-check every monitor cycle —
+                # each check is a get_order read against Kalshi. Two stuck orphans
+                # were generating ~120 reads/min of pure noise → 19 429s/min seen
+                # 2026-04-30. Skip until backoff expires.
+                if _sv.get('_repost_backoff_until', 0) > time.time():
+                    continue
                 _s_oid = _sv['oid']
                 _s_ticker = _sv['ticker']
                 _s_side = _sv['side']
@@ -18254,7 +18261,10 @@ def _run_monitor():
                     if _new_oid:
                         del _pending_maker_sells[_sk]
                     else:
-                        print(f'⚠ MAKER SELL REPOST FAILED: {_sv["reason"]} {_s_side} {_s_ticker} — will retry next monitor cycle')
+                        # No ask available or other repost failure — back off
+                        # 30s before next attempt to avoid pinning the read API.
+                        _sv['_repost_backoff_until'] = time.time() + 30
+                        print(f'⚠ MAKER SELL REPOST FAILED: {_sv["reason"]} {_s_side} {_s_ticker} — backing off 30s')
                     continue
                 # Still resting — shadow ask (fallback for when WS handler misses)
                 if (time.time() - _sv.get('_last_amend', 0)) > 3:

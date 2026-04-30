@@ -6192,7 +6192,6 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     bot['_fav_fully_filled'] = True
                     bot['_ws_fav_filled_at'] = time.time()
                     print(f'⚡ WS PHANTOM FAV FULLY FILLED: {bot_id} {bot["fav_fill_qty"]}/{qty_bot} — triggering instant completion')
-                _ws_notify_state_change('phantom_fav_fill', bot_id)
                     # Trigger the full _handle_phantom completion path now,
                     # instead of waiting up to ~2-30s for the next monitor
                     # cycle. _handle_phantom owns all phantom-specific

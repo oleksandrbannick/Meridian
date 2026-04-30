@@ -15693,9 +15693,30 @@ def _handle_phantom(bot_id, bot, actions):
         # ≤0.01 fractional residuals Kalshi keeps on partially-matched orders post-Mar 2026.
         # Previously required exact >= qty, which stalled bots for hours (140+c frozen).
         if fav_filled >= qty - 0.01:
-            # Guard: if _trade_recorded is already True but status never changed (crash recovery),
-            # re-run the completion so the trade actually gets recorded in history
-            if bot.get('_trade_recorded') and bot.get('status') != 'completed':
+            # Idempotency: stamp the cycle the first completion runs against.
+            # WS instant completion (commit 42b61f6) and the monitor cycle can
+            # both race into _handle_phantom for the same arb. Without a fingerprint
+            # check, both write a trade row → supplemental-merge sees the second
+            # write as a cancel-race fragment and doubles the parent's qty/pnl.
+            # Key = (dog_filled_at, fav_fill_qty, dog_fill_qty) — unique per cycle,
+            # changes on smart-repeat reset (dog_filled_at cleared, fills zeroed).
+            _comp_key = (
+                round(bot.get('dog_filled_at') or 0, 1),
+                round(fav_filled, 2),
+                round(bot.get('dog_fill_qty', 0), 2),
+            )
+            if bot.get('_last_completion_key') == _comp_key:
+                # This exact fill set already ran completion — second path lost the race
+                print(f'⏭ PHANTOM COMPLETION DEDUPE: {bot_id} fill-set {_comp_key} already recorded — skipping')
+                bot_log('PHANTOM_COMPLETION_DEDUPE', bot_id, {'key': str(_comp_key)})
+                return
+            bot['_last_completion_key'] = _comp_key
+
+            # Guard: if _trade_recorded is already True but status hasn't transitioned
+            # to a settled state (crash recovery), re-run completion. 'waiting_repeat'
+            # and 'stopped' are correct settled states for a recorded trade — only
+            # mid-flight statuses (dog_filled, fav_hedge_posted) indicate a crash.
+            if bot.get('_trade_recorded') and bot.get('status') not in ('completed', 'waiting_repeat', 'stopped'):
                 print(f'🔄 PHANTOM RECOVERY: {bot_id} _trade_recorded=True but status={bot.get("status")} — re-running completion')
                 bot['_trade_recorded'] = False  # clear so completion path runs fully
 
@@ -16134,6 +16155,7 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['no_fill_qty'] = 0
                 bot['_hedge_fired'] = False
                 bot['_trade_recorded'] = False
+                bot.pop('_last_completion_key', None)  # next cycle is a fresh fill set
                 bot['_all_hedge_order_ids'] = []  # Clear — hedge cycle complete, prevents cross-cycle verify contamination
                 # Keep _all_dog_order_ids until new order placed — WS fills on old orders
                 # can still arrive during waiting_repeat cooldown. Cleared at re-anchor.

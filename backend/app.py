@@ -5442,6 +5442,15 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
             continue
         if bot.get('status') != 'fav_hedge_posted':
             continue
+        # Skip if WS already saw fav fully fill — amending a filled order
+        # returns 404; if get_order also fails we'd abandon real fills as
+        # "0 fills, repost" → over-hedge → big loss. _fav_fully_filled is
+        # set in the WS fav-fill handler the moment fav_fill_qty hits qty.
+        # Double-check fill count so a stuck flag from a prior cycle (in
+        # case some reset path missed it) can't silently disable snap-up
+        # for the new cycle.
+        if bot.get('_fav_fully_filled') and bot.get('fav_fill_qty', 0) >= bot.get('quantity', 1) - 0.01:
+            continue
         hedge_ticker = bot.get('hedge_ticker', bot.get('ticker', ''))
         if hedge_ticker != ticker and bot.get('ticker') != ticker:
             continue
@@ -6162,6 +6171,22 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 else:
                     bot['no_fill_qty'] = bot['fav_fill_qty']
                 print(f'👻 WS PHANTOM FAV FILL: {bot_id} +{count} → {bot["fav_fill_qty"]}/{qty_bot}')
+                # Mark as fully filled for snap-up guard. Without this, the
+                # snap loop keeps trying to amend a fav order that already
+                # filled — every BBO tick → amend → 404 → get_order check
+                # → if it fails or returns 0, bot treats real fills as
+                # "abandoned" and posts a NEW fav for full qty → over-hedge
+                # → naked exposure → big loss.
+                # Setting _fav_fully_filled flips a guard read by
+                # _ws_phantom_instant_snap_up so it skips this bot
+                # immediately. Trade recording stays on the monitor cycle
+                # path which already handles smart_repeat/awaiting_settlement
+                # transitions correctly.
+                _qty_thresh = qty_bot - 0.01  # fractional tolerance
+                if bot['fav_fill_qty'] >= _qty_thresh and not bot.get('_fav_fully_filled'):
+                    bot['_fav_fully_filled'] = True
+                    bot['_ws_fav_filled_at'] = time.time()
+                    print(f'⚡ WS PHANTOM FAV FULLY FILLED: {bot_id} {bot["fav_fill_qty"]}/{qty_bot} — snap-up disabled, monitor will complete')
             save_state()
         break
 
@@ -6971,6 +6996,8 @@ def _execute_ws_completion(bot_id):
             bot['no_fill_qty'] = 0
             bot['_hedge_fired'] = False
             bot['_trade_recorded'] = False
+            bot.pop('_fav_fully_filled', None)
+            bot.pop('_ws_fav_filled_at', None)
             # Restore original qty if reduced by partial fill
             if bot.get('_original_qty'):
                 bot['quantity'] = bot['_original_qty']

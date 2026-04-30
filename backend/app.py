@@ -35,6 +35,10 @@ app = Flask(__name__, static_folder='../frontend', static_url_path='')
 CORS(app)
 Compress(app)
 
+# Stub kept for compatibility with snap-down fix path — full WS push deferred.
+def _ws_notify_state_change(reason='', bot_id=''):
+    pass
+
 # Global variables
 kalshi_client: Optional[KalshiAPI] = None
 stop_loss_percentage = 0.05  # 5% stop loss default
@@ -4981,21 +4985,19 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
         if fav_bid <= 0:
             continue
 
-        # Self-exclusion: if we're alone at fav_bid, the "bid" we see is just our own
-        # order — real market bid is the next level down. Walk the book to find it.
-        _fav_fills = bot.get('fav_fill_qty', 0)
-        _bot_qty = bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1))
-        _remaining = max(1, _bot_qty - _fav_fills)
-        effective_bid = _fav_bid_excluding_self(hedge_ticker, fav_side, fav_price, _remaining)
-        if effective_bid <= 0:
-            effective_bid = fav_bid  # fallback to WS bid if orderbook unavailable
-
-        # Only drop if hedge is ABOVE the effective (non-self) bid
-        if fav_price <= effective_bid:
+        # Stay parked at bid — even when alone at top of book.
+        # Phantom is a speed play: queue priority compounds, oscillating
+        # off-bid (self-alone drop) → on-bid (snap up) shreds priority and
+        # rarely ends up filled. Drop only when an external bid genuinely
+        # below fav_price appears (i.e., our order is above the highest bid).
+        # Self-exclusion was removed 2026-04-30 — it kept dropping us off
+        # the BBO whenever we were alone at top, killing queue priority.
+        # See feedback_phantom_park_at_bid_alone.md.
+        if fav_price <= fav_bid:
             continue
 
         fav_ask_now = yes_ask if fav_side == 'yes' else no_ask
-        drop_target = effective_bid
+        drop_target = fav_bid
 
         if drop_target <= 0 or drop_target >= fav_price:
             continue
@@ -6041,6 +6043,9 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     bot['dog_filled_at'] = time.time()
                     bot['status'] = 'dog_filled'
                     _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
+                    # Notify is non-blocking (thread) — fires after hedge worker
+                    # has the job, doesn't slow the hedge path.
+                    _ws_notify_state_change('phantom_dog_fill', bot_id)
                     # Skip save_state — json.dump GIL contention blocks hedge worker (deferred to hedge fn line 3508)
                     break
                 elif bot['dog_fill_qty'] >= 1.0 and not bot.get('_hedge_fired'):
@@ -6187,6 +6192,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     bot['_fav_fully_filled'] = True
                     bot['_ws_fav_filled_at'] = time.time()
                     print(f'⚡ WS PHANTOM FAV FULLY FILLED: {bot_id} {bot["fav_fill_qty"]}/{qty_bot} — triggering instant completion')
+                _ws_notify_state_change('phantom_fav_fill', bot_id)
                     # Trigger the full _handle_phantom completion path now,
                     # instead of waiting up to ~2-30s for the next monitor
                     # cycle. _handle_phantom owns all phantom-specific

@@ -6,6 +6,7 @@ Flask server providing API endpoints for the trading bot
 from flask import Flask, jsonify, request, send_from_directory, make_response, Response, stream_with_context
 from flask_cors import CORS
 from flask_compress import Compress
+from flask_sock import Sock
 from kalshi_api import KalshiAPI
 import os
 import sys
@@ -34,10 +35,39 @@ _screenshot_store = {'data': None, 'event': threading.Event()}
 app = Flask(__name__, static_folder='../frontend', static_url_path='')
 CORS(app)
 Compress(app)
+sock = Sock(app)
 
-# Stub kept for compatibility with snap-down fix path — full WS push deferred.
+# ─── State-change WS push ───────────────────────────────────────────────────
+# Frontend connects to /ws/state. Backend pushes a tiny "state_change" notice
+# the moment a phantom dog/fav fill or other state change happens. Frontend
+# triggers an immediate /api/bot/list fetch on receive — sub-100ms UI updates
+# without replacing the 2s polling fallback (so a dead WS doesn't break the
+# UI). Sends in a background thread so the SPEED CRITICAL hedge path doesn't
+# block on socket IO. Failures don't propagate.
+_ws_state_clients = []
+_ws_state_clients_lock = threading.Lock()
+
 def _ws_notify_state_change(reason='', bot_id=''):
-    pass
+    if not _ws_state_clients:
+        return
+    msg = json.dumps({'type': 'state_change', 'reason': reason, 'bot_id': bot_id, 'ts': time.time()})
+    def _send():
+        with _ws_state_clients_lock:
+            clients = list(_ws_state_clients)
+        dead = []
+        for client in clients:
+            try:
+                client.send(msg)
+            except Exception:
+                dead.append(client)
+        if dead:
+            with _ws_state_clients_lock:
+                for d in dead:
+                    try:
+                        _ws_state_clients.remove(d)
+                    except ValueError:
+                        pass
+    threading.Thread(target=_send, daemon=True).start()
 
 # Global variables
 kalshi_client: Optional[KalshiAPI] = None
@@ -6176,6 +6206,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 else:
                     bot['no_fill_qty'] = bot['fav_fill_qty']
                 print(f'👻 WS PHANTOM FAV FILL: {bot_id} +{count} → {bot["fav_fill_qty"]}/{qty_bot}')
+                _ws_notify_state_change('phantom_fav_fill', bot_id)
                 # Mark as fully filled for snap-up guard. Without this, the
                 # snap loop keeps trying to amend a fav order that already
                 # filled — every BBO tick → amend → 404 → get_order check
@@ -21473,6 +21504,28 @@ def create_middle_bot():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@sock.route('/ws/state')
+def ws_state(ws):
+    """Frontend connects here to receive state-change pushes (sub-100ms UI
+    updates). Connect → register → block on receive() until disconnect →
+    deregister. Polling stays as fallback so a dead WS doesn't break the UI."""
+    with _ws_state_clients_lock:
+        _ws_state_clients.append(ws)
+    try:
+        ws.send(json.dumps({'type': 'hello', 'ts': time.time()}))
+        while True:
+            try:
+                _ = ws.receive(timeout=60)
+            except Exception:
+                break
+    finally:
+        with _ws_state_clients_lock:
+            try:
+                _ws_state_clients.remove(ws)
+            except ValueError:
+                pass
 
 
 @app.route('/api/bot/list', methods=['GET'])

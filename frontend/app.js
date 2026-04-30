@@ -9404,12 +9404,53 @@ function updateBotsBadge(count) {
     }
 }
 
+// State-change WS push: gives sub-100ms UI updates on fills/completions
+// without dropping the 2s polling fallback. Backend pushes a "state_change"
+// message on key events (phantom_dog_fill, phantom_fav_fill) and we trigger
+// an immediate monitorBots() refresh. If the WS dies, polling continues so
+// we never miss state for long.
+let _stateWS = null;
+let _stateWSReconnectMs = 1000;
+let _lastStatePushAt = 0;
+function connectStateWS() {
+    try {
+        if (_stateWS && (_stateWS.readyState === WebSocket.OPEN || _stateWS.readyState === WebSocket.CONNECTING)) return;
+        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        _stateWS = new WebSocket(`${proto}//${window.location.host}/ws/state`);
+        _stateWS.onopen = () => {
+            console.log('🔌 State WS connected — instant updates active');
+            _stateWSReconnectMs = 1000;
+        };
+        _stateWS.onmessage = (ev) => {
+            try {
+                const d = JSON.parse(ev.data);
+                if (d.type === 'state_change') {
+                    // Throttle to at most one refresh per 100ms — multiple bots
+                    // can fire pushes in the same tick.
+                    const now = Date.now();
+                    if (now - _lastStatePushAt < 100) return;
+                    _lastStatePushAt = now;
+                    if (typeof monitorBots === 'function') monitorBots();
+                }
+            } catch (_) {}
+        };
+        _stateWS.onclose = () => {
+            setTimeout(connectStateWS, _stateWSReconnectMs);
+            _stateWSReconnectMs = Math.min(_stateWSReconnectMs * 2, 30000);
+        };
+        _stateWS.onerror = () => { try { _stateWS.close(); } catch(_) {} };
+    } catch (e) {
+        console.warn('State WS connect failed', e);
+    }
+}
+
 // Always start monitoring after login — bots should never go unmonitored
 async function autoResumeMonitor() {
     // Kill any stale interval first, then always start fresh
     if (autoMonitorInterval) clearInterval(autoMonitorInterval);
     console.log('🔄 Starting auto-monitor (always-on)');
     autoMonitorInterval = setInterval(monitorBots, 2000);
+    connectStateWS();
     const button = document.getElementById('auto-monitor-text');
     const buddy  = document.getElementById('bot-buddy');
     if (button) button.textContent = '🤖 Monitoring';

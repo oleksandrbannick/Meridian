@@ -6452,7 +6452,6 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 })
 
             elif is_exit_fill:
-                # Exit sell fill (end-of-game sellback) — handled by _apex_mm_exit_tick
                 # Track in _counted_order_fills to prevent late-fill re-count
                 if order_id:
                     _cum = bot.setdefault('_counted_order_fills', {})
@@ -6460,7 +6459,34 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 sell_info = bot.get('_exit_sell_oids', {}).get(matched_side, {})
                 old_fill = sell_info.get('_ws_fill_qty', 0)
                 sell_info['_ws_fill_qty'] = old_fill + count
-                print(f'🚪 WS APEX MM SELLBACK FILL: {bot_id} {matched_side.upper()} +{count}')
+
+                # Buy-opposite arb completion: process inline (mirrors is_amend_exit_fill).
+                # Without this, inventory and trade row only update when _apex_mm_exit_tick
+                # polls Kalshi REST (3s+ throttle), creating a ghost-inventory window and
+                # — if the kalshi-truth clamp completes the bot first — losing the trade row.
+                # Sellback (action='sell') has different P&L math; keep deferred to exit_tick.
+                _action = sell_info.get('action', 'sell')
+                if _action == 'buy' and not sell_info.get('_trade_recorded'):
+                    held_side = sell_info.get('held_side') or ('yes' if matched_side == 'no' else 'no')
+                    opp_held = bot.get(f'net_{held_side}', 0)
+                    exit_price = sell_info.get('price') or matched_price or bot.get('_exit_price', 0)
+                    close_qty = min(count, opp_held)
+                    if close_qty > 0 and exit_price > 0:
+                        _apex_mm_record_round_trip(bot_id, bot, matched_side, exit_price, close_qty)
+                        bot['_exit_fill_qty'] = bot.get('_exit_fill_qty', 0) + close_qty
+                        print(f'💰 WS APEX MM EXIT-BUY FILL: {bot_id} {matched_side.upper()} +{count} @{exit_price}c → closed {close_qty}x held {held_side.upper()} (exit {bot["_exit_fill_qty"]}/{bot.get("_exit_total_qty",0)})')
+                        if sell_info['_ws_fill_qty'] >= sell_info.get('qty', 0):
+                            sell_info['_trade_recorded'] = True
+                            sell_info['oid'] = None
+                        if bot.get('net_yes', 0) == 0 and bot.get('net_no', 0) == 0:
+                            bot['_unrealized_pnl'] = 0
+                            bot_log('APEX_MM_EXIT_BUY_COMPLETE_WS', bot_id, {
+                                'realized_pnl': bot.get('realized_pnl_cents', 0),
+                                'matched_side': matched_side, 'exit_price': exit_price,
+                                'close_qty': close_qty,
+                            })
+                else:
+                    print(f'🚪 WS APEX MM SELLBACK FILL: {bot_id} {matched_side.upper()} +{count}')
             else:
                 # Ladder fill (or late fill from old cycle) — update inventory
                 # CRITICAL: re-check _counted_order_fills under lock for late fills
@@ -12046,6 +12072,22 @@ def _apex_mm_exit_tick(bot_id, bot):
                     bot['total_no_cost'] = 0
             # If Kalshi says zero on both sides → bot has nothing to exit, complete
             if _ksh_y == 0 and _ksh_n == 0:
+                # Synthesize a round-trip trade row for any unprocessed inventory.
+                # Without this, exit fills that never reached the WS or order-poll
+                # paths complete silently — P&L lands in apex_net_cents but no
+                # mm_round_trip audit row is emitted, undercounting wins/losses.
+                # Use the buy-opp exit order's posted price as the best estimate.
+                for _held_side, _held_qty in (('yes', _bot_y), ('no', _bot_n)):
+                    if _held_qty <= 0:
+                        continue
+                    _opp_side = 'no' if _held_side == 'yes' else 'yes'
+                    _opp_info = (bot.get('_exit_sell_oids') or {}).get(_opp_side) or {}
+                    if _opp_info.get('action') == 'buy' and not _opp_info.get('_trade_recorded'):
+                        _exit_price = _opp_info.get('price') or bot.get('_exit_price', 0) or (100 - bot.get(f'avg_{_held_side}_cost', 0))
+                        if _exit_price > 0:
+                            _apex_mm_record_round_trip(bot_id, bot, _opp_side, _exit_price, _held_qty)
+                            _opp_info['_trade_recorded'] = True
+                            print(f'📝 APEX MM CLAMP RT: {bot_id} synthesized {_held_side.upper()} {_held_qty}x round-trip @ exit={_exit_price}c (kalshi flat)')
                 # Cancel any live exit orders before completing
                 for _eo_key in ('_yes_exit_oid', '_no_exit_oid'):
                     _eo = bot.get(_eo_key)
@@ -12059,6 +12101,14 @@ def _apex_mm_exit_tick(bot_id, bot):
                         try: _safe_cancel(_eo, f'apex_mm_exit_complete_{bot_id}')
                         except Exception: pass
                         _info['oid'] = None
+                # Force inventory to zero (record_round_trip may leave residue if qty mismatched)
+                bot['net_yes'] = 0
+                bot['net_no'] = 0
+                bot['avg_yes_cost'] = 0
+                bot['avg_no_cost'] = 0
+                bot['total_yes_cost'] = 0
+                bot['total_no_cost'] = 0
+                bot['_unrealized_pnl'] = 0
                 bot['status'] = 'completed'
                 bot['completed_at'] = now
                 bot['_market_settled_at'] = now

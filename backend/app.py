@@ -4476,8 +4476,13 @@ class KalshiWSManager:
                 # ── Real-time phantom: ALL speed-critical operations on WS ──
                 # Background threads — MUST NOT block WS handler (kills hedge latency)
                 try:
-                    threading.Thread(target=_ws_phantom_instant_drop, args=(ticker, yb, nb, ya, na), daemon=True).start()
-                    threading.Thread(target=_ws_phantom_instant_snap_up, args=(ticker, yb, nb, ya, na), daemon=True).start()
+                    # Snap-up / snap-down go through the pre-warmed snap worker queue
+                    # (saves ~1–2ms thread spawn per amend = front of new-price queue
+                    # vs slower competitors). Pass _ws_event_ts so the snap fn can
+                    # measure raw_snap_ms = WS-event → HTTP-send latency.
+                    _ws_event_ts = time.time()
+                    _snap_worker_queue.put((_ws_phantom_instant_drop, (ticker, yb, nb, ya, na, _ws_event_ts)))
+                    _snap_worker_queue.put((_ws_phantom_instant_snap_up, (ticker, yb, nb, ya, na, _ws_event_ts)))
                     # ceiling exit system removed — fav snaps to bid with no cap
                     threading.Thread(target=_ws_phantom_price_floor, args=(ticker, yb, nb), daemon=True).start()
                     threading.Thread(target=_ws_phantom_drift_guard, args=(ticker, yb, nb), daemon=True).start()
@@ -4973,7 +4978,7 @@ def _fav_bid_excluding_self(ticker, fav_side, our_price, our_remaining_qty):
         return 0
 
 
-def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
+def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask, _ws_event_ts=None):
     """Instant drop: if any phantom bot's hedge is above the effective (non-self) bid,
     amend down immediately. Called on every WS price tick — must be fast.
     Self-exclusion: when we're alone at fav_bid, the real market is one level down."""
@@ -5029,6 +5034,14 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask):
             amend_kwargs = {f'{fav_side}_price': drop_target}
             # Priority: fav drop is WS tick-driven — same justification as dog retreat.
             api_rate_limiter.wait(priority=True)
+            # Measure raw_snap_ms = WS-event → HTTP-send latency (mirrors raw_hedge_ms).
+            # Stamped just before the network call so the metric reflects all locally-
+            # controllable latency: queue dispatch, lock acquire, rate-limiter wait.
+            if _ws_event_ts is not None:
+                _snap_ms = (time.time() - _ws_event_ts) * 1000
+                bot['raw_snap_ms'] = round(_snap_ms, 2)
+                try: _record_latency('raw_snap_phantom', _snap_ms, {'kind': 'drop', 'ticker': ticker})
+                except Exception: pass
             _amend_resp = kalshi_client.amend_order(fav_oid, ticker=hedge_ticker, side=fav_side,
                                       count=bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1)),
                                       **amend_kwargs)
@@ -5449,7 +5462,7 @@ def _ws_phantom_sympathy_guard(ticker, yes_bid, no_bid, yes_ask, no_ask):
         return
 
 
-def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
+def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask, _ws_event_ts=None):
     """Instant snap UP: if fav bid rose above posted price, amend up immediately.
     Catches fast market moves (tennis breaks, game events) before the 2s monitor cycle.
     Called on every WS price tick — runs in background thread."""
@@ -5500,6 +5513,12 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask):
             amend_kwargs = {f'{fav_side}_price': snap_target}
             # Priority: fav snap-up is WS tick-driven — jump the queue when fav bid rises.
             api_rate_limiter.wait(priority=True)
+            # Measure raw_snap_ms = WS-event → HTTP-send latency (mirrors raw_hedge_ms).
+            if _ws_event_ts is not None:
+                _snap_ms = (time.time() - _ws_event_ts) * 1000
+                bot['raw_snap_ms'] = round(_snap_ms, 2)
+                try: _record_latency('raw_snap_phantom', _snap_ms, {'kind': 'snap_up', 'ticker': ticker})
+                except Exception: pass
             _amend_resp = kalshi_client.amend_order(fav_oid, ticker=hedge_ticker, side=fav_side,
                                         count=qty, **amend_kwargs)
             _amend_order = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
@@ -5867,6 +5886,30 @@ def _hedge_worker_loop():
 
 for _i in range(_HEDGE_WORKER_COUNT):
     threading.Thread(target=_hedge_worker_loop, daemon=True, name=f'hedge-worker-{_i}').start()
+
+# ─── Phantom Snap Worker: pre-spawned threads for instant fav-amend on bid moves ──
+# Mirrors the hedge worker design — eliminates per-WS-tick threading.Thread spawn
+# overhead (~0.5–2ms) on snap-up/snap-down. Speed matters because amend internally
+# cancel-reposts: first amend to land at the new price level wins position in the
+# new queue. Saving 1–2ms per snap = beating any competitor without a pre-warmed
+# worker. 2 workers handle WS event bursts without backing up.
+_snap_worker_queue = _queue_mod.Queue()
+_SNAP_WORKER_COUNT = 2
+
+def _snap_worker_loop():
+    """Pre-warmed worker thread for snap-up/snap-down — blocks on queue.get()."""
+    while True:
+        try:
+            job = _snap_worker_queue.get()
+            if job is None:
+                break
+            fn, args = job
+            fn(*args)
+        except Exception as e:
+            print(f'⚠ SNAP WORKER ERROR: {e}')
+
+for _i in range(_SNAP_WORKER_COUNT):
+    threading.Thread(target=_snap_worker_loop, daemon=True, name=f'snap-worker-{_i}').start()
 
 # ─── Pending WS actions: queued by WS handler, drained by monitor into response ─
 # This ensures the frontend sees 'completed' / 'timeout_exit' actions even when
@@ -7158,6 +7201,7 @@ _latency_log = {
     'fill_to_hedge_apex':    deque(maxlen=50),
     'raw_hedge_phantom':     deque(maxlen=50),
     'raw_hedge_apex':        deque(maxlen=50),
+    'raw_snap_phantom':      deque(maxlen=100),
     'api_generic':    deque(maxlen=200),
     'api_ping':       deque(maxlen=200),
 }
@@ -25072,6 +25116,7 @@ def get_latency():
         'fill_to_hedge_apex':    _latency_stats('fill_to_hedge_apex'),
         'raw_hedge_phantom':     _latency_stats('raw_hedge_phantom'),
         'raw_hedge_apex':        _latency_stats('raw_hedge_apex'),
+        'raw_snap_phantom':      _latency_stats('raw_snap_phantom'),
         'api_ping':      _latency_stats('api_ping'),
         'live_ping_ms':  ping_ms,
         'raw_ping_ms':   raw_ping_ms,

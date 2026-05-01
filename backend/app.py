@@ -24610,6 +24610,7 @@ PNL_LOSS_RESULTS = (
     'mm_sellback',  # apex MM: exit sell (can be + or -, reclassified by actual P&L)
     'mm_settlement_yes',  # apex MM: market settled YES
     'mm_settlement_no',  # apex MM: market settled NO
+    'mm_pnl_sync',  # apex MM: synthetic row for Kalshi /pnl drift (cancel-race fills)
 )
 PNL_WIN_RESULTS = (
     'completed', 'win', 'settled_win_yes', 'settled_win_no', 'manual_exit_completed',

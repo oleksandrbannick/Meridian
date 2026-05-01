@@ -17341,6 +17341,22 @@ def _handle_apex(bot_id, bot, actions):
                         'old_stored': _stored, 'new_stored': _ksh_pnl_c,
                         'drift_cents': _drift,
                     })
+                    # Write synthetic trade row for daily P&L / calendar.
+                    # Why: cancel-404 fills never produce a trade row, so daily totals
+                    # diverge from Kalshi's realized pnl. This patches the gap by
+                    # booking the drift as a single mm_pnl_sync trade.
+                    _drift_pnl = round(_drift, 2)
+                    _record_trade({
+                        'bot_id': bot_id, 'ticker': ticker, 'bot_category': 'ladder_arb',
+                        'result': 'mm_pnl_sync', 'exit_via': 'kalshi_drift_sync',
+                        'is_exit': True, 'exit_type': 'drift_sync',
+                        'quantity': 0, 'fee_cents': 0,
+                        'profit_cents': max(0, _drift_pnl),
+                        'loss_cents': abs(min(0, _drift_pnl)),
+                        'net_pnl': _drift_pnl,
+                        'timestamp': now, 'fill_source': 'apex_mm_drift_sync',
+                        'game_phase': bot.get('game_phase', ''),
+                    }, bot)
                 break
         except Exception:
             pass  # silent fail — no-op until next cycle

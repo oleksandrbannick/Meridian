@@ -10664,7 +10664,12 @@ def _apex_mm_walk_up(bot_id, bot):
     # Cadence accelerates with dwell time but caps at 2x (slow probe).
     # No walk-down: we never follow lower bidders.
     _market_best_bid = _apex_mm_market_best_bid(bot, exit_side)
-    _max_walk_price = max(1, 95 - avg_held)  # 5c profit floor — autonomous walk cap
+    # Walk-up cap = LESS profitable of (5c floor, configured target).
+    # Width≥5 bots walk up to combined 95c (5c profit floor).
+    # Width<5 bots stop AT target (can't walk past their configured profit).
+    # E.g. width=2 (target combined 98c) → cap=98c → no past-target walk.
+    _walk_cap_combined = max(95, 100 - width)  # max of (95c, target_combined)
+    _max_walk_price = max(1, _walk_cap_combined - avg_held)
     _max_profitable_price = max(1, 99 - avg_held)  # 1c profit safety — outbidder follow cap
 
     _snap_target = 0

@@ -2232,8 +2232,11 @@ def _fetch_api_tennis_scoreboard(tour_filter):
         event_date = m.get('event_date', '')
         event_time = m.get('event_time', '')
         match_date_iso = f"{event_date}T12:00:00Z" if event_date else ''
-        # Actual start time for pregame display (API Tennis times are UTC)
-        start_time_iso = f"{event_date}T{event_time}:00Z" if event_date and event_time else ''
+        # Actual start time for pregame display.
+        # We request API Tennis with timezone=America/Phoenix, so event_date/event_time
+        # are in Arizona local time. Tag the ISO string with the AZ offset (-07:00, no DST)
+        # so the frontend Date parser converts to the user's locale correctly.
+        start_time_iso = f"{event_date}T{event_time}:00-07:00" if event_date and event_time else ''
 
         # Tournament + round for display
         tournament = m.get('tournament_name', '')

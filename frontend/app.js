@@ -2603,9 +2603,10 @@ function displayEventRow(eventData, container) {
         }
     } else if (gameScore) {
         // Pregame scoreboard (no Kalshi activity).
-        // Tennis: API Tennis event_time isn't reliably UTC (we've seen Beijing-zone
-        // values served verbatim), so prefer Kalshi's milestone_start_date when the
-        // market carries one — that matches Kalshi's UI exactly.
+        // Tennis: when the market carries milestone_start_date (Kalshi's authoritative
+        // start time), prefer it over gameScore.startTime — the backend used to mis-tag
+        // API Tennis Phoenix-local times as UTC, which produced 7-hour-off displays.
+        // Kept as a defensive override even after the backend fix.
         if (gameScore.state === 'pre' && sport === 'Tennis' && eventData.markets && eventData.markets.length > 0) {
             const _msStart = (eventData.markets.find(mk => mk.milestone_start_date) || {}).milestone_start_date;
             if (_msStart) {

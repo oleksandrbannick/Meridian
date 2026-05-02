@@ -2602,7 +2602,19 @@ function displayEventRow(eventData, container) {
             }
         }
     } else if (gameScore) {
-        // Pregame scoreboard (no Kalshi activity)
+        // Pregame scoreboard (no Kalshi activity).
+        // Tennis: API Tennis event_time isn't reliably UTC (we've seen Beijing-zone
+        // values served verbatim), so prefer Kalshi's milestone_start_date when the
+        // market carries one — that matches Kalshi's UI exactly.
+        if (gameScore.state === 'pre' && sport === 'Tennis' && eventData.markets && eventData.markets.length > 0) {
+            const _msStart = (eventData.markets.find(mk => mk.milestone_start_date) || {}).milestone_start_date;
+            if (_msStart) {
+                const _msd = new Date(_msStart);
+                if (!isNaN(_msd.getTime())) {
+                    gameScore.startTime = _msd.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZoneName: 'short' });
+                }
+            }
+        }
         const scoreboard = buildScoreboard(gameScore);
         if (scoreboard) card.appendChild(scoreboard);
     }

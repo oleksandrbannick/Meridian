@@ -6530,6 +6530,17 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 if len(bot['_fill_log']) > 50:
                     bot['_fill_log'] = bot['_fill_log'][-50:]
 
+                # ── Toxicity tracking: capture mid at fill, sample at +5s/+30s ──
+                # Passive — no behavior change. Drift signed so positive = adverse
+                # (bot filled YES, then YES bid kept rising = informed flow).
+                _tox_mid = _apex_mm_midpoint(ticker)
+                if _tox_mid is not None:
+                    bot.setdefault('_toxicity_pending', []).append({
+                        'ts': time.time(), 'side': matched_side,
+                        'fill_price': matched_price, 'mid_at_fill': _tox_mid,
+                        'mid_5s': None, 'mid_30s': None,
+                    })
+
                 # ── Velocity Gate: detect rapid fills on same side ──
                 _vf_now = time.time()
                 _vfills = bot.setdefault('_velocity_fills', [])
@@ -9396,11 +9407,70 @@ APEX_MAX_PULL_CYCLES = 8        # Phantom: stop re-posting after 8 pulls
 APEX_MM_MAX_PULL_CYCLES = 999   # MM: effectively unlimited — MM is patient, keeps reposting
 APEX_MM_OBI_DEPTH = 5           # MM uses top-5 levels for OBI (wider view than phantom's top-3)
 
-# ── Dual-threshold stop-loss matrix ──
-# Pure maker exit: no SL, no soak, no wall, no phase-aware walk cadence.
-# One knob — seconds between 1c voluntary creep steps when alone (BBO).
-# Outbidder match has no cadence gate (immediate). See _apex_mm_walk_up.
-APEX_MM_WALK_INTERVAL_S = 8
+# ── Pure maker exit: no SL, no soak, no wall, no phase-aware walk cadence ──
+APEX_MM_WALK_INTERVAL_S = 8     # Seconds between 1c voluntary creep steps when alone
+
+# ── Sport-aware book thresholds ──
+# Native book depth varies wildly by sport: tennis runs 10-30 contracts at top
+# levels, basketball/MLB run 50-300+. The default APEX_MM_PULL_MIN=50 was
+# making tennis MM pull 70% of cycles ("thin_yes (6<50)" loop). Tennis floor
+# now matches its native depth; fee-bearing sports keep the higher bar.
+APEX_MM_PULL_MIN_BY_SPORT = {
+    'tennis':           10,
+    'intl_basketball':  20,
+    'mlb': 50, 'nba': 50, 'nhl': 50, 'ncaab': 50, 'ncaaw': 50,
+    'epl': 30, 'ucl': 30, 'mls': 30,
+    'default':          30,
+}
+APEX_MM_RECOVER_MIN_BY_SPORT = {  # ~1.5x pull min for hysteresis
+    'tennis':           15,
+    'intl_basketball':  30,
+    'mlb': 75, 'nba': 75, 'nhl': 75, 'ncaab': 75, 'ncaaw': 75,
+    'epl': 45, 'ucl': 45, 'mls': 45,
+    'default':          45,
+}
+
+# ── Sport-aware width floor (= surrender curve runway) ──
+# Width = 2*start_gap. Width=2 means voluntary creep has ~1c of profit room
+# before hitting the 99-avg cap, so the surrender curve has nowhere to walk.
+# Wider floor on fee-bearing sports gives the creep ~3-4 steps to find a fill
+# before sitting at the cap.
+APEX_MM_WIDTH_FLOOR_BY_SPORT = {
+    'tennis':           1,   # gap=1 = width=2 = 1c profit. Free fees, fine.
+    'intl_basketball':  2,
+    'mlb': 2, 'nba': 2, 'nhl': 2, 'ncaab': 2, 'ncaaw': 2,
+    'epl': 2, 'ucl': 2, 'mls': 2,
+    'default':          1,
+}
+
+# ── OBI-aware midpoint skew (defensive, since SL is gone) ──
+# Blends weighted_obi into _apex_mm_skewed_midpoint. Same direction as inventory
+# skew: positive OBI (YES being lifted by informed flow) → lower midpoint →
+# more passive YES bidding (don't get run over) + more aggressive NO bidding.
+APEX_MM_OBI_SKEW_K = 2          # max cents of midpoint shift at |obi|=1.0
+
+# ── Drift Guard Dormancy ──
+# When flat in a decided market (max_bid >= 80c), pulling/reposting forever
+# burns API tokens for zero EV. After N consecutive guard pulls go dormant
+# until max_bid drops below DORMANT_RECOVER for SETTLE_S sustained.
+APEX_MM_DRIFT_DORMANT_STRIKES = 3
+APEX_MM_DRIFT_DORMANT_RECOVER_BID = 70
+APEX_MM_DRIFT_DORMANT_RECOVER_S = 30
+
+
+def _apex_mm_pull_min(ticker):
+    sport = _detect_sport(ticker)
+    return APEX_MM_PULL_MIN_BY_SPORT.get(sport, APEX_MM_PULL_MIN_BY_SPORT['default'])
+
+
+def _apex_mm_recover_min(ticker):
+    sport = _detect_sport(ticker)
+    return APEX_MM_RECOVER_MIN_BY_SPORT.get(sport, APEX_MM_RECOVER_MIN_BY_SPORT['default'])
+
+
+def _apex_mm_width_floor(ticker):
+    sport = _detect_sport(ticker)
+    return APEX_MM_WIDTH_FLOOR_BY_SPORT.get(sport, APEX_MM_WIDTH_FLOOR_BY_SPORT['default'])
 
 
 def _apex_obi_snapshot(ticker):
@@ -9558,19 +9628,20 @@ def _apex_mm_target_start_gap(bot):
     user_min = bot.get('start_gap', 2)
     yes_bid = _apex_mm_market_best_bid(bot, 'yes')
     no_bid = _apex_mm_market_best_bid(bot, 'no')
+    floor = _apex_mm_width_floor(bot.get('ticker', ''))
     if yes_bid <= 0 or no_bid <= 0:
-        return user_min
+        return max(user_min, floor)
     room = 100 - yes_bid - no_bid
     if room <= 0:
-        return user_min
+        return max(user_min, floor)
     if bot.get('_auto_width'):
         # Goldilocks: sit just inside market (BBO by ~2c each side = 4c total margin).
-        # width = room - 4, start_gap = (room - 4) / 2. Bounds [1, 20] = width [2, 40].
-        # Deep rungs (width << room) only fill on extreme events = pure adverse selection.
-        return max(1, min(20, (room - 4) // 2))
+        # width = room - 4, start_gap = (room - 4) / 2. Bounds [floor, 20] = width [2*floor, 40].
+        # Sport floor gives the surrender curve runway to walk before hitting cap.
+        return max(floor, min(20, (room - 4) // 2))
     target = max(user_min, int(room / 4))
     cap = bot.get('max_start_gap', user_min + 6)
-    return min(target, cap)
+    return max(floor, min(target, cap))
 
 
 def _apex_mm_shock_active(bot):
@@ -9670,12 +9741,13 @@ def _apex_mm_sync_auto_width(bot_id, bot):
     room = 100 - yes_bid - no_bid
     if room <= 0:
         return
-    new_gap = max(1, min(20, (room - 4) // 2))
+    floor = _apex_mm_width_floor(bot.get('ticker', ''))
+    new_gap = max(floor, min(20, (room - 4) // 2))
     old_gap = bot.get('start_gap', 2)
     if new_gap != old_gap:
         bot['start_gap'] = new_gap
-        print(f'📏 APEX MM AUTO-WIDTH: {bot_id} gap {old_gap}→{new_gap} (market_room={room}c, width={new_gap*2}c)')
-        bot_log('APEX_MM_AUTO_WIDTH', bot_id, {'old_gap': old_gap, 'new_gap': new_gap, 'room': room})
+        print(f'📏 APEX MM AUTO-WIDTH: {bot_id} gap {old_gap}→{new_gap} (market_room={room}c, width={new_gap*2}c, floor={floor})')
+        bot_log('APEX_MM_AUTO_WIDTH', bot_id, {'old_gap': old_gap, 'new_gap': new_gap, 'room': room, 'floor': floor})
 
 
 def _apex_mm_effective_gap_qty(bot, base_qty):
@@ -9691,23 +9763,61 @@ def _apex_mm_effective_gap_qty(bot, base_qty):
     return eff_gap, eff_qty
 
 
+# Sports where book is natively thin (10-30 contracts top depth). Collapsing
+# 4 thin rungs into 2 fatter rungs gives better queue priority + cleaner
+# footprint without changing total exposure. Total qty preserved by mult.
+APEX_MM_THIN_BOOK_SPORTS = ('tennis',)
+
+
+def _apex_mm_effective_levels(bot):
+    """Sport-aware (levels, qty_mult) override for ladder construction.
+    Thin-book sports collapse to 2 levels with proportionally larger qty."""
+    cfg_levels = bot.get('levels', 4) or 4
+    sport = _detect_sport(bot.get('ticker', ''))
+    if sport in APEX_MM_THIN_BOOK_SPORTS and cfg_levels > 2:
+        new_levels = 2
+        qty_mult = max(1, cfg_levels // new_levels)
+        return new_levels, qty_mult
+    return cfg_levels, 1
+
+
 def _apex_mm_skewed_midpoint(bot, raw_midpoint):
-    """Inventory-aware midpoint skew (Avellaneda-Stoikov style).
-    Long YES → lower midpoint (cheaper YES bids, pricier NO bids → encourage NO fills).
-    Long NO → raise midpoint. Linear in net_position / inventory_limit, capped by skew_k.
+    """Inventory + OBI-aware midpoint skew (Avellaneda-Stoikov style).
+
+    Inventory: Long YES → lower midpoint (cheaper YES bids, pricier NO bids
+        → encourage NO fills to drain inventory). Long NO → raise midpoint.
+        Linear in net_position / inventory_limit, capped by skew_k.
+
+    OBI: Positive OBI (YES being lifted by informed flow) → lower midpoint
+        (don't take more long YES at adverse prices). Same direction as
+        inventory, so the two signals stack when aligned. Capped by k_obi.
+
     Returns int cents."""
+    skew_total = 0
+
+    # Inventory component
     inv_limit = bot.get('inventory_limit', 0)
-    if inv_limit <= 0:
+    if inv_limit > 0:
+        net_pos = bot.get('net_yes', 0) - bot.get('net_no', 0)
+        if net_pos != 0:
+            skew_k = bot.get('skew_k', 8)  # max cents at full inventory
+            ratio = max(-1.0, min(1.0, net_pos / inv_limit))
+            skew_total += -skew_k * ratio
+
+    # OBI component (defensive radar — replaces SL's role of avoiding adverse runs)
+    ticker = bot.get('ticker', '')
+    lob = _local_orderbooks.get(ticker)
+    if lob and lob.last_update_ts > 0 and (time.time() - lob.last_update_ts) < 10:
+        try:
+            obi = lob.get_weighted_obi(depth=APEX_MM_OBI_DEPTH)
+            k_obi = bot.get('obi_skew_k', APEX_MM_OBI_SKEW_K)
+            skew_total += -k_obi * obi
+        except Exception:
+            pass
+
+    if skew_total == 0:
         return raw_midpoint
-    net_pos = bot.get('net_yes', 0) - bot.get('net_no', 0)
-    if net_pos == 0:
-        return raw_midpoint
-    # Stronger inventory aversion (was 4): with no SL/sellback, asymmetric quotes
-    # are the primary inventory drain — flush via pricing, not forced exits.
-    skew_k = bot.get('skew_k', 8)  # max cents of skew at full inventory
-    ratio = max(-1.0, min(1.0, net_pos / inv_limit))
-    skew = int(round(-skew_k * ratio))
-    return max(1, min(99, raw_midpoint + skew))
+    return max(1, min(99, raw_midpoint + int(round(skew_total))))
 
 
 def _apex_mm_reconcile_inventory(bot_id, bot):
@@ -10157,7 +10267,8 @@ def _apex_mm_repost_ladder(bot_id, bot):
         _apex_mm_sweep_orphans(bot_id, bot)
         _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
         _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
-        yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, bot['levels'], bot['spacing'], base_qty=_eff_qty, inv_limit=bot.get('inventory_limit', 0))
+        _eff_lvls, _qty_mult = _apex_mm_effective_levels(bot)
+        yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0))
         yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
         if not yes_levels and not no_levels:
             return
@@ -10611,7 +10722,7 @@ def _apex_mm_refill_entry(bot_id, bot, freed_qty):
         return
 
     # ── GATE 2: OBI — book not one-sided ──
-    should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH, obi_threshold=APEX_MM_PULL_OBI, depth_min=APEX_MM_PULL_MIN)
+    should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH, obi_threshold=APEX_MM_PULL_OBI, depth_min=_apex_mm_pull_min(ticker))
     if should_pull:
         bot_log('APEX_MM_REFILL_BLOCKED', bot_id, {'gate': 'obi', 'reason': pull_reason})
         return
@@ -10879,7 +10990,8 @@ def _apex_mm_cycle_reset(bot_id, bot):
     _apex_mm_sync_auto_width(bot_id, bot)
     _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
     _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
-    yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, bot['levels'], bot['spacing'], base_qty=_eff_qty, inv_limit=bot.get('inventory_limit', 0))
+    _eff_lvls, _qty_mult = _apex_mm_effective_levels(bot)
+    yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0))
     yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
     _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
     bot['midpoint'] = midpoint
@@ -11000,7 +11112,8 @@ def _apex_mm_fresh_ladder(bot_id, bot):
     _apex_mm_sync_auto_width(bot_id, bot)
     _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
     _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
-    yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, bot['levels'], bot['spacing'], base_qty=_eff_qty, inv_limit=bot.get('inventory_limit', 0))
+    _eff_lvls, _qty_mult = _apex_mm_effective_levels(bot)
+    yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0))
     yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
     _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
     bot['midpoint'] = midpoint
@@ -11215,7 +11328,7 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
         return
 
     # ── OBI gate ──
-    should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH, obi_threshold=APEX_MM_PULL_OBI, depth_min=APEX_MM_PULL_MIN)
+    should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH, obi_threshold=APEX_MM_PULL_OBI, depth_min=_apex_mm_pull_min(ticker))
     if should_pull:
         # Cancel all remaining orders — check for fill-race on each cancel
         _obi_late_fills = 0
@@ -17241,7 +17354,8 @@ def _handle_apex(bot_id, bot, actions):
                 # No exit oid — create one
                 _held = 'no' if _exit_side == 'yes' else 'yes'
                 threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _held), daemon=True).start()
-        if _apex_depth_recovered(ticker, bot, obi_threshold=APEX_MM_RECOVER_OBI, depth_min=APEX_MM_RECOVER_MIN):
+        _rec_min = _apex_mm_recover_min(ticker)
+        if _apex_depth_recovered(ticker, bot, obi_threshold=APEX_MM_RECOVER_OBI, depth_min=_rec_min):
             # Room guard: don't repost if MARKET room < width + 1 (need buffer above width).
             # Use market_best_bid for consistency with the active room_guard — bot is pulled
             # here so live = market in practice, but stay defensive against partial-cancel races.
@@ -17261,10 +17375,10 @@ def _handle_apex(bot_id, bot, actions):
                 _nd = _lob.get_total_depth('no', 3)
                 _obi = _lob.get_weighted_obi()
                 _parts = []
-                if _yd < APEX_MM_RECOVER_MIN:
-                    _parts.append(f'thin_yes ({_yd:.0f}<{APEX_MM_RECOVER_MIN})')
-                if _nd < APEX_MM_RECOVER_MIN:
-                    _parts.append(f'thin_no ({_nd:.0f}<{APEX_MM_RECOVER_MIN})')
+                if _yd < _rec_min:
+                    _parts.append(f'thin_yes ({_yd:.0f}<{_rec_min})')
+                if _nd < _rec_min:
+                    _parts.append(f'thin_no ({_nd:.0f}<{_rec_min})')
                 if abs(_obi) > APEX_MM_RECOVER_OBI:
                     _parts.append(f'obi ({_obi:.2f}>{APEX_MM_RECOVER_OBI:.2f})')
                 if _parts:
@@ -17360,13 +17474,76 @@ def _handle_apex(bot_id, bot, actions):
     net_yes = bot.get('net_yes', 0)
     net_no = bot.get('net_no', 0)
 
+    # 0.1. Toxicity tracker — sample mid drift at +5s and +30s after each fill.
+    # Drift signed so positive = adverse (bot bought YES, then YES kept rising
+    # = informed flow ran us over). Passive: log only, no behavior change.
+    _tox_pending = bot.get('_toxicity_pending')
+    if _tox_pending:
+        _tox_now = time.time()
+        _tox_mid_now = _apex_mm_midpoint(ticker)
+        _tox_keep = []
+        for _t in _tox_pending:
+            _age = _tox_now - _t['ts']
+            if _tox_mid_now is not None:
+                if _age >= 5 and _t.get('mid_5s') is None:
+                    _t['mid_5s'] = _tox_mid_now
+                if _age >= 30 and _t.get('mid_30s') is None:
+                    _t['mid_30s'] = _tox_mid_now
+                    _sign = 1 if _t['side'] == 'yes' else -1
+                    _d5 = ((_t.get('mid_5s') or _tox_mid_now) - _t['mid_at_fill']) * _sign
+                    _d30 = (_tox_mid_now - _t['mid_at_fill']) * _sign
+                    bot_log('APEX_MM_TOXICITY', bot_id, {
+                        'side': _t['side'], 'fill_price': _t['fill_price'],
+                        'mid_at_fill': _t['mid_at_fill'],
+                        'mid_5s': _t.get('mid_5s'), 'mid_30s': _tox_mid_now,
+                        'drift_5s_signed': _d5, 'drift_30s_signed': _d30,
+                    })
+                    continue  # done — don't keep
+            _tox_keep.append(_t)
+        # Cap pending samples to avoid unbounded growth in dead markets.
+        bot['_toxicity_pending'] = _tox_keep[-50:]
+
+    # 0.4. Drift dormancy recovery — clear sleep if market un-decides for SETTLE_S
+    _now_dd = time.time()
+    if bot.get('_drift_dormant'):
+        _bid_now = max(bot.get('live_yes_bid', 0), bot.get('live_no_bid', 0))
+        if _bid_now < APEX_MM_DRIFT_DORMANT_RECOVER_BID:
+            _ok_since = bot.get('_drift_dormant_recover_since') or _now_dd
+            bot['_drift_dormant_recover_since'] = _ok_since
+            if _now_dd - _ok_since >= APEX_MM_DRIFT_DORMANT_RECOVER_S:
+                print(f'✅ APEX MM DRIFT DORMANT CLEAR: {bot_id} max_bid={_bid_now}c < {APEX_MM_DRIFT_DORMANT_RECOVER_BID}c sustained — waking up')
+                bot_log('APEX_MM_DRIFT_DORMANT_CLEAR', bot_id, {'max_bid': _bid_now})
+                bot['_drift_dormant'] = False
+                bot['_drift_dormant_strikes'] = 0
+                bot['_drift_dormant_recover_since'] = None
+        else:
+            bot['_drift_dormant_recover_since'] = None  # reset recovery timer on re-spike
+        # While dormant, skip the rest of the cycle (held side still walks via walk_up below).
+        if bot.get('_drift_dormant'):
+            if net_yes > 0 or net_no > 0:
+                try: _apex_mm_walk_up(bot_id, bot)
+                except Exception: pass
+            return
+
     # 0.5. Active drift guard — STOP adding inventory in decided markets, but
     # never force-exit held positions. Held side rides to settlement via walk_up.
+    # After N consecutive flat strikes, go dormant to stop API churn.
     _active_max_bid = max(bot.get('live_yes_bid', 0), bot.get('live_no_bid', 0))
     if _active_max_bid >= 80:
         if net_yes <= 0 and net_no <= 0:
             _apex_mm_pull_all(bot_id, bot, f'active_drift_guard (max_bid={_active_max_bid}c >= 80c)')
-            print(f'🛡️ APEX MM ACTIVE DRIFT GUARD: {bot_id} max_bid={_active_max_bid}c — flat, pulling')
+            bot['_drift_dormant_strikes'] = bot.get('_drift_dormant_strikes', 0) + 1
+            _strikes_dd = bot['_drift_dormant_strikes']
+            if _strikes_dd >= APEX_MM_DRIFT_DORMANT_STRIKES:
+                bot['_drift_dormant'] = True
+                bot['_drift_dormant_at'] = _now_dd
+                bot['_drift_dormant_recover_since'] = None
+                print(f'😴 APEX MM DRIFT DORMANT: {bot_id} max_bid={_active_max_bid}c — {_strikes_dd} strikes, sleeping until bid<{APEX_MM_DRIFT_DORMANT_RECOVER_BID}c for {APEX_MM_DRIFT_DORMANT_RECOVER_S}s')
+                bot_log('APEX_MM_DRIFT_DORMANT', bot_id, {
+                    'max_bid': _active_max_bid, 'strikes': _strikes_dd,
+                })
+            else:
+                print(f'🛡️ APEX MM ACTIVE DRIFT GUARD: {bot_id} max_bid={_active_max_bid}c — flat, pulling (strike {_strikes_dd}/{APEX_MM_DRIFT_DORMANT_STRIKES})')
             return
         # Holding inventory: pull entry-side rungs only, keep exit alive for walk_up.
         _held_side_dg = 'yes' if net_yes > net_no else 'no'
@@ -17385,6 +17562,10 @@ def _handle_apex(bot_id, bot, actions):
         try: _apex_mm_walk_up(bot_id, bot)
         except Exception: pass
         return
+    else:
+        # Market not decided — reset strike counter (only consecutive strikes count)
+        if bot.get('_drift_dormant_strikes'):
+            bot['_drift_dormant_strikes'] = 0
 
     # 0.7. Room guard — pull if MARKET room < width (no profit space, behind the book).
     # Must use market_best_bid (excludes our own ladder), otherwise our just-posted
@@ -17551,7 +17732,7 @@ def _handle_apex(bot_id, bot, actions):
     # Skip if refill is in progress — avoid racing with cycle_refill posting new orders
     if bot.get('_refill_in_progress'):
         return
-    should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH, obi_threshold=APEX_MM_PULL_OBI, depth_min=APEX_MM_PULL_MIN)
+    should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH, obi_threshold=APEX_MM_PULL_OBI, depth_min=_apex_mm_pull_min(ticker))
     if should_pull:
         net_yes = bot.get('net_yes', 0)
         net_no = bot.get('net_no', 0)
@@ -17611,7 +17792,8 @@ def _handle_apex(bot_id, bot, actions):
                     base_qty = bot.get('base_qty', bot.get('qty_per_level', 1))
                     _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
                     _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
-                    yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, bot['levels'], bot['spacing'], base_qty=_eff_qty, inv_limit=bot.get('inventory_limit', 0))
+                    _eff_lvls, _qty_mult = _apex_mm_effective_levels(bot)
+                    yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0))
                     yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
                     _entry_levels = yes_levels if _entry_side == 'yes' else no_levels
                     _reposted = 0
@@ -23717,7 +23899,8 @@ def apex_mm_edit(bot_id):
             base_qty = bot.get('base_qty', bot.get('qty_per_level', 1))
             _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
             _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
-            yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, bot['levels'], bot['spacing'], base_qty=_eff_qty, inv_limit=bot.get('inventory_limit', 0))
+            _eff_lvls, _qty_mult = _apex_mm_effective_levels(bot)
+            yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0))
             yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
             _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
             bot['midpoint'] = midpoint

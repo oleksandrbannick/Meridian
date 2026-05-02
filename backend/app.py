@@ -5767,22 +5767,12 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 continue  # mm_exiting bots skip stop-loss/snap-down
 
             # ── market_making_active from here ──
+            # Pure maker model: no SL, no sellback, no wall. Only WS-driven action
+            # is "outbidder appeared above us → match" (no cap, follow into loss).
+            # See _apex_mm_walk_up for the alone/voluntary-creep branch.
             net_yes = bot.get('net_yes', 0)
             net_no = bot.get('net_no', 0)
             if net_yes <= 0 and net_no <= 0:
-                # Flat — clear stale breach timer (both sides may have filled during gate)
-                bot['_sl_breach_since'] = None
-                bot['_sl_breach_peak'] = None
-                bot['_sl_breach_phase'] = None
-                continue
-
-            # Fill grace period: suppress SL for N seconds after fill (liquidity cliff filter)
-            _last_fill_t = max(bot.get('_last_yes_fill_at', 0), bot.get('_last_no_fill_at', 0))
-            _in_fill_grace = _last_fill_t > 0 and (time.time() - _last_fill_t) < APEX_MM_SL_FILL_GRACE_S
-            if _in_fill_grace:
-                bot['_sl_breach_since'] = None
-                bot['_sl_breach_peak'] = None
-                bot['_sl_breach_phase'] = None
                 continue
 
             if net_yes > net_no:
@@ -5794,82 +5784,6 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 exit_side = 'yes'
                 held_side = 'no'
 
-            # ── Priority 1: Stop-loss ──
-            # Use OPTIMISTIC maker pricing — opp BID for arb, held ASK for sellback —
-            # to match the unrealized-P&L model. SL only fires when even the better
-            # maker exit is underwater past the wall; prevents firing on a position
-            # the bot can still exit profitably.
-            exit_bid = yes_bid if exit_side == 'yes' else no_bid
-            held_ask = yes_ask if held_side == 'yes' else no_ask
-            buy_opp = (held_avg + exit_bid) if exit_bid > 0 else 999
-            sell_held = (held_avg + (100 - held_ask)) if held_ask > 0 else 999
-            best_combined = min(buy_opp, sell_held)
-
-            width = _apex_mm_exit_width(bot)
-            # Stop = 100 + min(margin, 8c). Cap SL margin at 8c regardless of
-            # configured width — wide bots (e.g. width=40) used to have SL at
-            # combined 140 (= -40c per contract), which is no real safety net.
-            # Capping at 8c gives uniform downside protection: narrow bots
-            # (width<=8) keep their tight SL = width; wide bots cap at 8c past
-            # wall = -8c per contract max before SL fires.
-            stop = 100 + min(max(width, bot.get('min_sl_margin', 0)), 8)
-
-            if best_combined >= stop and best_combined < 999:
-                _hm = _apex_mm_hard_margin(width)
-                hard_stop = stop + _hm
-                _pc = time.perf_counter()  # monotonic, nanosecond res — immune to NTP drift
-
-                # ── HARD BREACH: circuit breaker — instant eject, no timer ──
-                if best_combined > hard_stop:
-                    bot['status'] = 'mm_exiting'
-                    _breach_dur = _pc - bot['_sl_breach_since'] if bot.get('_sl_breach_since') else 0
-                    print(f'🚨 APEX MM CIRCUIT BREAKER: {bot_id} combined={best_combined}c > {hard_stop}c — INSTANT EJECT (binary gap, breach_dur={_breach_dur:.3f}s)')
-                    def _fire_exit(_bid=bot_id, _b=bot, _bc=best_combined, _hs=hard_stop, _w=width, _hm_c=_hm):
-                        _apex_mm_begin_exit(_bid, _b, f'circuit_breaker (combined={_bc}c > {_hs}c, hard_margin={_hm_c}c)')
-                    threading.Thread(target=_fire_exit, daemon=True).start()
-                    return
-
-                # ── SOFT BREACH: persistence gate — filter flash spikes ──
-                _persist_s, _phase = _apex_mm_sl_persist(ticker)
-                if not bot.get('_sl_breach_since'):
-                    bot['_sl_breach_since'] = _pc
-                    bot['_sl_breach_peak'] = best_combined
-                    bot['_sl_breach_phase'] = _phase
-                    print(f'⏱ APEX MM SOFT BREACH: {bot_id} combined={best_combined}c >= {stop}c — gate {_persist_s}s ({_phase})')
-                    # Run walk-up during persistence so exit can park at wall (100c combined)
-                    # before SL fires — gives the order a chance to fill at breakeven.
-                    try: _apex_mm_walk_up(bot_id, bot)
-                    except Exception: pass
-                    continue
-                bot['_sl_breach_peak'] = max(bot.get('_sl_breach_peak', 0), best_combined)
-                _breach_age = _pc - bot['_sl_breach_since']
-                if _breach_age < _persist_s:
-                    # Keep walking toward wall during the persistence window
-                    try: _apex_mm_walk_up(bot_id, bot)
-                    except Exception: pass
-                    continue  # still within persistence window — let it breathe
-                # Persisted long enough — fire the exit
-                bot['status'] = 'mm_exiting'
-                print(f'🚨 APEX MM WS STOP-LOSS: {bot_id} combined={best_combined}c >= {stop}c — persisted {_breach_age:.3f}s/{_persist_s}s ({_phase}, peak={bot.get("_sl_breach_peak", 0)}c)')
-                def _fire_exit(_bid=bot_id, _b=bot, _bc=best_combined, _s=stop, _w=width, _age=_breach_age, _ph=_phase):
-                    _apex_mm_begin_exit(_bid, _b, f'ws_stop_loss (combined={_bc}c >= {_s}c, persisted={_age:.3f}s, phase={_ph})')
-                threading.Thread(target=_fire_exit, daemon=True).start()
-                return
-            else:
-                # Combined back below stop — reset persistence gate instantly
-                if bot.get('_sl_breach_since'):
-                    _breach_dur = time.perf_counter() - bot['_sl_breach_since']
-                    print(f'✅ APEX MM SL RESET: {bot_id} combined={best_combined}c < {stop}c — filtered {_breach_dur:.3f}s spike (peak={bot.get("_sl_breach_peak", 0)}c, phase={bot.get("_sl_breach_phase", "?")})')
-                    bot['_sl_breach_since'] = None
-                    bot['_sl_breach_peak'] = None
-                    bot['_sl_breach_phase'] = None
-
-            # ── Priority 2: Snap-up only (BBO maker model) ──
-            # We are the maker. Sellers cross to OUR bid; we never follow lower
-            # bidders down (that's taker price-improvement, not making). And we
-            # don't take bid+1 to claim queue priority — joining at the outbidder's
-            # bid keeps us in the queue without burning profit. Snap-down was the
-            # source of the 99↔100 bouncing seen on PERCOO.
             exit_oid = bot.get(f'_{exit_side}_exit_oid')
             if not exit_oid:
                 continue
@@ -5880,42 +5794,29 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
             if exit_bid <= 0:
                 continue
 
-            target_price = bot.get('_exit_target_price', 0)
             net_held = abs(net_yes - net_no)
-            snap_price = 0
-            snap_dir = ''
-            # Snap-up only — outbidder posted ABOVE our exit. Join at their bid
-            # (never bid+1). Cap at 99-avg (1c profit safety floor — never push
-            # voluntarily to combined 100c; let the WALL block handle that).
+            # Outbidder match: snap UP to real top (excludes our own orders).
+            # No cap. As maker, matching is always cheaper than later crossing.
             _real_top = _apex_mm_market_best_bid(bot, exit_side)
-            if _real_top > 0 and _real_top > current_price:
-                _max_profitable = max(1, 99 - held_avg)
-                snap_price = min(_real_top, _max_profitable)
-                if snap_price > current_price:
-                    snap_dir = 'UP'
-            if not snap_dir or snap_price <= 0:
+            if _real_top <= 0 or _real_top <= current_price:
                 continue
+            snap_price = _real_top
             try:
                 price_kwarg = {f'{exit_side}_price': snap_price}
                 api_rate_limiter.wait()
                 kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
                                           count=net_held, action='buy', **price_kwarg)
                 bot['_exit_price'] = snap_price
-                bot['_wall_parked'] = False
-                if snap_dir == 'DOWN' and snap_price <= target_price:
-                    bot['_exit_soak_start'] = time.time()
-                    bot['_exit_walk_count'] = 0
-                if snap_dir == 'UP':
-                    bot['_last_walk_at'] = time.time()  # gate monitor walker
+                bot['_last_walk_at'] = time.time()
                 combined = held_avg + snap_price
-                print(f'📊 APEX MM WS SNAP-{snap_dir}: {bot_id} {exit_side.upper()} {current_price}→{snap_price}c (combined={combined}c, bid={exit_bid})')
-                bot_log(f'APEX_MM_WS_SNAP_{snap_dir}', bot_id, {
+                print(f'📊 APEX MM WS SNAP-UP: {bot_id} {exit_side.upper()} {current_price}→{snap_price}c (combined={combined}c, bid={exit_bid})')
+                bot_log('APEX_MM_WS_SNAP_UP', bot_id, {
                     'old': current_price, 'new': snap_price, 'bid': exit_bid,
-                    'combined': combined, 'target': target_price,
+                    'combined': combined,
                 })
             except Exception as e:
                 if '404' not in str(e) and 'filled' not in str(e).lower():
-                    print(f'⚠ APEX MM WS SNAP-{snap_dir} FAIL: {bot_id}: {e}')
+                    print(f'⚠ APEX MM WS SNAP-UP FAIL: {bot_id}: {e}')
     finally:
         _ws_apex_mm_tick_lock.release()
 
@@ -9496,100 +9397,10 @@ APEX_MM_MAX_PULL_CYCLES = 999   # MM: effectively unlimited — MM is patient, k
 APEX_MM_OBI_DEPTH = 5           # MM uses top-5 levels for OBI (wider view than phantom's top-3)
 
 # ── Dual-threshold stop-loss matrix ──
-# Soft breach (stop <= combined <= stop + HARD_MARGIN): persistence timer filters noise
-# Hard breach (combined > stop + HARD_MARGIN): instant eject, no timer (binary gap)
-APEX_MM_SL_HARD_MARGIN = 4      # Min cents above stop for instant circuit-breaker eject (floor)
-
-def _apex_mm_hard_margin(width):
-    """Scale hard-breach margin with ladder width. Wide ladders in thin books need more
-    flash-print tolerance; tight ladders keep the default 4c."""
-    return max(APEX_MM_SL_HARD_MARGIN, int(round(width * 0.3)))
-APEX_MM_SL_FILL_GRACE_S = 5.0  # Suppress SL for 5s after fill (liquidity cliff filter)
-APEX_MM_SL_SOFT_PERSIST = {     # Soft breach persistence by game phase (seconds)
-    'early':    1.5,            # Early/mid game: market makers will refill in <1s if noise
-    'mid':      1.5,
-    'late':     1.0,            # Final period, >2min: tighter
-    'end':      0.5,            # Final 2min: very tight
-    'ot':       0.25,           # Overtime: 250ms max — if it's still there, it's real
-    'default':  1.5,            # Unknown sport / no ESPN data
-}
-
-# ─── Regime-dependent exit walk (slow markets = long soak + slow walk) ────────
-# Pre-game player props can sit for 6+ hours with ~1 fill/hour. A 25s soak +
-# 2s/tick walk = hit breakeven wall in 30s and sit there for the next 60 min
-# at zero profit. Scale both the soak and walk interval by game phase so the
-# bot holds profitable target longer on slow markets.
-APEX_MM_SOAK_BY_PHASE = {       # Soak seconds — hold at target for queue priority
-    'ot':       10,             # Overtime: fast, short soak
-    'end':      15,             # Final 2min: fast
-    'late':     20,             # Late game
-    'mid':      25,             # Mid game (baseline)
-    'early':    25,             # Early game (baseline)
-    'default':  120,            # Pregame / no live data: hold 2min at target
-}
-APEX_MM_WALK_INTERVAL_BY_PHASE = {  # Seconds between 1c walk-up steps in GREEN zone
-    'ot':       2,              # Every tick (fastest erosion — volatile zone)
-    'end':      3,
-    'late':     5,
-    'mid':      8,
-    'early':    8,
-    'default':  30,             # Pregame: walk slowly to preserve profit
-}
-APEX_MM_SLOW_FILL_THRESHOLD_S = 60   # If no fill in this window, treat as slow
-APEX_MM_SLOW_VELOCITY_MULT_DEFAULT = 5.0  # Slow + pregame phase: 5x slower walk
-APEX_MM_SLOW_VELOCITY_MULT = 3.0          # Slow + live phase: 3x slower walk
-# Wall escape — after parking at WALL (combined=100c breakeven), bots will sit
-# forever waiting for sellers to cross. After this window, the walker creeps
-# past WALL into small-loss territory to force a fill before market settles.
-APEX_MM_WALL_ESCAPE_AFTER_S = 300         # 5 min at WALL before escape kicks in
-APEX_MM_WALL_ESCAPE_INTERVAL_S = 60       # 1c escalation per minute
-APEX_MM_WALL_ESCAPE_MAX_LOSS_C = 2         # Cap escape at -2c past wall (combined<=102c).
-                                            # Without cap, escape drifts to stop_loss-1c (-5c+ loss
-                                            # on width-6 bots), which is worse than the binary
-                                            # settlement coin-flip (held wins +60c / loses -avg).
-                                            # -2c says: take the small scratch over the gamble.
-
-
-def _apex_mm_game_phase(ticker):
-    """Return game phase for stop-loss persistence: 'early', 'mid', 'late', 'end', 'ot', or 'default'."""
-    series = ticker.split('-')[0].upper() if ticker else ''
-    rule = None
-    rule_key = ''
-    for prefix, r in _LATE_GAME_RULES.items():
-        if series.startswith(prefix) and len(prefix) > len(rule_key):
-            rule = r
-            rule_key = prefix
-    if not rule:
-        return 'default'
-    gc = _get_game_context(ticker)
-    if not gc:
-        return 'default'
-    status = gc.get('status', '')
-    if status != 'in':
-        return 'default'
-    period = gc.get('period', 0)
-    secs = _parse_clock_seconds(gc.get('clock', ''))
-    # Overtime
-    if period > rule['final']:
-        return 'ot'
-    # Not in final period yet
-    if period < rule['block_period']:
-        # Rough split: first half = early, second half = mid
-        if period <= rule['final'] // 2:
-            return 'early'
-        return 'mid'
-    # In final period — check clock
-    if secs is not None:
-        if secs <= 120:
-            return 'end'      # final 2 minutes
-        return 'late'         # final period, >2min left
-    return 'late'
-
-
-def _apex_mm_sl_persist(ticker):
-    """Return persistence seconds for soft breach based on game phase."""
-    phase = _apex_mm_game_phase(ticker)
-    return APEX_MM_SL_SOFT_PERSIST.get(phase, APEX_MM_SL_SOFT_PERSIST['default']), phase
+# Pure maker exit: no SL, no soak, no wall, no phase-aware walk cadence.
+# One knob — seconds between 1c voluntary creep steps when alone (BBO).
+# Outbidder match has no cadence gate (immediate). See _apex_mm_walk_up.
+APEX_MM_WALK_INTERVAL_S = 8
 
 
 def _apex_obi_snapshot(ticker):
@@ -9891,7 +9702,9 @@ def _apex_mm_skewed_midpoint(bot, raw_midpoint):
     net_pos = bot.get('net_yes', 0) - bot.get('net_no', 0)
     if net_pos == 0:
         return raw_midpoint
-    skew_k = bot.get('skew_k', 4)  # max cents of skew at full inventory
+    # Stronger inventory aversion (was 4): with no SL/sellback, asymmetric quotes
+    # are the primary inventory drain — flush via pricing, not forced exits.
+    skew_k = bot.get('skew_k', 8)  # max cents of skew at full inventory
     ratio = max(-1.0, min(1.0, net_pos / inv_limit))
     skew = int(round(-skew_k * ratio))
     return max(1, min(99, raw_midpoint + skew))
@@ -10436,12 +10249,6 @@ def _apex_mm_check_loss_limit(bot_id, bot):
     fires when even the cheapest exit is underwater past the loss limit. This
     prevents firing SL on a position that's still profitable via the arb path.
     """
-    # Fill grace period — live bids are unreliable right after our fill (liquidity cliff)
-    _last_fill_t = max(bot.get('_last_yes_fill_at', 0), bot.get('_last_no_fill_at', 0))
-    if _last_fill_t > 0 and (time.time() - _last_fill_t) < APEX_MM_SL_FILL_GRACE_S:
-        return False
-    loss_limit = bot.get('loss_limit_cents', 500)
-
     net_yes = bot.get('net_yes', 0)
     net_no = bot.get('net_no', 0)
     if net_yes <= 0 and net_no <= 0:
@@ -10481,12 +10288,8 @@ def _apex_mm_check_loss_limit(bot_id, bot):
 
     unrealized = best_per * held_qty
     bot['_unrealized_pnl'] = unrealized
-
-    if loss_limit <= 0:
-        return False
-    if unrealized < -loss_limit:
-        _apex_mm_begin_exit(bot_id, bot, f'loss_limit (best_path={unrealized}c < -{loss_limit}c)')
-        return True
+    # Pure maker model: no loss_limit forced exit. Held inventory rides walk_up
+    # (match-bid + creep) until natural fill or settlement.
     return False
 
 
@@ -10570,16 +10373,24 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
         if not bot.get('_exit_locked_width'):
             bot['_exit_locked_width'] = bot.get('start_gap', 4) * 2
         width = bot['_exit_locked_width']
-        exit_price = max(1, min(98, 100 - avg_held - width))
-        # CLAMP target below market ask: post_only buy at price >= ask is rejected
-        # by Kalshi (would cross). ZECGER hit this — wanted YES@71c but YES ask
-        # was 56c. create_order_maker only retries 2 steps (71→70→69), can't reach
-        # 55c needed. Use live ask cache to bound target at ask-1.
+        _target = max(1, min(98, 100 - avg_held - width))
+        # Pure maker model: never post BELOW the live bid. If the opp bid is
+        # already above our target when we get filled, post AT the bid (free
+        # extra profit and instant queue entry).
+        _live_opp_bid = bot.get(f'live_{exit_side}_bid', 0) or 0
+        exit_price = max(_target, _live_opp_bid) if _live_opp_bid > 0 else _target
+        # Clamp at 99-avg (1c profit floor) for the INITIAL post — outbidder
+        # snap can push past later. Avoids voluntarily posting at certain loss.
+        _profit_floor = max(1, 99 - avg_held)
+        if exit_price > _profit_floor:
+            exit_price = _profit_floor
+        # CLAMP below market ask: post_only buy at price >= ask is rejected
+        # by Kalshi (would cross).
         _ask_key = f'live_{exit_side}_ask'
         _live_ask = bot.get(_ask_key, 0) or 0
         if 1 < _live_ask <= 99 and exit_price >= _live_ask:
             _capped_price = max(1, _live_ask - 1)
-            print(f'📐 APEX MM EXIT TARGET CLAMP: {bot_id} target {exit_price}c >= ask {_live_ask}c → {_capped_price}c (avoid post_only reject)')
+            print(f'📐 APEX MM EXIT ASK CLAMP: {bot_id} target {exit_price}c >= ask {_live_ask}c → {_capped_price}c (avoid post_only reject)')
             exit_price = _capped_price
         exit_oid = bot.get(f'_{exit_side}_exit_oid')
         price_kwarg = {f'{exit_side}_price': exit_price}
@@ -10670,15 +10481,16 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
 
 
 def _apex_mm_walk_up(bot_id, bot):
-    """Zone-based exit management: snap for green, park for grey, hold for red.
-
-    GREEN  (combined <= 99c): Snap to bid — take the profit while it's there.
-    GREY   (combined == 100c): Park at wall as maker — don't chase breakeven as taker.
-    RED    (100c < combined < stop_loss): Stay parked at wall — wait for mean-revert.
-    DEATH  (combined >= stop_loss): WS stop-loss fires begin_exit (handled elsewhere).
-
-    Snap-back: if bid improves (drops below current), follow it down for bigger profit.
-    """
+    """Pure maker exit: never sit below the bid.
+    Two and only two ways the exit price moves:
+      1. Outbidder appears above us → match (snap UP to their bid). No cap —
+         we follow into loss if needed. Sellback by another name is just
+         crossing as taker; matching as maker is always cheaper.
+      2. We're alone (BBO) → time-decay walk +1c per cadence, shrinking
+         profit until fill. Voluntary walk caps at 99-avg (1c profit floor).
+         Past that, only outbidders move us further.
+    No SOAK, no BREATHING GUARD, no WALL park, no SL. Two real exits exist:
+    cross to our offer, or settlement. See feedback_no_stop_losses.md."""
     net_yes = bot.get('net_yes', 0)
     net_no = bot.get('net_no', 0)
     if net_yes == 0 and net_no == 0:
@@ -10700,210 +10512,66 @@ def _apex_mm_walk_up(bot_id, bot):
     now = time.time()
     ticker = bot.get('ticker', '')
     current_price = bot.get('_exit_price', 0)
-    width = _apex_mm_exit_width(bot)
-    target_price = bot.get('_exit_target_price', max(1, 100 - avg_held - width))
-    wall_price = max(target_price + 1, min(99, 100 - avg_held))  # 100c combined = breakeven
     net_held = abs(net_yes - net_no)
 
-    live_exit_bid = bot.get(f'live_{exit_side}_bid', 0)
-    if live_exit_bid <= 0:
-        return
-
-    live_combined = avg_held + live_exit_bid
-
-    # ── SOAK: hold at target for queue priority ──
-    # Regime-dependent: pregame/slow markets hold much longer; live/fast markets
-    # are short to avoid sitting while price runs. On top, velocity-scale down
-    # when the bot is getting hit frequently (visible activity → no need to soak).
-    _phase = _apex_mm_game_phase(ticker)
-    _base_soak = APEX_MM_SOAK_BY_PHASE.get(_phase, 25)
-    _vfills = bot.get('_velocity_fills', [])
-    if _vfills:
-        _recent = sum(1 for f in _vfills if now - f.get('ts', 0) <= 5)
-        SOAK_SECONDS = max(5, int(_base_soak - (_recent / 5.0) * 5))
-    else:
-        SOAK_SECONDS = _base_soak
-    MAX_SOAK_SECONDS = max(SOAK_SECONDS + 5, 35)  # hard cap — allows one breathing-guard extension
-    soak_start = bot.get('_exit_soak_start') or bot.get('_exit_posted_at', now)
-    if not bot.get('_exit_soak_start'):
-        bot['_exit_soak_start'] = soak_start
-    age = now - soak_start
-    # Absolute age since exit was first posted (never resets)
-    total_age = now - (bot.get('_exit_posted_at') or soak_start)
-
-    # ── SOAK: protect target price ──
-    # We are the maker BBO. Don't follow other (lower) bids down — hold target
-    # during soak and let YES sellers cross to us. Outbidder reactions and
-    # walk-up creep are handled post-soak.
-    if age < SOAK_SECONDS and live_combined <= 100:
-        return  # hold at target during soak
-
-    # ── BREATHING GUARD: bid within 2c of target — extend soak once ──
-    _target_dist = abs(live_exit_bid - target_price) if live_exit_bid > 0 else 999
-    if _target_dist <= 2 and live_combined <= 100 and total_age < MAX_SOAK_SECONDS:
-        if age >= SOAK_SECONDS:
-            bot['_exit_soak_start'] = now  # one extension, capped by MAX_SOAK_SECONDS
-        return
-
-    # ── No SNAP-BACK walk-down ──
-    # We are the maker BBO. Real top below us is irrelevant — sellers cross
-    # to OUR bid, not to a lower bidder. Walking down to "follow" them gives
-    # away room for no fill-probability gain. Only walk-up + outbidder
-    # reactions are valid price moves.
-
-    # ── GREEN ZONE: we are the maker BBO; close room over time, react to outbidders ──
-    # Two valid moves only:
-    #   A. Outbidder above us → join at THEIR bid (queue). Never bid+1: as the
-    #      maker we don't burn 1c profit chasing taker-style queue priority.
-    #      Sellers cross to a price they're willing to take — joining keeps us
-    #      in the queue; sitting alone keeps the same fill semantics.
-    #   B. We are BBO/alone above demand → walk +1c per cadence to close room
-    #      until we hit the 95c combined cap (5c profit floor). Past 95c only
-    #      happens via outbidder forcing us; we never voluntarily go past 95c.
-    # Cadence accelerates with dwell time but caps at 2x (slow probe).
-    # No walk-down: we never follow lower bidders.
     _market_best_bid = _apex_mm_market_best_bid(bot, exit_side)
-    # Walk-up cap = LESS profitable of (5c floor, configured target).
-    # Width≥5 bots walk up to combined 95c (5c profit floor).
-    # Width<5 bots stop AT target (can't walk past their configured profit).
-    # E.g. width=2 (target combined 98c) → cap=98c → no past-target walk.
-    _walk_cap_combined = max(95, 100 - width)  # max of (95c, target_combined)
-    _max_walk_price = max(1, _walk_cap_combined - avg_held)
-    _max_profitable_price = max(1, 99 - avg_held)  # 1c profit safety — outbidder follow cap
+    _max_profit_price = max(1, 99 - avg_held)  # 1c profit floor for VOLUNTARY walk
 
-    _snap_target = 0
-    _walk_iv = 2
-    _walk_mode = ''
-    _bbo_state = 'unknown'
+    _new_price = 0
+    _mode = ''
+    _bbo_state = 'alone'
 
-    # Branch A: Outbidder above us → join@bid (NEVER bid+1)
+    # Branch A: outbidder above us → match (no cap, follow into loss if needed).
     if _market_best_bid > current_price:
-        _candidate = _market_best_bid  # join at their bid; never bid+1 (maker doesn't pay for queue priority)
-        # Cap at 99-avg (1c profit safety — never voluntarily push to breakeven)
-        _candidate = min(_candidate, _max_profitable_price)
+        _new_price = _market_best_bid
         _bbo_state = 'queue'
-        _walk_mode = f'join@bid (real top {_market_best_bid}c → combined {avg_held + _candidate}c)'
-        if _candidate > current_price:
-            _snap_target = _candidate
-            _walk_iv = 2  # immediate reaction
+        _mode = f'match@bid (outbidder {_market_best_bid}c)'
     elif _market_best_bid > 0 and _market_best_bid == current_price:
         _bbo_state = 'queue'
-    else:
-        _bbo_state = 'alone'  # real top below us, or no demand at all
 
-    # Branch B: Walk-up creep — slowly close room toward 95c cap when not reacting.
-    # Cadence accelerates from 1x to 2x max with dwell time. Probes from current
-    # toward target when below, then continues to 95c cap.
-    if _snap_target == 0 and current_price < _max_walk_price:
-        _walk_iv_base = APEX_MM_WALK_INTERVAL_BY_PHASE.get(_phase, 8)
-        _walk_age = now - (bot.get('_exit_soak_start') or bot.get('_exit_posted_at', now))
-        # Cap acceleration at 2x — slow probe, no aggressive chase to cap
-        if _walk_age > 60:
-            _walk_iv = max(4, _walk_iv_base // 2)
-            _accel = '2x'
-        else:
-            _walk_iv = _walk_iv_base
-            _accel = '1x'
-        _snap_target = min(current_price + 1, _max_walk_price)
-        if current_price < target_price:
-            _walk_mode = f'probe-to-target ({_phase} {_accel}, target {target_price}c, age={_walk_age:.0f}s)'
-        else:
-            _walk_mode = f'walk +1c toward 95c cap ({_phase} {_accel}, max {_max_walk_price}c, age={_walk_age:.0f}s)'
+    # Branch B: alone (we are BBO) → time-decay creep +1c per WALK_INTERVAL_S.
+    # Caps at 99-avg so we don't volunteer for losses; outbidders can push past.
+    if _new_price == 0 and current_price < _max_profit_price:
+        _last_walk = bot.get('_last_walk_at', 0) or bot.get('_exit_posted_at', now)
+        if now - _last_walk >= APEX_MM_WALK_INTERVAL_S:
+            _new_price = min(current_price + 1, _max_profit_price)
+            _mode = f'creep +1c (alone, age={now - _last_walk:.0f}s, cap={_max_profit_price}c)'
 
-    # Expose BBO state for UI (read by frontend to render ALONE / JOIN / BBO+1 badge)
     bot['_bbo_state'] = _bbo_state
     bot['_bbo_market_best'] = _market_best_bid
 
-    if live_combined <= 99 and _snap_target > current_price:
-        # Phase-aware rate gate: bid+1 mode = 2s, walk-up creep = phase interval.
-        _last_walk = bot.get('_last_walk_at', 0) or bot.get('_exit_soak_start', now)
-        if now - _last_walk < _walk_iv:
-            return
-        _green_snap = _snap_target  # rename for downstream code reuse
-        try:
-            price_kwarg = {f'{exit_side}_price': _green_snap}
-            api_rate_limiter.wait()
-            _amend_resp = kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
-                                      count=net_held, action='buy', **price_kwarg)
-            _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
-            _new_oid = _amend_ord.get('order_id', '')
-            if _new_oid and _new_oid != exit_oid:
-                bot[f'_{exit_side}_exit_oid'] = _new_oid
-            old_price = current_price
-            bot['_exit_price'] = _green_snap
-            bot['_wall_parked'] = False
-            bot['_exit_walk_count'] = bot.get('_exit_walk_count', 0) + (_green_snap - old_price)
-            bot['_last_walk_at'] = now  # gate next step by regime interval
-            _snap_combined = avg_held + _green_snap
-            print(f'💚 APEX MM SNAP-PROFIT: {bot_id} {exit_side.upper()} {old_price}→{_green_snap}c (combined={_snap_combined}c, +{100 - _snap_combined}c profit, mode={_walk_mode}, iv={_walk_iv}s)')
-            bot_log('APEX_MM_SNAP_PROFIT', bot_id, {
-                'old': old_price, 'new': _green_snap, 'bid': live_exit_bid,
-                'market_best': _market_best_bid,
-                'combined': _snap_combined, 'profit': 100 - _snap_combined,
-                'target': target_price, 'phase': _phase,
-                'walk_iv': _walk_iv, 'mode': _walk_mode,
-            })
-        except Exception as e:
-            if 'filled' in str(e).lower():
-                print(f'⚡ APEX MM SNAP-PROFIT FILLED: {bot_id}')
-            elif '404' in str(e) or 'not found' in str(e).lower():
-                print(f'⚠ APEX MM SNAP-PROFIT 404: {bot_id} exit order gone — reposting')
-                bot[f'_{exit_side}_exit_oid'] = None
-            else:
-                print(f'⚠ APEX MM SNAP-PROFIT FAIL: {bot_id} {e}')
+    if _new_price <= current_price:
         return
 
-    # ── GREY/RED ZONE: combined >= 100c → park at wall (100c combined) ──
-    if live_combined >= 100 and current_price < wall_price:
-        try:
-            price_kwarg = {f'{exit_side}_price': wall_price}
-            api_rate_limiter.wait()
-            _amend_resp = kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
-                                      count=net_held, action='buy', **price_kwarg)
-            _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
-            _new_oid = _amend_ord.get('order_id', '')
-            if _new_oid and _new_oid != exit_oid:
-                bot[f'_{exit_side}_exit_oid'] = _new_oid
-            old_price = current_price
-            bot['_exit_price'] = wall_price
-            bot['_exit_walk_count'] = bot.get('_exit_walk_count', 0) + (wall_price - old_price)
-            if not bot.get('_wall_parked'):
-                bot['_wall_parked'] = True
-                bot['_wall_parked_at'] = now
-            print(f'🧱 APEX MM WALL: {bot_id} {exit_side.upper()} {old_price}→{wall_price}c (combined={live_combined}c > 99c, parked at breakeven)')
-            bot_log('APEX_MM_WALL_PARK', bot_id, {
-                'old': old_price, 'new': wall_price, 'bid': live_exit_bid,
-                'live_combined': live_combined, 'avg_held': avg_held,
-            })
-        except Exception as e:
-            if 'filled' in str(e).lower():
-                print(f'⚡ APEX MM WALL FILLED: {bot_id}')
-            elif '404' in str(e) or 'not found' in str(e).lower():
-                print(f'⚠ APEX MM WALL 404: {bot_id} exit order gone — reposting')
-                bot[f'_{exit_side}_exit_oid'] = None
-            else:
-                print(f'⚠ APEX MM WALL FAIL: {bot_id} {e}')
-        return
-
-    # Already at wall or above — stay parked. WS stop-loss handles death zone.
-    # No WALL_ESCAPE: removed per maker philosophy — we don't walk our exit
-    # into loss territory to force a fill. As the BBO maker, we sit at the
-    # wall (breakeven) until one of three things happens:
-    #   1. Sellers cross to our wall price → natural fill at $0
-    #   2. Live bid keeps trending against us → SL fires at 100+width
-    #   3. Market settles → held side resolves
-    # Walking into intentional loss (the old WALL_ESCAPE) abandons our
-    # structural maker advantage and bleeds churn against negative EV.
-    if current_price >= wall_price:
-        if not bot.get('_wall_parked'):
-            bot['_wall_parked'] = True
-            bot['_wall_parked_at'] = now
-            print(f'🧱 APEX MM WALL: {bot_id} parked at {current_price}c (combined={avg_held + current_price}c)')
-            bot_log('APEX_MM_WALL_PARKED', bot_id, {
-                'exit_price': current_price, 'avg_held': avg_held,
-                'combined': avg_held + current_price, 'width': width,
-            })
-        return
+    try:
+        price_kwarg = {f'{exit_side}_price': _new_price}
+        api_rate_limiter.wait()
+        _amend_resp = kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
+                                  count=net_held, action='buy', **price_kwarg)
+        _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
+        _new_oid = _amend_ord.get('order_id', '')
+        if _new_oid and _new_oid != exit_oid:
+            bot[f'_{exit_side}_exit_oid'] = _new_oid
+        old_price = current_price
+        bot['_exit_price'] = _new_price
+        bot['_exit_walk_count'] = bot.get('_exit_walk_count', 0) + (_new_price - old_price)
+        bot['_last_walk_at'] = now
+        _combined = avg_held + _new_price
+        _profit = 100 - _combined
+        _icon = '💚' if _combined < 100 else '🧱' if _combined == 100 else '⚠'
+        print(f'{_icon} APEX MM WALK: {bot_id} {exit_side.upper()} {old_price}→{_new_price}c (combined={_combined}c, {"+" if _profit > 0 else ""}{_profit}c, {_mode})')
+        bot_log('APEX_MM_WALK', bot_id, {
+            'old': old_price, 'new': _new_price, 'market_best': _market_best_bid,
+            'combined': _combined, 'profit': _profit, 'mode': _mode,
+        })
+    except Exception as e:
+        if 'filled' in str(e).lower():
+            print(f'⚡ APEX MM WALK FILLED: {bot_id}')
+        elif '404' in str(e) or 'not found' in str(e).lower():
+            print(f'⚠ APEX MM WALK 404: {bot_id} exit order gone — reposting')
+            bot[f'_{exit_side}_exit_oid'] = None
+        else:
+            print(f'⚠ APEX MM WALK FAIL: {bot_id} {e}')
 
 
 def _apex_mm_refill_entry(bot_id, bot, freed_qty):
@@ -17547,12 +17215,12 @@ def _handle_apex(bot_id, bot, actions):
             if not bot.get('_drift_pulled'):
                 bot['_drift_pulled'] = True
                 print(f'📊 APEX MM DRIFT HOLD: {bot_id} max_bid={_drift_max}c — staying pulled')
-            # If holding inventory, begin exit — don't just sit here
+            # Holding inventory: held side rides walk_up to fill or settlement.
             net_yes = bot.get('net_yes', 0)
             net_no = bot.get('net_no', 0)
             if net_yes > 0 or net_no > 0:
-                _apex_mm_begin_exit(bot_id, bot, f'market_decided (drift {_drift_max}c)')
-                return
+                try: _apex_mm_walk_up(bot_id, bot)
+                except Exception: pass
             # Flat + drift: settlement poll + stale-flat purge already handled above.
             return
         elif bot.get('_drift_pulled'):
@@ -17686,95 +17354,36 @@ def _handle_apex(bot_id, bot, actions):
     if status != 'market_making_active':
         return
 
-    # 0. Drift stop-loss: symmetric (risk = width)
+    # 0. Pure maker model: no SL, no soft/hard breach, no forced exits.
+    # Held inventory rides walk_up (match-bid + time-decay creep) until fill
+    # or settlement. See _apex_mm_walk_up.
     net_yes = bot.get('net_yes', 0)
     net_no = bot.get('net_no', 0)
-    if net_yes <= 0 and net_no <= 0:
-        # Flat — clear any stale breach timer (both sides may have filled during gate)
-        bot['_sl_breach_since'] = None
-        bot['_sl_breach_peak'] = None
-        bot['_sl_breach_phase'] = None
-    if net_yes > 0 or net_no > 0:
-        # Fill grace period: suppress SL for N seconds after any fill.
-        # In wide markets, our filled order was the best bid — its removal
-        # makes prices look catastrophic even though market value didn't change.
-        _last_fill_t = max(bot.get('_last_yes_fill_at', 0), bot.get('_last_no_fill_at', 0))
-        if _last_fill_t > 0 and (time.time() - _last_fill_t) < APEX_MM_SL_FILL_GRACE_S:
-            bot['_sl_breach_since'] = None
-            bot['_sl_breach_peak'] = None
-            bot['_sl_breach_phase'] = None
-            pass  # skip SL block but fall through to drift/room/OBI guards below
-        else:
-          _held_avg = bot.get('avg_yes_cost', 0) if net_yes > net_no else bot.get('avg_no_cost', 0)
-          _exit_side = 'no' if net_yes > net_no else 'yes'
-          _held_side = 'yes' if net_yes > net_no else 'no'
-          # Cheapest maker exit: buy opposite at its BID OR sell held at its ASK.
-          # Both are maker-realizable; matches the unrealized-P&L model so SL agrees
-          # with the position bar — won't fire while the better path is still profitable.
-          _exit_bid = bot.get(f'live_{_exit_side}_bid', 0)
-          _held_ask = bot.get(f'live_{_held_side}_ask', 0)
-          _buy_opp_combined = _held_avg + _exit_bid if _exit_bid > 0 else 999
-          _sell_held_combined = _held_avg + (100 - _held_ask) if _held_ask > 0 else 999
-          _best_combined = min(_buy_opp_combined, _sell_held_combined)
-          _width = _apex_mm_exit_width(bot)
-          # Stop = 100 + min(margin, 8c) — cap SL margin at 8c regardless of width.
-          # See WS handler at line 5740 for full rationale.
-          _stop = 100 + min(max(_width, bot.get('min_sl_margin', 0)), 8)
-          # Drift stop: dual-threshold matrix (soft breach = timer, hard breach = instant)
-          # Use >= to match WS handler — prevents monitor from resetting WS breach timer at exact boundary
-          if _best_combined >= _stop and _best_combined < 999:
-              _hm = _apex_mm_hard_margin(_width)
-              _hard_stop = _stop + _hm
-              _pc = time.perf_counter()  # monotonic clock for sub-second precision
 
-              # ── HARD BREACH: circuit breaker — instant eject ──
-              if _best_combined > _hard_stop:
-                  _breach_dur = _pc - bot['_sl_breach_since'] if bot.get('_sl_breach_since') else 0
-                  print(f'🚨 APEX MM CIRCUIT BREAKER: {bot_id} combined={_best_combined}c > {_hard_stop}c — INSTANT EJECT (breach_dur={_breach_dur:.3f}s)')
-                  _apex_mm_begin_exit(bot_id, bot, f'circuit_breaker (combined={_best_combined}c > {_hard_stop}c, hard_margin={_hm}c)')
-                  return
-
-              # ── SOFT BREACH: persistence gate ──
-              _persist_s, _phase = _apex_mm_sl_persist(ticker)
-              if not bot.get('_sl_breach_since'):
-                  bot['_sl_breach_since'] = _pc
-                  bot['_sl_breach_peak'] = _best_combined
-                  bot['_sl_breach_phase'] = _phase
-                  print(f'⏱ APEX MM SOFT BREACH: {bot_id} combined={_best_combined}c > {_stop}c — gate {_persist_s}s ({_phase})')
-                  # Walk exit toward wall (100c combined) during persistence so it can
-                  # park at breakeven before SL fires. Otherwise exit stays stuck at
-                  # original target and SL eats the full gap to bid.
-                  try: _apex_mm_walk_up(bot_id, bot)
-                  except Exception: pass
-                  return
-              bot['_sl_breach_peak'] = max(bot.get('_sl_breach_peak', 0), _best_combined)
-              _breach_age = _pc - bot['_sl_breach_since']
-              if _breach_age < _persist_s:
-                  # Keep walking toward wall during persistence
-                  try: _apex_mm_walk_up(bot_id, bot)
-                  except Exception: pass
-                  return  # still within persistence window
-              _apex_mm_begin_exit(bot_id, bot, f'drift_stop (combined={_best_combined}c > {_stop}c, persisted={_breach_age:.3f}s/{_persist_s}s, phase={_phase})')
-              return
-          else:
-              # Below threshold — reset persistence gate instantly
-              if bot.get('_sl_breach_since'):
-                  _breach_dur = time.perf_counter() - bot['_sl_breach_since']
-                  print(f'✅ APEX MM SL RESET: {bot_id} combined={_best_combined}c <= {_stop}c — filtered {_breach_dur:.3f}s spike (peak={bot.get("_sl_breach_peak", 0)}c, phase={bot.get("_sl_breach_phase", "?")})')
-                  bot['_sl_breach_since'] = None
-                  bot['_sl_breach_peak'] = None
-                  bot['_sl_breach_phase'] = None
-
-    # 0.5. Active drift guard — pull ladder if market is decided (one side > 80c)
+    # 0.5. Active drift guard — STOP adding inventory in decided markets, but
+    # never force-exit held positions. Held side rides to settlement via walk_up.
     _active_max_bid = max(bot.get('live_yes_bid', 0), bot.get('live_no_bid', 0))
     if _active_max_bid >= 80:
-        net_yes = bot.get('net_yes', 0)
-        net_no = bot.get('net_no', 0)
-        if net_yes > 0 or net_no > 0:
-            _apex_mm_begin_exit(bot_id, bot, f'active_drift_guard (max_bid={_active_max_bid}c >= 80c)')
-        else:
+        if net_yes <= 0 and net_no <= 0:
             _apex_mm_pull_all(bot_id, bot, f'active_drift_guard (max_bid={_active_max_bid}c >= 80c)')
-        print(f'🛡️ APEX MM ACTIVE DRIFT GUARD: {bot_id} max_bid={_active_max_bid}c — pulling/exiting')
+            print(f'🛡️ APEX MM ACTIVE DRIFT GUARD: {bot_id} max_bid={_active_max_bid}c — flat, pulling')
+            return
+        # Holding inventory: pull entry-side rungs only, keep exit alive for walk_up.
+        _held_side_dg = 'yes' if net_yes > net_no else 'no'
+        _entry_side_dg = 'no' if _held_side_dg == 'yes' else 'yes'
+        _entry_key_dg = f'{_entry_side_dg}_orders'
+        _cancelled_dg = 0
+        for _ps_dg, _lvl_dg in list(bot.get(_entry_key_dg, {}).items()):
+            _oid_dg = _lvl_dg.get('oid')
+            if not _oid_dg:
+                continue
+            _safe_cancel(_oid_dg, f'apex_mm_drift_guard_{bot_id}')
+            _lvl_dg['oid'] = None
+            _cancelled_dg += 1
+        if _cancelled_dg:
+            print(f'🛡️ APEX MM DRIFT GUARD: {bot_id} max_bid={_active_max_bid}c — pulled {_cancelled_dg} {_entry_side_dg} entry rungs (held side rides walk_up)')
+        try: _apex_mm_walk_up(bot_id, bot)
+        except Exception: pass
         return
 
     # 0.7. Room guard — pull if MARKET room < width (no profit space, behind the book).

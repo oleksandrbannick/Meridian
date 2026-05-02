@@ -5002,21 +5002,20 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask, _ws_event
         if fav_bid <= 0:
             continue
 
-        # Self-exclusion: if we're alone at fav_bid, the "bid" we see is just our own
-        # order — real market bid is the next level down. Walk the book to find it.
-        _fav_fills = bot.get('fav_fill_qty', 0)
-        _bot_qty = bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1))
-        _remaining = max(1, _bot_qty - _fav_fills)
-        effective_bid = _fav_bid_excluding_self(hedge_ticker, fav_side, fav_price, _remaining)
-        if effective_bid <= 0:
-            effective_bid = fav_bid  # fallback to WS bid if orderbook unavailable
-
-        # Only drop if hedge is ABOVE the effective (non-self) bid
-        if fav_price <= effective_bid:
+        # Park-at-bid-alone: stay where we are unless an EXTERNAL bid genuinely
+        # below our price appears. No self-exclusion — we don't chase down when
+        # alone at top of book. Sellers will hit our 90¢ before any 88¢ bidders
+        # because they get paid more, so being alone above the herd is fine.
+        # Self-exclusion was creating a chase loop: alone-at-bid → drop → someone
+        # fills back at our level → snap back up → repeat (~1 walk every 42s),
+        # burning queue priority via amend cancel-replace for no real benefit.
+        # See feedback_phantom_park_at_bid_alone.md.
+        if fav_price <= fav_bid:
             continue
 
         fav_ask_now = yes_ask if fav_side == 'yes' else no_ask
-        drop_target = effective_bid
+        effective_bid = fav_bid  # kept for log compatibility — no self-exclusion now
+        drop_target = fav_bid
 
         if drop_target <= 0 or drop_target >= fav_price:
             continue

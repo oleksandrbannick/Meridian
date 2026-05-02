@@ -1536,6 +1536,33 @@ function isKalshiLive(market) {
         const sport = detectSport(ticker);
         const espnData = getGameScore(gameId, sport);
         if (espnData && espnData.state === 'in') return true;
+
+        // Kalshi-native fallback for sports ESPN doesn't cover (Japan NPB, KBO,
+        // K-League, NRL, AFL, J-League, A-League, Japan B League). The ticker
+        // embeds game start time as 4 digits in ET (e.g. KXNPBGAME-26MAY020500…
+        // = 5:00 AM ET). Mark live when game start has passed and expiration
+        // hasn't — without this branch these sports never light up live.
+        const NO_ESPN_PREFIXES = /^(KXNPB|KXKBO|KXKLEAGUE|KXAFL|KXRUGBY|KXJLEAGUE|KXALEAGUE|KXJBLEAGUE)/i;
+        if (NO_ESPN_PREFIXES.test(ticker)) {
+            const tm = ticker.match(/(\d{2})([A-Z]{3})(\d{2})(\d{4})/);
+            if (tm) {
+                const [, yr, monStr, day, time4] = tm;
+                const monMap = {JAN:0,FEB:1,MAR:2,APR:3,MAY:4,JUN:5,JUL:6,AUG:7,SEP:8,OCT:9,NOV:10,DEC:11};
+                const mon = monMap[monStr];
+                if (mon !== undefined) {
+                    const hh = parseInt(time4.slice(0,2));
+                    const mm = parseInt(time4.slice(2,4));
+                    // ET offset: UTC-4 EDT (Mar–Nov), UTC-5 EST (Nov–Mar). Mon 2..10 ≈ EDT.
+                    const etOffset = (mon >= 2 && mon <= 10) ? 4 : 5;
+                    const startMs = Date.UTC(2000 + parseInt(yr), mon, parseInt(day), hh + etOffset, mm);
+                    if (now >= startMs && now <= expTime.getTime()) return true;
+                }
+            } else {
+                // Some tickers (J-League, K-League) have no embedded time. Use a
+                // looser proxy: live if expiration is within the next 4 hours.
+                if (hoursUntilExp >= -0.5 && hoursUntilExp <= 4.0) return true;
+            }
+        }
         return false;
     } catch (e) {
         // Ignore parse errors

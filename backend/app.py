@@ -1546,10 +1546,12 @@ def _safe_cancel(order_id, context=''):
                     except Exception:
                         break
                 if _fills > 0:
-                    print(f'🚨 {context}: cancel 404 but order had {_fills} fills!')
+                    # Recovery firing as designed: order filled during cancel race.
+                    # Not an error — the fill-during-cancel guard caught it.
+                    print(f'🛡 {context}: cancel-race fill recovered ({_fills} contracts)')
                     bot_log('SAFE_CANCEL_404_FILLS', context, {
                         'order_id': order_id, 'fills': _fills,
-                    }, level='ERROR')
+                    }, level='WARN')
                     return ('filled', _fills)
                 return '404'
             if attempt == 0:
@@ -2594,6 +2596,8 @@ def _fetch_intl_basketball_scoreboard():
 # market as SHL (Shiga Lakestars). Refresh hourly.
 _kalshi_intl_alias_cache = {}  # {kalshi_prefix: {'ts': float, 'data': {short_name: {codes}}}}
 _KALSHI_INTL_ALIAS_TTL = 3600
+_KALSHI_INTL_ALIAS_RETRY_TTL = 60  # short backoff when fetch fails — retry in 60s, not 1h
+_kalshi_intl_alias_lock = threading.Lock()
 
 
 def _build_kalshi_intl_aliases(kalshi_prefix: str) -> dict:
@@ -2603,33 +2607,58 @@ def _build_kalshi_intl_aliases(kalshi_prefix: str) -> dict:
     cached = _kalshi_intl_alias_cache.get(kalshi_prefix)
     if cached and (time.time() - cached['ts']) < _KALSHI_INTL_ALIAS_TTL:
         return cached['data']
-    aliases = {}  # short_name_lower → set of codes
-    try:
-        ev_resp = kalshi_client.get_events_by_series(kalshi_prefix, status='open', limit=200)
-        for ev in (ev_resp.get('events') or []):
-            ticker = ev.get('event_ticker', '') or ''
-            title = ev.get('title', '') or ev.get('sub_title', '') or ''
-            parts = ticker.split('-')
-            if len(parts) < 2:
-                continue
-            seg = re.sub(r'^\d{2}[A-Z]{3}\d+', '', parts[1])
-            if len(seg) != 6:
-                continue
-            t1, t2 = seg[:3], seg[3:]
-            # Title format: "Team A vs Team B Winner?" — first→t1, second→t2
-            m = re.match(r'^(.+?)\s+vs\.?\s+(.+?)(?:\s+Winner.*)?$', title, re.IGNORECASE)
-            if not m:
-                continue
-            for full_name, code in [(m.group(1).strip(), t1), (m.group(2).strip(), t2)]:
-                if not full_name or not code:
+    # Lock prevents thundering-herd: if 5 scoreboard polls miss the cache at once,
+    # only one fetches; the rest re-read the freshly-populated cache.
+    with _kalshi_intl_alias_lock:
+        cached = _kalshi_intl_alias_cache.get(kalshi_prefix)
+        if cached and (time.time() - cached['ts']) < _KALSHI_INTL_ALIAS_TTL:
+            return cached['data']
+        aliases = {}  # short_name_lower → set of codes
+        fetch_ok = False
+        try:
+            ev_resp = kalshi_client.get_events_by_series(kalshi_prefix, status='open', limit=200)
+            for ev in (ev_resp.get('events') or []):
+                ticker = ev.get('event_ticker', '') or ''
+                title = ev.get('title', '') or ev.get('sub_title', '') or ''
+                parts = ticker.split('-')
+                if len(parts) < 2:
                     continue
-                first_word = full_name.split()[0].lower()
-                aliases.setdefault(first_word, set()).add(code)
-                aliases.setdefault(full_name.lower(), set()).add(code)
-    except Exception as e:
-        print(f'⚠️ Kalshi intl alias fetch failed for {kalshi_prefix}: {e}')
-    _kalshi_intl_alias_cache[kalshi_prefix] = {'ts': time.time(), 'data': aliases}
-    return aliases
+                seg = re.sub(r'^\d{2}[A-Z]{3}\d+', '', parts[1])
+                if len(seg) != 6:
+                    continue
+                t1, t2 = seg[:3], seg[3:]
+                # Title format: "Team A vs Team B Winner?" — first→t1, second→t2
+                m = re.match(r'^(.+?)\s+vs\.?\s+(.+?)(?:\s+Winner.*)?$', title, re.IGNORECASE)
+                if not m:
+                    continue
+                for full_name, code in [(m.group(1).strip(), t1), (m.group(2).strip(), t2)]:
+                    if not full_name or not code:
+                        continue
+                    first_word = full_name.split()[0].lower()
+                    aliases.setdefault(first_word, set()).add(code)
+                    aliases.setdefault(full_name.lower(), set()).add(code)
+            fetch_ok = True
+        except Exception as e:
+            # Suppress noisy 429 spam if we have stale data to fall back on
+            if not (cached and cached.get('data')):
+                print(f'⚠️ Kalshi intl alias fetch failed for {kalshi_prefix}: {e}')
+        if fetch_ok:
+            # Successful fetch: cache for full TTL
+            _kalshi_intl_alias_cache[kalshi_prefix] = {'ts': time.time(), 'data': aliases}
+            return aliases
+        # Fetch failed: prefer stale data over empty, retry in RETRY_TTL not full TTL
+        if cached and cached.get('data'):
+            _kalshi_intl_alias_cache[kalshi_prefix] = {
+                'ts': time.time() - (_KALSHI_INTL_ALIAS_TTL - _KALSHI_INTL_ALIAS_RETRY_TTL),
+                'data': cached['data'],
+            }
+            return cached['data']
+        # No stale data — cache empty briefly so we retry in RETRY_TTL
+        _kalshi_intl_alias_cache[kalshi_prefix] = {
+            'ts': time.time() - (_KALSHI_INTL_ALIAS_TTL - _KALSHI_INTL_ALIAS_RETRY_TTL),
+            'data': aliases,
+        }
+        return aliases
 
 
 def _intl_basketball_event_shape(game: dict, sport_label: str, aliases: dict = None) -> dict:
@@ -7407,6 +7436,8 @@ MIN_FAV_ENTRY_CENTS = 65    # Guardrail: never deploy fav side below 65¢ (65-69
 # Maps event_ticker → {status, start_date} from milestone data
 _milestones_cache = {'data': {}, 'ts': 0}
 _MILESTONES_CACHE_TTL = 180  # seconds (tennis state is slow-moving; reduces /events 429 pressure)
+_MILESTONES_RETRY_TTL = 30   # short backoff when all series 429 — retry in 30s instead of full TTL
+_milestones_cache_lock = threading.Lock()
 
 def _refresh_milestones_cache():
     """Fetch Kalshi milestones for tennis series — cached, lazy refresh."""
@@ -7415,50 +7446,68 @@ def _refresh_milestones_cache():
         return
     if not kalshi_client:
         return
-    event_info = {}  # event_ticker → {status, start_date}
-    for i, series in enumerate(('KXATPCHALLENGERMATCH', 'KXWTACHALLENGERMATCH',
-                                'KXATPMATCH', 'KXWTAMATCH',
-                                'KXITFMATCH', 'KXITFWMATCH')):
-        for attempt in range(2):
-            try:
-                if i > 0 or attempt > 0:
-                    time.sleep(0.5)  # 500ms spacing to avoid 429s
-                api_read_limiter.wait()
-                resp = kalshi_client.get_events(status='open', with_milestones=True, series_ticker=series)
-                milestones = resp.get('milestones', [])
-                events = resp.get('events', [])
-                # ITF uses single-letter codes ('P' = in progress, 'SCH' = scheduled,
-                # 'PP' = paused/postponed). ATP/WTA use long-form ('live', 'ended').
-                # Normalize so _is_milestone_live's status=='live' check works for both.
-                def _norm(s):
-                    return 'live' if s == 'P' else s
-                if not milestones:
-                    print(f'🎾 DEBUG {series}: no milestones key. keys={list(resp.keys())[:5]}, events={len(events)}')
-                    for ev in events:
-                        ev_milestones = ev.get('milestones', [])
-                        for ms in ev_milestones:
-                            ms_status = _norm(ms.get('details', {}).get('status', 'not_started'))
-                            start_date = ms.get('start_date', '')
-                            et = ev.get('event_ticker', '')
-                            if et:
+    # Lock prevents concurrent refreshes from N callers all hitting Kalshi at once
+    with _milestones_cache_lock:
+        if time.time() - _milestones_cache['ts'] < _MILESTONES_CACHE_TTL:
+            return
+        # Start from existing cache so a partial-failure cycle preserves prior series'
+        # data instead of wiping it. Per-series fetches overwrite their own entries.
+        event_info = dict(_milestones_cache.get('data') or {})
+        any_success = False
+        had_stale_data = bool(_milestones_cache.get('data'))
+        for i, series in enumerate(('KXATPCHALLENGERMATCH', 'KXWTACHALLENGERMATCH',
+                                    'KXATPMATCH', 'KXWTAMATCH',
+                                    'KXITFMATCH', 'KXITFWMATCH')):
+            for attempt in range(2):
+                try:
+                    if i > 0 or attempt > 0:
+                        time.sleep(0.5)  # 500ms spacing to avoid 429s
+                    api_read_limiter.wait()
+                    resp = kalshi_client.get_events(status='open', with_milestones=True, series_ticker=series)
+                    milestones = resp.get('milestones', [])
+                    events = resp.get('events', [])
+                    # ITF uses single-letter codes ('P' = in progress, 'SCH' = scheduled,
+                    # 'PP' = paused/postponed). ATP/WTA use long-form ('live', 'ended').
+                    # Normalize so _is_milestone_live's status=='live' check works for both.
+                    def _norm(s):
+                        return 'live' if s == 'P' else s
+                    if not milestones:
+                        for ev in events:
+                            ev_milestones = ev.get('milestones', [])
+                            for ms in ev_milestones:
+                                ms_status = _norm(ms.get('details', {}).get('status', 'not_started'))
+                                start_date = ms.get('start_date', '')
+                                et = ev.get('event_ticker', '')
+                                if et:
+                                    event_info[et] = {'status': ms_status, 'start_date': start_date}
+                    else:
+                        for m in milestones:
+                            ms_status = _norm(m.get('details', {}).get('status', 'not_started'))
+                            start_date = m.get('start_date', '')
+                            for et in m.get('related_event_tickers', []):
                                 event_info[et] = {'status': ms_status, 'start_date': start_date}
-                else:
-                    for m in milestones:
-                        ms_status = _norm(m.get('details', {}).get('status', 'not_started'))
-                        start_date = m.get('start_date', '')
-                        for et in m.get('related_event_tickers', []):
-                            event_info[et] = {'status': ms_status, 'start_date': start_date}
-                break  # success
-            except Exception as e:
-                if attempt == 0 and '429' in str(e):
-                    time.sleep(1.0)  # back off on rate limit
-                    continue
-                print(f'⚠ Milestones fetch failed for {series}: {e}')
-                break
-    _milestones_cache = {'data': event_info, 'ts': time.time()}
-    live_events = [k for k, v in event_info.items() if _is_milestone_live(v, k)]
-    if live_events:
-        print(f'🎾 Milestones cache: {len(live_events)} live — {", ".join(live_events[:5])}')
+                    any_success = True
+                    break  # success
+                except Exception as e:
+                    if attempt == 0 and '429' in str(e):
+                        time.sleep(1.0)  # back off on rate limit
+                        continue
+                    # Suppress 429 spam when stale cache exists — prefer silent fallback
+                    if not (had_stale_data and '429' in str(e)):
+                        print(f'⚠ Milestones fetch failed for {series}: {e}')
+                    break
+        if any_success:
+            # At least one series fetched fresh — bump full TTL
+            _milestones_cache = {'data': event_info, 'ts': time.time()}
+            live_events = [k for k, v in event_info.items() if _is_milestone_live(v, k)]
+            if live_events:
+                print(f'🎾 Milestones cache: {len(live_events)} live — {", ".join(live_events[:5])}')
+        else:
+            # All series failed: keep stale data, short-TTL backoff so we retry in RETRY_TTL
+            _milestones_cache = {
+                'data': event_info,
+                'ts': time.time() - (_MILESTONES_CACHE_TTL - _MILESTONES_RETRY_TTL),
+            }
 
 
 def _is_milestone_live(info: dict, event_ticker: str = '') -> bool:

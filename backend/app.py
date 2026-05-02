@@ -4492,6 +4492,48 @@ class KalshiWSManager:
                     threading.Thread(target=_ws_phantom_sympathy_guard, args=(ticker, yb, nb, ya, na), daemon=True).start()
                 except Exception as _pd_err:
                     pass  # don't spam logs on every tick
+                # ── Phantom price tape: BBO + bot state for offline analytics ──
+                # Throttled to max 1 entry per bot per second. Writes to a queue,
+                # never blocks the WS handler. Captures dog_filled/fav_hedge_posted
+                # states only — these are the windows where price action matters
+                # for the trade math (cap-at-100 backtest, knife recovery analysis).
+                try:
+                    _tape_now = time.time()
+                    for _bid, _b in list(active_bots.items()):
+                        if _b.get('bot_category') != 'anchor_dog':
+                            continue
+                        if _b.get('status') not in ('dog_filled', 'fav_hedge_posted'):
+                            continue
+                        _b_ticker = _b.get('hedge_ticker') or _b.get('ticker')
+                        if _b_ticker != ticker:
+                            continue
+                        if _tape_now - _b.get('_tape_last_log', 0) < 1.0:
+                            continue
+                        _b['_tape_last_log'] = _tape_now
+                        _dp = _b.get('dog_price') or 0
+                        _fp = _b.get('fav_price') or 0
+                        try:
+                            _phantom_tape_queue.put_nowait({
+                                'ts': _tape_now,
+                                'bot_id': _bid,
+                                'ticker': ticker,
+                                'status': _b.get('status'),
+                                'dog_side': _b.get('dog_side'),
+                                'fav_side': _b.get('fav_side'),
+                                'dog_price': _dp,
+                                'fav_price': _fp,
+                                'combined': _dp + _fp,
+                                'yes_bid': yb, 'yes_ask': ya,
+                                'no_bid':  nb, 'no_ask':  na,
+                                'fav_fill_qty': _b.get('fav_fill_qty', 0),
+                                'dog_fill_qty': _b.get('dog_fill_qty', 0),
+                                'walks': _b.get('fav_walk_count', 0),
+                                'qty': _b.get('quantity', 0),
+                            })
+                        except Exception:
+                            pass  # queue full — drop entry, don't block WS
+                except Exception:
+                    pass  # never break WS handler over tape errors
                 # ── Real-time phantom retreat: pull dog if bid approaches order ──
                 try:
                     _ws_phantom_retreat(ticker, yb, nb)
@@ -5899,6 +5941,27 @@ def _snap_worker_loop():
 
 for _i in range(_SNAP_WORKER_COUNT):
     threading.Thread(target=_snap_worker_loop, daemon=True, name=f'snap-worker-{_i}').start()
+
+# ─── Phantom Price Tape: log BBO + bot state for active phantoms (offline analytics) ──
+# Captures the price path during fav_hedge_posted state so we can backtest things like
+# "what if we capped at combined 100c?" or "do dumps usually recover?". Async writer
+# never blocks the WS handler. Throttled to max 1 entry per bot per second.
+_phantom_tape_path = '/root/meridian/backend/phantom_price_tape.jsonl'
+_phantom_tape_queue = _queue_mod.Queue(maxsize=10000)  # backpressure if disk slow
+
+def _phantom_tape_worker():
+    """Async writer for phantom price tape — drained from queue, written to disk."""
+    while True:
+        try:
+            entry = _phantom_tape_queue.get()
+            if entry is None:
+                break
+            with open(_phantom_tape_path, 'a') as f:
+                f.write(json.dumps(entry, default=str) + '\n')
+        except Exception as e:
+            print(f'⚠ TAPE WRITER ERROR: {e}')
+
+threading.Thread(target=_phantom_tape_worker, daemon=True, name='phantom-tape-writer').start()
 
 # ─── Pending WS actions: queued by WS handler, drained by monitor into response ─
 # This ensures the frontend sees 'completed' / 'timeout_exit' actions even when

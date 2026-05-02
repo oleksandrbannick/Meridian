@@ -10770,6 +10770,14 @@ def _apex_mm_walk_up(bot_id, bot):
         return
 
     # Already at wall or above — stay parked. WS stop-loss handles death zone.
+    # No WALL_ESCAPE: removed per maker philosophy — we don't walk our exit
+    # into loss territory to force a fill. As the BBO maker, we sit at the
+    # wall (breakeven) until one of three things happens:
+    #   1. Sellers cross to our wall price → natural fill at $0
+    #   2. Live bid keeps trending against us → SL fires at 100+width
+    #   3. Market settles → held side resolves
+    # Walking into intentional loss (the old WALL_ESCAPE) abandons our
+    # structural maker advantage and bleeds churn against negative EV.
     if current_price >= wall_price:
         if not bot.get('_wall_parked'):
             bot['_wall_parked'] = True
@@ -10779,51 +10787,6 @@ def _apex_mm_walk_up(bot_id, bot):
                 'exit_price': current_price, 'avg_held': avg_held,
                 'combined': avg_held + current_price, 'width': width,
             })
-        # ── WALL ESCAPE: after N min parked at wall with no fill, creep past
-        #    breakeven into small loss to force a fill. Without this, bots can
-        #    sit at WALL forever (sellers won't drop 5c for 1c profit).
-        #    Default: 5 min start, 1c every 60s, capped at stop_loss-1c.
-        wall_age = now - bot.get('_wall_parked_at', now)
-        if wall_age >= APEX_MM_WALL_ESCAPE_AFTER_S:
-            stop_combined = 100 + max(width, bot.get('min_sl_margin', 0))
-            escalations = int((wall_age - APEX_MM_WALL_ESCAPE_AFTER_S) // APEX_MM_WALL_ESCAPE_INTERVAL_S) + 1
-            # Cap at min(stop_loss-1, wall+MAX_LOSS, wall+escalations).
-            # MAX_LOSS_C bound prevents drift to worst-allowed loss when bid never returns.
-            target_combined = min(stop_combined - 1, 100 + APEX_MM_WALL_ESCAPE_MAX_LOSS_C, 100 + escalations)
-            target_price_escape = max(current_price + 1, target_combined - avg_held)
-            target_price_escape = max(1, min(98, target_price_escape))
-            # Snap to live bid if it's at or above target (instant fill possible),
-            # else creep up to the escalation target.
-            escape_price = min(live_exit_bid, target_price_escape) if live_exit_bid >= target_price_escape else target_price_escape
-            _last_escape = bot.get('_last_wall_escape_at', 0)
-            if escape_price > current_price and now - _last_escape >= 5:  # 5s amend gate
-                try:
-                    price_kwarg = {f'{exit_side}_price': escape_price}
-                    api_rate_limiter.wait()
-                    _amend_resp = kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
-                                              count=net_held, action='buy', **price_kwarg)
-                    _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
-                    _new_oid = _amend_ord.get('order_id', '')
-                    if _new_oid and _new_oid != exit_oid:
-                        bot[f'_{exit_side}_exit_oid'] = _new_oid
-                    old_p = current_price
-                    bot['_exit_price'] = escape_price
-                    bot['_last_wall_escape_at'] = now
-                    _esc_combined = avg_held + escape_price
-                    print(f'⏰ APEX MM WALL ESCAPE: {bot_id} {exit_side.upper()} {old_p}→{escape_price}c (combined={_esc_combined}c, age={wall_age:.0f}s, esc#{escalations}, bid={live_exit_bid}c)')
-                    bot_log('APEX_MM_WALL_ESCAPE', bot_id, {
-                        'old': old_p, 'new': escape_price, 'combined': _esc_combined,
-                        'wall_age_s': round(wall_age), 'escalation': escalations,
-                        'bid': live_exit_bid, 'stop_combined': stop_combined,
-                    })
-                except Exception as e:
-                    if 'filled' in str(e).lower():
-                        print(f'⚡ APEX MM WALL ESCAPE FILLED: {bot_id}')
-                    elif '404' in str(e) or 'not found' in str(e).lower():
-                        print(f'⚠ APEX MM WALL ESCAPE 404: {bot_id} exit order gone')
-                        bot[f'_{exit_side}_exit_oid'] = None
-                    else:
-                        print(f'⚠ APEX MM WALL ESCAPE FAIL: {bot_id} {e}')
         return
 
 

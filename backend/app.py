@@ -10654,64 +10654,57 @@ def _apex_mm_walk_up(bot_id, bot):
 
     # ── GREEN ZONE: we are the maker BBO; close room over time, react to outbidders ──
     # Two valid moves only:
-    #   A. Outbidder above us → react with bid+1 (if combined < 95c) or join@bid
-    #      (if bid+1 would erode profit below 5c). Cap at 99-avg (≥1c profit).
-    #   B. We are BBO/alone above demand → walk +1c per cadence to close room.
-    #      Cadence accelerates with dwell time. Capped at 99-avg.
-    # No walk-down: we never follow lower bidders. Sellers cross to OUR bid;
-    # walking down only gives away room for no fill-probability gain.
+    #   A. Outbidder above us → join at THEIR bid (queue). Never bid+1: as the
+    #      maker we don't burn 1c profit chasing taker-style queue priority.
+    #      Sellers cross to a price they're willing to take — joining keeps us
+    #      in the queue; sitting alone keeps the same fill semantics.
+    #   B. We are BBO/alone above demand → walk +1c per cadence to close room
+    #      until we hit the 95c combined cap (5c profit floor). Past 95c only
+    #      happens via outbidder forcing us; we never voluntarily go past 95c.
+    # Cadence accelerates with dwell time but caps at 2x (slow probe).
+    # No walk-down: we never follow lower bidders.
     _market_best_bid = _apex_mm_market_best_bid(bot, exit_side)
-    _max_profitable_price = max(1, 99 - avg_held)
-    APEX_MM_BID_PLUS_ONE_COMBINED_CAP = 95  # bid+1 only if combined stays under this
+    _max_walk_price = max(1, 95 - avg_held)  # 5c profit floor — autonomous walk cap
+    _max_profitable_price = max(1, 99 - avg_held)  # 1c profit safety — outbidder follow cap
 
     _snap_target = 0
     _walk_iv = 2
     _walk_mode = ''
     _bbo_state = 'unknown'
 
-    # Branch A: Outbidder above us → react
+    # Branch A: Outbidder above us → join@bid (NEVER bid+1)
     if _market_best_bid > current_price:
-        _bid_plus_one = _market_best_bid + 1
-        if (avg_held + _bid_plus_one) < APEX_MM_BID_PLUS_ONE_COMBINED_CAP:
-            _candidate = _bid_plus_one
-            _bbo_state = 'bbo_plus_one'
-            _walk_mode = f'bid+1 (real top {_market_best_bid}c, combined {avg_held + _bid_plus_one}c < {APEX_MM_BID_PLUS_ONE_COMBINED_CAP}c)'
-        else:
-            _candidate = _market_best_bid  # queue at bid — bid+1 erodes profit below 5c
-            _bbo_state = 'queue'
-            _walk_mode = f'queue@bid (real top {_market_best_bid}c, bid+1 combined {avg_held + _bid_plus_one}c >= {APEX_MM_BID_PLUS_ONE_COMBINED_CAP}c)'
-        _candidate = min(_candidate, _max_profitable_price)  # ≥1c profit safety
+        _candidate = _market_best_bid  # join at their bid; never bid+1 (maker doesn't pay for queue priority)
+        # Cap at 99-avg (1c profit safety — never voluntarily push to breakeven)
+        _candidate = min(_candidate, _max_profitable_price)
+        _bbo_state = 'queue'
+        _walk_mode = f'join@bid (real top {_market_best_bid}c → combined {avg_held + _candidate}c)'
         if _candidate > current_price:
             _snap_target = _candidate
-            _walk_iv = 2  # immediate reaction to outbidder
+            _walk_iv = 2  # immediate reaction
     elif _market_best_bid > 0 and _market_best_bid == current_price:
         _bbo_state = 'queue'
     else:
         _bbo_state = 'alone'  # real top below us, or no demand at all
 
-    # Branch B: Walk-up creep — close room over time when not reacting to outbidder.
-    # Cadence accelerates with dwell time. Walks toward target (probe) when
-    # current is below target, then continues toward 99-avg cap.
-    if _snap_target == 0 and live_combined <= 99 and current_price < _max_profitable_price:
+    # Branch B: Walk-up creep — slowly close room toward 95c cap when not reacting.
+    # Cadence accelerates from 1x to 2x max with dwell time. Probes from current
+    # toward target when below, then continues to 95c cap.
+    if _snap_target == 0 and current_price < _max_walk_price:
         _walk_iv_base = APEX_MM_WALK_INTERVAL_BY_PHASE.get(_phase, 8)
         _walk_age = now - (bot.get('_exit_soak_start') or bot.get('_exit_posted_at', now))
-        if _walk_age > 300:
-            _walk_iv = max(2, _walk_iv_base // 4)
-            _accel = '4x'
-        elif _walk_age > 180:
-            _walk_iv = max(2, _walk_iv_base // 3)
-            _accel = '3x'
-        elif _walk_age > 60:
-            _walk_iv = max(2, _walk_iv_base // 2)
+        # Cap acceleration at 2x — slow probe, no aggressive chase to cap
+        if _walk_age > 60:
+            _walk_iv = max(4, _walk_iv_base // 2)
             _accel = '2x'
         else:
             _walk_iv = _walk_iv_base
             _accel = '1x'
-        _snap_target = min(current_price + 1, _max_profitable_price)
+        _snap_target = min(current_price + 1, _max_walk_price)
         if current_price < target_price:
             _walk_mode = f'probe-to-target ({_phase} {_accel}, target {target_price}c, age={_walk_age:.0f}s)'
         else:
-            _walk_mode = f'walk +1c ({_phase} {_accel}, age={_walk_age:.0f}s)'
+            _walk_mode = f'walk +1c toward 95c cap ({_phase} {_accel}, max {_max_walk_price}c, age={_walk_age:.0f}s)'
 
     # Expose BBO state for UI (read by frontend to render ALONE / JOIN / BBO+1 badge)
     bot['_bbo_state'] = _bbo_state

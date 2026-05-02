@@ -10631,35 +10631,11 @@ def _apex_mm_walk_up(bot_id, bot):
     total_age = now - (bot.get('_exit_posted_at') or soak_start)
 
     # ── SOAK: protect target price ──
-    # While in soak AND profitable/breakeven, hold at target. Let it fill.
-    # Only bypass soak when underwater (combined > 100) — need to walk to wall.
+    # We are the maker BBO. Don't follow other (lower) bids down — hold target
+    # during soak and let YES sellers cross to us. Outbidder reactions and
+    # walk-up creep are handled post-soak.
     if age < SOAK_SECONDS and live_combined <= 100:
-        # Even during soak, follow real top DOWN (excluding own — same own-order
-        # racing fix as the post-soak path).
-        _soak_real_top = _apex_mm_market_best_bid(bot, exit_side)
-        if _soak_real_top > 0 and _soak_real_top < current_price:
-            snap_price = max(1, _soak_real_top)
-            try:
-                price_kwarg = {f'{exit_side}_price': snap_price}
-                api_rate_limiter.wait()
-                _amend_resp = kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
-                                          count=net_held, action='buy', **price_kwarg)
-                _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
-                _new_oid = _amend_ord.get('order_id', '')
-                if _new_oid and _new_oid != exit_oid:
-                    bot[f'_{exit_side}_exit_oid'] = _new_oid
-                bot['_exit_price'] = snap_price
-                bot['_wall_parked'] = False
-                # No soak reset — follow price freely
-                print(f'📊 APEX MM SNAP-BACK (soak): {bot_id} {exit_side.upper()} {current_price}→{snap_price}c (real top {_soak_real_top}c, combined={avg_held + snap_price}c)')
-                bot_log('APEX_MM_SNAP_BACK', bot_id, {'old': current_price, 'new': snap_price, 'real_top': _soak_real_top, 'combined': avg_held + snap_price, 'in_soak': True})
-            except Exception as e:
-                if 'filled' in str(e).lower():
-                    print(f'⚡ APEX MM SNAP-BACK FILLED (soak): {bot_id}')
-                elif '404' in str(e) or 'not found' in str(e).lower():
-                    print(f'⚠ APEX MM SNAP-BACK 404 (soak): {bot_id} exit order gone — reposting')
-                    bot[f'_{exit_side}_exit_oid'] = None
-        return  # hold position during soak — don't snap UP past target
+        return  # hold at target during soak
 
     # ── BREATHING GUARD: bid within 2c of target — extend soak once ──
     _target_dist = abs(live_exit_bid - target_price) if live_exit_bid > 0 else 999
@@ -10668,90 +10644,53 @@ def _apex_mm_walk_up(bot_id, bot):
             bot['_exit_soak_start'] = now  # one extension, capped by MAX_SOAK_SECONDS
         return
 
-    # ── SNAP-BACK: real top dropped below us, follow it down for better fill ──
-    # CRITICAL: live_exit_bid (WS cache) INCLUDES our own resting exit. When
-    # we're alone at top with real bidders far below, live_exit_bid = our own
-    # price → live_exit_bid < current_price never triggers, bot sits high
-    # forever above demand. Use _apex_mm_market_best_bid which walks LOB
-    # excluding own contribution. If real top is below us, snap down to it.
-    _real_top_for_snapback = _apex_mm_market_best_bid(bot, exit_side)
-    if _real_top_for_snapback > 0 and _real_top_for_snapback < current_price:
-        snap_price = max(1, _real_top_for_snapback)
-        try:
-            price_kwarg = {f'{exit_side}_price': snap_price}
-            api_rate_limiter.wait()
-            _amend_resp = kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
-                                      count=net_held, action='buy', **price_kwarg)
-            _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
-            _new_oid = _amend_ord.get('order_id', '')
-            if _new_oid and _new_oid != exit_oid:
-                bot[f'_{exit_side}_exit_oid'] = _new_oid
-            bot['_exit_price'] = snap_price
-            bot['_wall_parked'] = False
-            print(f'📊 APEX MM SNAP-BACK: {bot_id} {exit_side.upper()} {current_price}→{snap_price}c (real top {_real_top_for_snapback}c, was alone above demand, combined={avg_held + snap_price}c)')
-            bot_log('APEX_MM_SNAP_BACK', bot_id, {'old': current_price, 'new': snap_price, 'real_top': _real_top_for_snapback, 'combined': avg_held + snap_price})
-        except Exception as e:
-            if 'filled' in str(e).lower():
-                print(f'⚡ APEX MM SNAP-BACK FILLED: {bot_id}')
-            elif '404' in str(e) or 'not found' in str(e).lower():
-                print(f'⚠ APEX MM SNAP-BACK 404: {bot_id} exit order gone — reposting')
-                bot[f'_{exit_side}_exit_oid'] = None
-        return
+    # ── No SNAP-BACK walk-down ──
+    # We are the maker BBO. Real top below us is irrelevant — sellers cross
+    # to OUR bid, not to a lower bidder. Walking down to "follow" them gives
+    # away room for no fill-probability gain. Only walk-up + outbidder
+    # reactions are valid price moves.
 
-    # ── GREEN ZONE: combined <= 99c → snap to bid+1 (price-improve to BBO, capped at WALL-1c) ──
-    # Was: walk 1c per 150s in default phase (3-5x slow-fill mult). Tennis bots
-    # sat 50+ min walking up to a bid that was 20c above them. User wants snap
-    # behavior in profit zone — grab the move while it's there.
-    # Bid+1 (not bid) so we reclaim BBO instead of queue-joining behind whoever
-    # just moved up. Only fires when bid > current_price (we're already behind).
-    # Cap at combined=99c (1c profit) so a bid above the wall doesn't push us
-    # into a guaranteed loss.
-    # CRITICAL: bid must EXCLUDE our own resting exit, else we race ourselves —
-    # post @bid+1, become the new top, next cycle bid+1 = our_price+1, climb
-    # 1c per cycle until we hit max_profitable_price. live_exit_bid (WS cache)
-    # includes our own orders; _apex_mm_market_best_bid(side) walks levels and
-    # returns the highest where OTHERS have depth.
+    # ── GREEN ZONE: we are the maker BBO; close room over time, react to outbidders ──
+    # Two valid moves only:
+    #   A. Outbidder above us → react with bid+1 (if combined < 95c) or join@bid
+    #      (if bid+1 would erode profit below 5c). Cap at 99-avg (≥1c profit).
+    #   B. We are BBO/alone above demand → walk +1c per cadence to close room.
+    #      Cadence accelerates with dwell time. Capped at 99-avg.
+    # No walk-down: we never follow lower bidders. Sellers cross to OUR bid;
+    # walking down only gives away room for no fill-probability gain.
     _market_best_bid = _apex_mm_market_best_bid(bot, exit_side)
     _max_profitable_price = max(1, 99 - avg_held)
-    # Two snap modes:
-    #   A. Real bidder above us → snap to bid+1 (reclaim BBO immediately, 2s gate).
-    #   B. Alone at top with combined << 99c → time-gated walk-up creep toward
-    #      max_profitable_price. Cadence accelerates the longer we sit:
-    #        0-60s post-soak:   base interval (30s for default phase)
-    #        60-180s:           base/2  (15s)
-    #        180-300s:          base/3  (10s)
-    #        300s+:             base/4  (7s, capped at floor of 2s)
-    #      Logic: if market hasn't come back to fill us by now, walk faster to
-    #      capture profit before bid drops further.
+    APEX_MM_BID_PLUS_ONE_COMBINED_CAP = 95  # bid+1 only if combined stays under this
+
     _snap_target = 0
     _walk_iv = 2
     _walk_mode = ''
     _bbo_state = 'unknown'
-    if _market_best_bid > 0:
-        _bid_plus_one = min(_market_best_bid + 1, _max_profitable_price)
-        if _bid_plus_one > current_price:
-            _snap_target = _bid_plus_one
-            _walk_mode = f'bid+1 (real top {_market_best_bid}c)'
-            _walk_iv = 2
+
+    # Branch A: Outbidder above us → react
+    if _market_best_bid > current_price:
+        _bid_plus_one = _market_best_bid + 1
+        if (avg_held + _bid_plus_one) < APEX_MM_BID_PLUS_ONE_COMBINED_CAP:
+            _candidate = _bid_plus_one
             _bbo_state = 'bbo_plus_one'
-        elif _market_best_bid == current_price:
-            # Same price as real top — queue-joined behind/with them
-            _bbo_state = 'queue'
+            _walk_mode = f'bid+1 (real top {_market_best_bid}c, combined {avg_held + _bid_plus_one}c < {APEX_MM_BID_PLUS_ONE_COMBINED_CAP}c)'
         else:
-            # Real top is below us, we're above
-            _bbo_state = 'alone'
+            _candidate = _market_best_bid  # queue at bid — bid+1 erodes profit below 5c
+            _bbo_state = 'queue'
+            _walk_mode = f'queue@bid (real top {_market_best_bid}c, bid+1 combined {avg_held + _bid_plus_one}c >= {APEX_MM_BID_PLUS_ONE_COMBINED_CAP}c)'
+        _candidate = min(_candidate, _max_profitable_price)  # ≥1c profit safety
+        if _candidate > current_price:
+            _snap_target = _candidate
+            _walk_iv = 2  # immediate reaction to outbidder
+    elif _market_best_bid > 0 and _market_best_bid == current_price:
+        _bbo_state = 'queue'
     else:
-        _bbo_state = 'alone'
-    # Walk-up creep: only fires when real demand exists AND we're within headroom
-    # of it. Without this gate, alone-at-top bots walk themselves toward 99c
-    # combined regardless of whether there's anyone willing to buy.
-    # _market_best_bid == 0  → no real bidders at all, no demand → hold
-    # gap > WALK_HEADROOM    → we've outrun the real top → hold
-    # gap <= WALK_HEADROOM   → close enough to demand, walk +1c to test
-    APEX_MM_WALK_HEADROOM_C = 2
-    if _snap_target == 0 and live_combined <= 99 and current_price < _max_profitable_price \
-       and _market_best_bid > 0 and current_price <= _market_best_bid + APEX_MM_WALK_HEADROOM_C:
-        # Walk-up creep with progressive acceleration based on dwell time.
+        _bbo_state = 'alone'  # real top below us, or no demand at all
+
+    # Branch B: Walk-up creep — close room over time when not reacting to outbidder.
+    # Cadence accelerates with dwell time. Walks toward target (probe) when
+    # current is below target, then continues toward 99-avg cap.
+    if _snap_target == 0 and live_combined <= 99 and current_price < _max_profitable_price:
         _walk_iv_base = APEX_MM_WALK_INTERVAL_BY_PHASE.get(_phase, 8)
         _walk_age = now - (bot.get('_exit_soak_start') or bot.get('_exit_posted_at', now))
         if _walk_age > 300:
@@ -10767,7 +10706,10 @@ def _apex_mm_walk_up(bot_id, bot):
             _walk_iv = _walk_iv_base
             _accel = '1x'
         _snap_target = min(current_price + 1, _max_profitable_price)
-        _walk_mode = f'walk +1c ({_phase} {_accel}, +{current_price - _market_best_bid}c above real top, age={_walk_age:.0f}s)'
+        if current_price < target_price:
+            _walk_mode = f'probe-to-target ({_phase} {_accel}, target {target_price}c, age={_walk_age:.0f}s)'
+        else:
+            _walk_mode = f'walk +1c ({_phase} {_accel}, age={_walk_age:.0f}s)'
 
     # Expose BBO state for UI (read by frontend to render ALONE / JOIN / BBO+1 badge)
     bot['_bbo_state'] = _bbo_state

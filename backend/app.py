@@ -5735,9 +5735,13 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
             best_combined = min(buy_opp, sell_held)
 
             width = _apex_mm_exit_width(bot)
-            # Stop = 100 + width (symmetric with edge). min_sl_margin defaults to 0
-            # so SL=width; user can raise per-bot for noisy sports to restore old 6c floor.
-            stop = 100 + max(width, bot.get('min_sl_margin', 0))
+            # Stop = 100 + min(margin, 8c). Cap SL margin at 8c regardless of
+            # configured width — wide bots (e.g. width=40) used to have SL at
+            # combined 140 (= -40c per contract), which is no real safety net.
+            # Capping at 8c gives uniform downside protection: narrow bots
+            # (width<=8) keep their tight SL = width; wide bots cap at 8c past
+            # wall = -8c per contract max before SL fires.
+            stop = 100 + min(max(width, bot.get('min_sl_margin', 0)), 8)
 
             if best_combined >= stop and best_combined < 999:
                 _hm = _apex_mm_hard_margin(width)
@@ -17601,9 +17605,9 @@ def _handle_apex(bot_id, bot, actions):
           _sell_held_combined = _held_avg + (100 - _held_ask) if _held_ask > 0 else 999
           _best_combined = min(_buy_opp_combined, _sell_held_combined)
           _width = _apex_mm_exit_width(bot)
-          # Stop = 100 + width (symmetric with edge). min_sl_margin defaults to 0
-          # so SL=width; user can raise per-bot for noisy sports to restore old 6c floor.
-          _stop = 100 + max(_width, bot.get('min_sl_margin', 0))
+          # Stop = 100 + min(margin, 8c) — cap SL margin at 8c regardless of width.
+          # See WS handler at line 5740 for full rationale.
+          _stop = 100 + min(max(_width, bot.get('min_sl_margin', 0)), 8)
           # Drift stop: dual-threshold matrix (soft breach = timer, hard breach = instant)
           # Use >= to match WS handler — prevents monitor from resetting WS breach timer at exact boundary
           if _best_combined >= _stop and _best_combined < 999:

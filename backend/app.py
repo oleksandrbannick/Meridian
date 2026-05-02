@@ -5789,7 +5789,12 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                     bot['_sl_breach_peak'] = None
                     bot['_sl_breach_phase'] = None
 
-            # ── Priority 2: Snap-down/up — track exit bid in real-time ──
+            # ── Priority 2: Snap-up only (BBO maker model) ──
+            # We are the maker. Sellers cross to OUR bid; we never follow lower
+            # bidders down (that's taker price-improvement, not making). And we
+            # don't take bid+1 to claim queue priority — joining at the outbidder's
+            # bid keeps us in the queue without burning profit. Snap-down was the
+            # source of the 99↔100 bouncing seen on PERCOO.
             exit_oid = bot.get(f'_{exit_side}_exit_oid')
             if not exit_oid:
                 continue
@@ -5804,37 +5809,15 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
             net_held = abs(net_yes - net_no)
             snap_price = 0
             snap_dir = ''
-            # Use market-best (excludes own resting exit) for snap-down too —
-            # if we're alone above demand, exit_bid (WS cache) shows our own
-            # price and snap-down never fires. Same fix as the monitor walker.
-            _ws_real_top = _apex_mm_market_best_bid(bot, exit_side)
-            if _ws_real_top > 0 and _ws_real_top < current_price:
-                # Snap-down — real top below us, follow it for better fill
-                snap_price = max(1, _ws_real_top)
-                snap_dir = 'DOWN'
-            elif exit_bid > current_price:
-                # Snap-up — bid moved above us (regime shift); reclaim BBO by posting
-                # at bid+1 (price-improve) instead of queue-joining at bid. Fires only
-                # when we're behind, so bid+1 just regains best-book priority. Cap at
-                # WALL-1c (combined=99) so we never lock in a guaranteed loss.
-                # CRITICAL: bid for the snap-up target must EXCLUDE our own resting
-                # exit. The WS event's yes_bid/no_bid is the LOB top including our
-                # orders; in the race window between amend_order returning and the
-                # bot._exit_price write below (line 5738), a fresh WS update can
-                # arrive showing OUR new price as top. exit_bid (our new price) >
-                # current_price (still old) → snap to our_new+1 → climb 1c per
-                # tick until max_profitable. Use _apex_mm_market_best_bid which
-                # walks the book excluding our resting contribution.
-                _real_top = _apex_mm_market_best_bid(bot, exit_side)
-                if _real_top > 0 and _real_top > current_price:
-                    live_combined = held_avg + _real_top
-                    if live_combined <= 99:
-                        _max_profitable = max(1, 99 - held_avg)
-                        snap_price = min(_real_top + 1, _max_profitable)
-                        if snap_price > current_price:
-                            snap_dir = 'UP'
-                # If live_combined > 99 (red zone), wall-park is the monitor walker's job.
-                # If _real_top <= current_price, we're still BBO — no climb.
+            # Snap-up only — outbidder posted ABOVE our exit. Join at their bid
+            # (never bid+1). Cap at 99-avg (1c profit safety floor — never push
+            # voluntarily to combined 100c; let the WALL block handle that).
+            _real_top = _apex_mm_market_best_bid(bot, exit_side)
+            if _real_top > 0 and _real_top > current_price:
+                _max_profitable = max(1, 99 - held_avg)
+                snap_price = min(_real_top, _max_profitable)
+                if snap_price > current_price:
+                    snap_dir = 'UP'
             if not snap_dir or snap_price <= 0:
                 continue
             try:

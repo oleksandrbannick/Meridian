@@ -17298,21 +17298,31 @@ def _handle_apex(bot_id, bot, actions):
                         if _smkt_result == _side:
                             _spnl = round((100 - _avg) * _qty, 2)
                             _rtag = f'mm_settlement_win_{_side}'
+                            _settle_price = 100  # held side won → paid 100c
                         else:
                             _spnl = round(-_avg * _qty, 2)
                             _rtag = f'mm_settlement_loss_{_side}'
+                            _settle_price = 0  # held side lost → paid 0c
                         bot['realized_pnl_cents'] = round(bot.get('realized_pnl_cents', 0) + _spnl, 2)
                         bot.setdefault('_exit_log', []).append({
                             'type': _rtag, 'held_side': _side, 'held_avg': _avg,
+                            'sell_price': _settle_price,  # settlement value of held side (frontend reads this)
                             'settlement_result': _smkt_result,
                             'qty': round(float(_qty), 2), 'pnl': _spnl,
                             'reason': f'market settled {_smkt_result}',
                             'ts': now,
                         })
+                        # Trade row needs both side prices for renderers expecting yes_price + no_price.
+                        # Held side = avg cost, opposite side = its settlement value.
+                        _opp = 'no' if _side == 'yes' else 'yes'
+                        _opp_settle = 100 - _settle_price  # opposite settled inverse
                         try:
                             _record_trade({
                                 'bot_id': bot_id, 'ticker': ticker, 'bot_category': 'ladder_arb',
-                                'result': _rtag, f'{_side}_price': _avg,
+                                'result': _rtag,
+                                f'{_side}_price': _avg, f'{_opp}_price': _opp_settle,
+                                'held_side': _side, 'held_avg': _avg,
+                                'sell_price': _settle_price, 'settlement_result': _smkt_result,
                                 'quantity': _qty, 'net_pnl': _spnl,
                                 'profit_cents': max(0, _spnl), 'loss_cents': abs(min(0, _spnl)),
                                 'timestamp': now, 'fill_source': 'apex_mm_stranded_settlement',
@@ -24646,8 +24656,10 @@ PNL_LOSS_RESULTS = (
     'apex_settled_loss',  # apex: market settled against hedge
     'manual_exit_apex',  # apex: manual exit (zero P&L)
     'mm_sellback',  # apex MM: exit sell (can be + or -, reclassified by actual P&L)
-    'mm_settlement_yes',  # apex MM: market settled YES
-    'mm_settlement_no',  # apex MM: market settled NO
+    'mm_settlement_yes',  # apex MM: market settled YES (legacy tag, kept for old trades)
+    'mm_settlement_no',  # apex MM: market settled NO (legacy tag, kept for old trades)
+    'mm_settlement_loss_yes',  # apex MM: held YES, market settled NO → loss
+    'mm_settlement_loss_no',   # apex MM: held NO, market settled YES → loss
     'mm_pnl_sync',  # apex MM: synthetic row for Kalshi /pnl drift (cancel-race fills)
 )
 PNL_WIN_RESULTS = (
@@ -24658,6 +24670,8 @@ PNL_WIN_RESULTS = (
     'apex_settled_win',  # apex: market settled in favor of hedge
     'mm_round_trip',  # apex MM: spread capture round-trip
     'mm_arb_complete',  # apex MM: exit via buying opposite side
+    'mm_settlement_win_yes',  # apex MM: held YES, market settled YES → win
+    'mm_settlement_win_no',   # apex MM: held NO, market settled NO → win
     'partial_arb',  # phantom ladder: partial hedge fill at ceiling (typically breakeven)
     'anchor_partial_arb',  # phantom: partial arb completion
     'anchor_race_fill',  # phantom: race condition partial hedge fill

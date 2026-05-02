@@ -10416,6 +10416,7 @@ async function apexMmModify(botId) {
         : '<div style="color:#ff8800;font-size:10px;margin-bottom:8px;">Holding inventory — changes queued for next cycle</div>';
     const _widths = [2, 4, 6, 8, 10, 15, 20, 30];
     const _rungs = [3, 5, 7, 10];
+    const _autoWidth = !!bot._auto_width;
     const _wBtnStyle = (active) => `width:36px;height:36px;border-radius:50%;background:${active ? '#00d4ff18' : 'transparent'};border:1px solid ${active ? '#00d4ff' : '#1e2740'};color:${active ? '#00d4ff' : '#556'};cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;`;
     const _rBtnStyle = (active) => `width:36px;height:36px;border-radius:50%;background:${active ? '#ff704318' : 'transparent'};border:1px solid ${active ? '#ff7043' : '#1e2740'};color:${active ? '#ff7043' : '#556'};cursor:pointer;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;`;
     const curLossLimit = bot.loss_limit_cents || 0;
@@ -10428,7 +10429,11 @@ async function apexMmModify(botId) {
             <div style="color:#8892a6;font-size:11px;margin-bottom:8px;">${formatBotDisplayName(bot.ticker || '', bot.spread_line || '', bot.market_title || '')}</div>
             ${statusNote}
             <div style="margin-bottom:12px;">
-                <label style="color:#00d4ff;font-size:10px;font-weight:700;letter-spacing:.05em;display:block;margin-bottom:6px;">WIDTH</label>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                    <label style="color:#00d4ff;font-size:10px;font-weight:700;letter-spacing:.05em;">WIDTH</label>
+                    <button id="apex-edit-auto-toggle" onclick="(function(b){var cur=b.dataset.on==='1';var next=!cur;b.dataset.on=next?'1':'0';b.style.background=next?'#00ff8822':'transparent';b.style.color=next?'#00ff88':'#556';b.style.borderColor=next?'#00ff88':'#1e2740';b.textContent=next?'AUTO ✓':'AUTO';document.getElementById('apex-edit-auto-width').value=next?'1':'0';})(this)" data-on="${_autoWidth ? '1' : '0'}" style="padding:3px 10px;border-radius:50px;background:${_autoWidth ? '#00ff8822' : 'transparent'};border:1px solid ${_autoWidth ? '#00ff88' : '#1e2740'};color:${_autoWidth ? '#00ff88' : '#556'};cursor:pointer;font-weight:700;font-size:10px;letter-spacing:.05em;">${_autoWidth ? 'AUTO ✓' : 'AUTO'}</button>
+                </div>
+                <input id="apex-edit-auto-width" type="hidden" value="${_autoWidth ? '1' : '0'}">
                 <div style="display:flex;justify-content:space-between;gap:4px;">
                     ${_widths.map(w => `<button onclick="document.getElementById('apex-edit-width').value=${w};document.getElementById('apex-edit-width-custom').value='';document.querySelectorAll('.ae-w-btn').forEach(b=>b.style.cssText='${_wBtnStyle(false)}');this.style.cssText='${_wBtnStyle(true)}'" class="ae-w-btn" style="${_wBtnStyle(w === curWidth)}">${w}</button>`).join('')}
                 </div>
@@ -10502,11 +10507,12 @@ async function apexMmModifySave(botId) {
     const levels = Math.max(1, Math.min(15, parseInt(document.getElementById('apex-edit-levels')?.value) || 7));
     const qty = Math.max(1, Math.min(100, parseInt(document.getElementById('apex-edit-qty')?.value) || 10));
     const lossLimit = Math.max(0, parseInt(document.getElementById('apex-edit-loss-limit')?.value) || 0);
+    const autoWidth = document.getElementById('apex-edit-auto-width')?.value === '1';
     try {
         const resp = await fetch(`${API_BASE}/bot/apex-mm/edit/${botId}`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ start_gap: gap, qty_per_level: qty, levels: levels, loss_limit_cents: lossLimit })
+            body: JSON.stringify({ start_gap: gap, qty_per_level: qty, levels: levels, loss_limit_cents: lossLimit, auto_width: autoWidth })
         });
         const data = await resp.json();
         if (data.ok) {

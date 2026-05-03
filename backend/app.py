@@ -5815,7 +5815,13 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                     'combined': combined,
                 })
             except Exception as e:
-                if '404' not in str(e) and 'filled' not in str(e).lower():
+                _err_s = str(e)
+                if '404' in _err_s or 'not found' in _err_s.lower():
+                    print(f'🚨 APEX MM WS SNAP 404: {bot_id} exit order gone — RECREATING immediately')
+                    bot[f'_{exit_side}_exit_oid'] = None
+                    # NEVER leave held inventory naked — recreate exit in background.
+                    threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, held_side), daemon=True).start()
+                elif 'filled' not in _err_s.lower():
                     print(f'⚠ APEX MM WS SNAP-UP FAIL: {bot_id}: {e}')
     finally:
         _ws_apex_mm_tick_lock.release()
@@ -10591,6 +10597,43 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
         _apex_mm_amend_exit_lock.release()
 
 
+def _apex_mm_verify_exit_health(bot_id, bot, exit_side, held_side):
+    """REST-verify the exit OID is still live on Kalshi. If canceled/missing,
+    null and recreate immediately. Catches ghost OIDs that walk_up's amend
+    path won't detect (e.g. exit posted at price > live bid, never amended).
+    Held inventory must NEVER be naked."""
+    oid = bot.get(f'_{exit_side}_exit_oid')
+    if not oid:
+        return
+    try:
+        if not api_read_limiter.try_wait():
+            return  # rate-limited, retry next cycle
+        r = kalshi_client.get_order(oid)
+        order = r.get('order', r) if isinstance(r, dict) else {}
+        status = (order.get('status') or '').lower()
+        remaining = order.get('remaining_count_fp', order.get('remaining_count', None))
+        try: remaining = float(remaining) if remaining is not None else None
+        except Exception: remaining = None
+        is_dead = status in ('canceled', 'cancelled', 'executed', 'expired')
+        is_empty = remaining is not None and remaining <= 0
+        if is_dead or is_empty:
+            print(f'🚨 APEX MM EXIT GHOST DETECTED: {bot_id} oid={oid[:12]} status={status} remaining={remaining} — RECREATING')
+            bot_log('APEX_MM_EXIT_GHOST', bot_id, {
+                'oid': oid[:12], 'status': status, 'remaining': remaining,
+                'exit_side': exit_side, 'held_side': held_side,
+            }, level='WARN')
+            bot[f'_{exit_side}_exit_oid'] = None
+            _apex_mm_amend_exit(bot_id, bot, held_side)
+    except Exception as e:
+        if '404' in str(e) or 'not found' in str(e).lower():
+            print(f'🚨 APEX MM EXIT GHOST 404: {bot_id} oid={oid[:12]} — RECREATING')
+            bot[f'_{exit_side}_exit_oid'] = None
+            try:
+                _apex_mm_amend_exit(bot_id, bot, held_side)
+            except Exception:
+                pass
+
+
 def _apex_mm_walk_up(bot_id, bot):
     """Pure maker exit: never sit below the bid.
     Two and only two ways the exit price moves:
@@ -10679,8 +10722,10 @@ def _apex_mm_walk_up(bot_id, bot):
         if 'filled' in str(e).lower():
             print(f'⚡ APEX MM WALK FILLED: {bot_id}')
         elif '404' in str(e) or 'not found' in str(e).lower():
-            print(f'⚠ APEX MM WALK 404: {bot_id} exit order gone — reposting')
+            print(f'🚨 APEX MM WALK 404: {bot_id} exit order gone — RECREATING immediately')
             bot[f'_{exit_side}_exit_oid'] = None
+            # NEVER leave held inventory naked — recreate exit in background.
+            threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, held_side), daemon=True).start()
         else:
             print(f'⚠ APEX MM WALK FAIL: {bot_id} {e}')
 
@@ -17473,6 +17518,31 @@ def _handle_apex(bot_id, bot, actions):
     # or settlement. See _apex_mm_walk_up.
     net_yes = bot.get('net_yes', 0)
     net_no = bot.get('net_no', 0)
+
+    # 0.0. EXIT GUARANTEE — held inventory MUST always have a live exit posted.
+    # Two layers:
+    #   A. Cheap: if held > 0 and exit_oid is None → fire amend_exit immediately.
+    #      Catches all "null after 404" + first-ever-fill paths.
+    #   B. Periodic (every 30s): REST-verify the exit OID is still live on
+    #      Kalshi. Catches ghost OIDs (status=canceled in dict's view) that
+    #      walk_up never amends (e.g. exit price above live bid → never tries).
+    if net_yes > 0 or net_no > 0:
+        _xg_held = 'yes' if net_yes > net_no else 'no'
+        _xg_exit_side = 'no' if _xg_held == 'yes' else 'yes'
+        if not bot.get(f'_{_xg_exit_side}_exit_oid'):
+            print(f'🚨 APEX MM EXIT MISSING: {bot_id} held={_xg_held} but no {_xg_exit_side}_exit_oid — RECREATING')
+            bot_log('APEX_MM_EXIT_MISSING', bot_id, {
+                'held_side': _xg_held, 'exit_side': _xg_exit_side,
+                'net_yes': net_yes, 'net_no': net_no,
+            }, level='WARN')
+            threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _xg_held), daemon=True).start()
+        else:
+            _now_xg = time.time()
+            if _now_xg - bot.get('_exit_health_at', 0) >= 30:
+                bot['_exit_health_at'] = _now_xg
+                threading.Thread(target=_apex_mm_verify_exit_health,
+                                 args=(bot_id, bot, _xg_exit_side, _xg_held),
+                                 daemon=True).start()
 
     # 0.1. Toxicity tracker — sample mid drift at +5s and +30s after each fill.
     # Drift signed so positive = adverse (bot bought YES, then YES kept rising

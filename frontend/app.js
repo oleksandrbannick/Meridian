@@ -7265,6 +7265,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             <div onclick="const el=document.getElementById('${historyId}');el.style.display=el.style.display==='none'?'block':'none';this.querySelector('.arr').textContent=el.style.display==='none'?'\\u25B6':'\\u25BC';" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;padding:2px 0;">
                 <div style="display:flex;gap:10px;font-size:10px;">
                     <span style="color:#8892a6;">Realized: <strong style="color:${realizedPnl >= 0 ? '#00ff88' : '#ff4444'};">${_fmtC(realizedPnl, {sign:true})}</strong></span>
+                    ${rtPnlSum !== 0 ? `<span style="color:#556;font-size:9px;" title="Sum of round trip P&L below — should match Realized post-sync">Σruns: <strong style="color:${rtPnlSum >= 0 ? '#00ff88' : '#ff4444'};">${_fmtC(rtPnlSum, {sign:true})}</strong></span>` : ''}
                     ${unrealizedPnl !== 0 ? `<span style="color:#8892a6;">Unreal: <strong style="color:${unrealizedPnl >= 0 ? '#00ff88' : '#ff4444'};">${_fmtC(unrealizedPnl, {sign:true})}</strong></span>` : ''}
                     <span style="color:#ff7043;">${roundTrips} RTs</span>
                 </div>

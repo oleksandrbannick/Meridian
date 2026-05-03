@@ -10651,6 +10651,56 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
         _apex_mm_amend_exit_lock.release()
 
 
+def _apex_mm_pnl_sync(bot_id, bot):
+    """Ground bot's realized_pnl_cents to Kalshi's authoritative number.
+    Called periodically (60s cadence in monitor) AND after every round trip
+    (per-RT cadence) so the displayed P&L stays close to reality and doesn't
+    drift dollars between syncs. Without this, cost-basis sanitize events
+    (avg→clamp) and partial-fill accounting cause drift — bot books artificial
+    profits because avg_held was rewritten or fill counts were aggregated.
+
+    Writes a synthetic mm_pnl_sync trade row for the drift so daily P&L /
+    calendar stays bounded to Kalshi reality. Per-RT detail still lives in
+    trades.jsonl + _rt_log."""
+    ticker = bot.get('ticker', '')
+    if not ticker:
+        return
+    bot['_last_pnl_sync'] = time.time()
+    try:
+        if not api_read_limiter.try_wait():
+            return  # rate-limited, skip this cycle
+        _pnl_resp = kalshi_client.get_positions(ticker=ticker)
+        _pnl_list = _pnl_resp.get('market_positions', _pnl_resp.get('positions', []))
+        for _pp in _pnl_list:
+            if _pp.get('ticker') != ticker:
+                continue
+            _ksh_pnl_c = float(_pp.get('realized_pnl_dollars', 0) or 0) * 100
+            _stored = bot.get('realized_pnl_cents', 0) or 0
+            _drift = _ksh_pnl_c - _stored
+            if abs(_drift) > 0.5:
+                print(f'📊 APEX MM PNL SYNC: {bot_id} stored={_stored:.2f}c → kalshi={_ksh_pnl_c:.2f}c (drift {_drift:+.2f}c)')
+                bot['realized_pnl_cents'] = round(_ksh_pnl_c, 2)
+                bot_log('APEX_MM_PNL_SYNC', bot_id, {
+                    'old_stored': _stored, 'new_stored': _ksh_pnl_c,
+                    'drift_cents': _drift,
+                })
+                _drift_pnl = round(_drift, 2)
+                _record_trade({
+                    'bot_id': bot_id, 'ticker': ticker, 'bot_category': 'ladder_arb',
+                    'result': 'mm_pnl_sync', 'exit_via': 'kalshi_drift_sync',
+                    'is_exit': True, 'exit_type': 'drift_sync',
+                    'quantity': 0, 'fee_cents': 0,
+                    'profit_cents': max(0, _drift_pnl),
+                    'loss_cents': abs(min(0, _drift_pnl)),
+                    'net_pnl': _drift_pnl,
+                    'timestamp': time.time(), 'fill_source': 'apex_mm_drift_sync',
+                    'game_phase': bot.get('game_phase', ''),
+                }, bot)
+            break
+    except Exception:
+        pass  # silent fail — next cadence will retry
+
+
 def _apex_mm_verify_exit_health(bot_id, bot, exit_side, held_side):
     """REST-verify the exit OID is still live on Kalshi. If canceled/missing,
     null and recreate immediately. Catches ghost OIDs that walk_up's amend
@@ -12591,6 +12641,11 @@ def _apex_mm_record_round_trip(bot_id, bot, fill_side, fill_price, close_qty):
     })
     sign = '+' if net_pnl >= 0 else ''
     print(f'💰 APEX MM RT#{bot["round_trips_completed"]}: {bot_id} {fill_side.upper()} @{fill_price} vs {opposite.upper()} avg@{opp_avg} → {sign}{net_pnl}c (total: {bot["realized_pnl_cents"]}c)')
+
+    # Snap displayed P&L to Kalshi truth immediately after every RT — eliminates
+    # the inflate-then-correct pattern where stored realized drifts $1+ between
+    # 60s syncs. Runs in background to avoid blocking the WS fill path.
+    threading.Thread(target=_apex_mm_pnl_sync, args=(bot_id, bot), daemon=True).start()
 
 
 def _cancel_with_retry(oid, max_retries=2):
@@ -17321,51 +17376,10 @@ def _handle_apex(bot_id, bot, actions):
         bot['_last_reconcile'] = now
         _apex_mm_reconcile_inventory(bot_id, bot)
 
-    # ── P&L KALSHI-TRUTH SYNC: 60s cadence, ground bot's realized_pnl_cents
-    # to Kalshi's authoritative realized_pnl_dollars per ticker. Without this,
-    # cost-basis sanitize events (avg→clamp) cause drift: bot books artificially
-    # high profits because avg_held was rewritten to a lower-than-actual value.
-    # ZECGER drifted +$0.93 from this. Periodic resync keeps stored P&L
-    # bounded to reality. Per-RT detail still lives in trades.jsonl + _rt_log.
+    # ── P&L KALSHI-TRUTH SYNC: 60s cadence floor (also called after every RT
+    # via _apex_mm_pnl_sync helper for tighter accuracy)
     if now - bot.get('_last_pnl_sync', 0) >= 60:
-        bot['_last_pnl_sync'] = now
-        try:
-            api_read_limiter.wait()
-            _pnl_resp = kalshi_client.get_positions(ticker=ticker)
-            _pnl_list = _pnl_resp.get('market_positions', _pnl_resp.get('positions', []))
-            for _pp in _pnl_list:
-                if _pp.get('ticker') != ticker:
-                    continue
-                _ksh_pnl_c = float(_pp.get('realized_pnl_dollars', 0) or 0) * 100
-                _stored = bot.get('realized_pnl_cents', 0) or 0
-                _drift = _ksh_pnl_c - _stored
-                # Only override on >0.5c drift to avoid floating-point noise
-                if abs(_drift) > 0.5:
-                    print(f'📊 APEX MM PNL SYNC: {bot_id} stored={_stored:.2f}c → kalshi={_ksh_pnl_c:.2f}c (drift {_drift:+.2f}c)')
-                    bot['realized_pnl_cents'] = round(_ksh_pnl_c, 2)
-                    bot_log('APEX_MM_PNL_SYNC', bot_id, {
-                        'old_stored': _stored, 'new_stored': _ksh_pnl_c,
-                        'drift_cents': _drift,
-                    })
-                    # Write synthetic trade row for daily P&L / calendar.
-                    # Why: cancel-404 fills never produce a trade row, so daily totals
-                    # diverge from Kalshi's realized pnl. This patches the gap by
-                    # booking the drift as a single mm_pnl_sync trade.
-                    _drift_pnl = round(_drift, 2)
-                    _record_trade({
-                        'bot_id': bot_id, 'ticker': ticker, 'bot_category': 'ladder_arb',
-                        'result': 'mm_pnl_sync', 'exit_via': 'kalshi_drift_sync',
-                        'is_exit': True, 'exit_type': 'drift_sync',
-                        'quantity': 0, 'fee_cents': 0,
-                        'profit_cents': max(0, _drift_pnl),
-                        'loss_cents': abs(min(0, _drift_pnl)),
-                        'net_pnl': _drift_pnl,
-                        'timestamp': now, 'fill_source': 'apex_mm_drift_sync',
-                        'game_phase': bot.get('game_phase', ''),
-                    }, bot)
-                break
-        except Exception:
-            pass  # silent fail — no-op until next cycle
+        _apex_mm_pnl_sync(bot_id, bot)
 
     # ── AUTO-WIDTH LIVE SYNC: keep bot['start_gap'] current even while pulled ──
     # Without this, a pulled auto bot would show stale width on the card (last

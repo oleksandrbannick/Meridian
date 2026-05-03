@@ -10743,14 +10743,17 @@ def _apex_mm_verify_exit_health(bot_id, bot, exit_side, held_side):
 
 
 def _apex_mm_walk_up(bot_id, bot):
-    """Pure maker exit: never sit below the bid.
-    Two and only two ways the exit price moves:
-      1. Outbidder appears above us → match (snap UP to their bid). No cap —
-         we follow into loss if needed. Sellback by another name is just
-         crossing as taker; matching as maker is always cheaper.
-      2. We're alone (BBO) → time-decay walk +1c per cadence, shrinking
-         profit until fill. Voluntary walk caps at 99-avg (1c profit floor).
-         Past that, only outbidders move us further.
+    """Pure maker exit: track the real BBO in both directions.
+    Three ways the exit price moves:
+      A. Outbidder appears above us → match UP to their bid. No cap on profit
+         floor — we follow into loss if needed. (Matching as maker is always
+         cheaper than crossing as taker.)
+      B. Alone in profit zone → time-decay creep +1c per cadence, shrinking
+         profit until fill. Voluntary creep caps at min(99-avg, ask-1).
+      C. Stranded above real top (outbidder vanished, we're alone way above
+         next bidder) → drop to follow real BBO:
+            • combined ≥ 95c: match bid exactly (danger zone)
+            • combined < 95c: bid+1 (safe zone, keep BBO)
     No SOAK, no BREATHING GUARD, no WALL park, no SL. Two real exits exist:
     cross to our offer, or settlement. See feedback_no_stop_losses.md."""
     net_yes = bot.get('net_yes', 0)
@@ -10808,10 +10811,32 @@ def _apex_mm_walk_up(bot_id, bot):
             _new_price = min(current_price + 1, _walk_cap)
             _mode = f'creep +1c (alone, age={now - _last_walk:.0f}s, cap={_walk_cap}c [profit={_max_profit_price}, ask-1={_ask_cap}])'
 
+    # Branch C: stranded above real top — outbidder vanished and left us
+    # alone way above the actual market. Drop to follow the real BBO so we
+    # don't sit in stale loss territory waiting for sellers that won't come.
+    # Combined-based rule (per user spec):
+    #   - combined ≥ 95c: match bid exactly (danger zone — track, don't fight for +1)
+    #   - combined < 95c: bid+1 (safe zone — keep BBO with queue priority)
+    if _new_price == 0 and _market_best_bid > 0 and current_price > _market_best_bid + 1:
+        _bid_match_combined = avg_held + _market_best_bid
+        if _bid_match_combined >= 95:
+            _candidate_drop = _market_best_bid          # match exactly in danger zone
+            _drop_mode_label = 'match@bid'
+        else:
+            _candidate_drop = _market_best_bid + 1      # bid+1 in safe zone
+            _drop_mode_label = 'bid+1'
+        _candidate_drop = max(1, min(_candidate_drop, _ask_cap))
+        if _candidate_drop < current_price:
+            _new_price = _candidate_drop
+            _bbo_state = 'alone'
+            _mode = f'follow-down → {_drop_mode_label} ({_candidate_drop}c, real top {_market_best_bid}c, combined→{avg_held + _candidate_drop}c)'
+
     bot['_bbo_state'] = _bbo_state
     bot['_bbo_market_best'] = _market_best_bid
 
-    if _new_price <= current_price:
+    # Branch C drops the price (new < current); Branches A/B raise it.
+    # Walk_up was historically up-only; now allow down too.
+    if _new_price == 0 or _new_price == current_price:
         return
 
     try:

@@ -298,6 +298,56 @@ def _start_notification_thread():
     t.start()
     print('📡 Notification monitor thread started')
 
+
+def _start_apex_mm_exit_watchdog():
+    """Backend-only watchdog: scan held MM inventory every 4s and ensure each
+    has a live exit posted. Independent of the frontend monitor loop, which
+    only fires when a browser tab is open. Held inventory CANNOT depend on
+    the user's tab being open — that was the root cause of SHAWAN going naked."""
+    def _loop():
+        while True:
+            try:
+                if _shutting_down:
+                    return
+                _now_wd = time.time()
+                for _bid, _bot in list(active_bots.items()):
+                    try:
+                        if _bot.get('bot_category') != 'ladder_arb':
+                            continue
+                        if _bot.get('type') != 'apex_mm':
+                            continue
+                        _ny = _bot.get('net_yes', 0) or 0
+                        _nn = _bot.get('net_no', 0) or 0
+                        if _ny <= 0 and _nn <= 0:
+                            continue
+                        _held = 'yes' if _ny > _nn else 'no'
+                        _exit_side = 'no' if _held == 'yes' else 'yes'
+                        # Layer A: missing OID → recreate immediately.
+                        if not _bot.get(f'_{_exit_side}_exit_oid'):
+                            print(f'🚨 WATCHDOG EXIT MISSING: {_bid} held={_held} — RECREATING')
+                            bot_log('APEX_MM_WATCHDOG_MISSING', _bid, {
+                                'held_side': _held, 'exit_side': _exit_side,
+                                'net_yes': _ny, 'net_no': _nn,
+                            }, level='WARN')
+                            threading.Thread(target=_apex_mm_amend_exit,
+                                             args=(_bid, _bot, _held), daemon=True).start()
+                            continue
+                        # Layer B: REST verify (cadence 8s, same as monitor safety net).
+                        if _now_wd - (_bot.get('_exit_health_at') or 0) >= 8:
+                            _bot['_exit_health_at'] = _now_wd
+                            threading.Thread(target=_apex_mm_verify_exit_health,
+                                             args=(_bid, _bot, _exit_side, _held),
+                                             daemon=True).start()
+                    except Exception as _be:
+                        print(f'⚠ watchdog bot error {_bid}: {_be}')
+            except Exception as _e:
+                print(f'⚠ Apex MM exit watchdog error: {_e}')
+            time.sleep(4)
+
+    t = threading.Thread(target=_loop, daemon=True, name='apex-mm-exit-watchdog')
+    t.start()
+    print('🛡️  Apex MM exit watchdog thread started (4s cadence)')
+
 # Team name aliases → ticker codes for natural-language market search
 _TEAM_ALIASES = {
     # NBA
@@ -26508,6 +26558,10 @@ def _run_startup():
 
     # Start notification monitor thread
     _start_notification_thread()
+
+    # Start Apex MM exit watchdog — guarantees held inventory always has live exit
+    # posted, independent of frontend monitor polling.
+    _start_apex_mm_exit_watchdog()
 
 # Run startup for both gunicorn (import-time) and python3 app.py
 _run_startup()

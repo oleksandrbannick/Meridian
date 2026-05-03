@@ -320,6 +320,12 @@ def _start_apex_mm_exit_watchdog():
                         _nn = _bot.get('net_no', 0) or 0
                         if _ny <= 0 and _nn <= 0:
                             continue
+                        # Skip fractional-only inventory (< 1 contract) — amend_exit
+                        # floors to 0 and refuses to post; without this guard the
+                        # watchdog spams every 4s until the fractional residue
+                        # settles or new fills bring it ≥ 1.
+                        if abs(_ny - _nn) < 1:
+                            continue
                         _held = 'yes' if _ny > _nn else 'no'
                         _exit_side = 'no' if _held == 'yes' else 'yes'
                         # Layer A: missing OID → recreate immediately.
@@ -17690,7 +17696,9 @@ def _handle_apex(bot_id, bot, actions):
     #   B. Periodic (every 30s): REST-verify the exit OID is still live on
     #      Kalshi. Catches ghost OIDs (status=canceled in dict's view) that
     #      walk_up never amends (e.g. exit price above live bid → never tries).
-    if net_yes > 0 or net_no > 0:
+    if (net_yes > 0 or net_no > 0) and abs(net_yes - net_no) >= 1:
+        # Skip fractional-only inventory — amend_exit floors to 0 and refuses
+        # to post; without this guard the recreate spams every monitor tick.
         _xg_held = 'yes' if net_yes > net_no else 'no'
         _xg_exit_side = 'no' if _xg_held == 'yes' else 'yes'
         if not bot.get(f'_{_xg_exit_side}_exit_oid'):

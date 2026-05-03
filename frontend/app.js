@@ -7035,11 +7035,22 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         } else if (status === 'mm_exiting' && !_activeSell) {
             walkBadge = `<span style="background:#ff444422;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">EXIT PENDING</span>`;
         } else if (effExitPrice > 0) {
-            if (combined >= stopLoss) walkBadge = `<span style="background:#ff444422;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;animation:pulse 1.5s infinite;">STOP LOSS</span>`;
-            else if (combined > 100) walkBadge = `<span style="background:#ff444422;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">PARKED</span>`;
-            else if (combined === 100) walkBadge = `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">WALL</span>`;
-            else if (effExitPrice > origTarget) walkBadge = `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">WALKED</span>`;
-            else walkBadge = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">TARGET</span>`;
+            // Pure maker model: no SL, no wall park, no taker forced exits.
+            // Badges describe MAKER STATE relative to combined zones:
+            //   combined ≥ 95c → MATCH BID (we're tracking the live bid exactly)
+            //   combined < 95c → BBO+1 (one above next real bidder for queue priority)
+            // Color reflects loss/profit zone, not behavior.
+            const _bbo = bot._bbo_state || '';
+            const _isQueue = _bbo === 'queue';
+            if (combined > 100) {
+                walkBadge = `<span style="background:#ff444422;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">${_isQueue ? 'MATCH BID' : 'ALONE'} ${combined - 100}c LOSS</span>`;
+            } else if (combined === 100) {
+                walkBadge = `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">BREAKEVEN</span>`;
+            } else if (combined >= 95) {
+                walkBadge = `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">${_isQueue ? 'MATCH BID' : 'ALONE'} +${100 - combined}c</span>`;
+            } else {
+                walkBadge = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">${_isQueue ? 'BBO QUEUE' : 'BBO+1'} +${100 - combined}c</span>`;
+            }
         } else if (hasInv) {
             // Inventory held but no exit price yet — bot is mid-post
             // (WS fill landed, _apex_mm_amend_exit thread hasn't completed yet).

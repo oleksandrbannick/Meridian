@@ -5850,7 +5850,12 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
             _real_top = _apex_mm_market_best_bid(bot, exit_side)
             if _real_top <= 0 or _real_top <= current_price:
                 continue
-            snap_price = _real_top
+            # ASK CLAMP — post_only buy at price >= ask gets rejected by Kalshi.
+            _live_ask_ws = bot.get(f'live_{exit_side}_ask', 0) or 0
+            _ask_cap_ws = (_live_ask_ws - 1) if 1 < _live_ask_ws <= 99 else 99
+            snap_price = min(_real_top, _ask_cap_ws)
+            if snap_price <= current_price:
+                continue
             try:
                 price_kwarg = {f'{exit_side}_price': snap_price}
                 api_rate_limiter.wait()
@@ -10729,26 +10734,35 @@ def _apex_mm_walk_up(bot_id, bot):
 
     _market_best_bid = _apex_mm_market_best_bid(bot, exit_side)
     _max_profit_price = max(1, 99 - avg_held)  # 1c profit floor for VOLUNTARY walk
+    # ASK CLAMP — post_only buy at price >= live ask is rejected by Kalshi
+    # (would cross). Without this, walk to 49c when ask=49c → Kalshi cancels
+    # the order silently. Walk_up loops forever recreating the same canceled
+    # order. SHAWAN spent hours in this loop.
+    _live_ask = bot.get(f'live_{exit_side}_ask', 0) or 0
+    _ask_cap = (_live_ask - 1) if 1 < _live_ask <= 99 else 99
 
     _new_price = 0
     _mode = ''
     _bbo_state = 'alone'
 
-    # Branch A: outbidder above us → match (no cap, follow into loss if needed).
+    # Branch A: outbidder above us → match (no cap on profit floor, but still
+    # respect ask cap — can't post AT or above the ask as a maker buy).
     if _market_best_bid > current_price:
-        _new_price = _market_best_bid
+        _new_price = min(_market_best_bid, _ask_cap)
         _bbo_state = 'queue'
-        _mode = f'match@bid (outbidder {_market_best_bid}c)'
+        _mode = f'match@bid (outbidder {_market_best_bid}c, ask_cap={_ask_cap}c)'
     elif _market_best_bid > 0 and _market_best_bid == current_price:
         _bbo_state = 'queue'
 
     # Branch B: alone (we are BBO) → time-decay creep +1c per WALK_INTERVAL_S.
-    # Caps at 99-avg so we don't volunteer for losses; outbidders can push past.
-    if _new_price == 0 and current_price < _max_profit_price:
+    # Caps at min(99-avg, ask-1) so we never volunteer for losses AND never
+    # post at ask (would cross + get rejected).
+    _walk_cap = min(_max_profit_price, _ask_cap)
+    if _new_price == 0 and current_price < _walk_cap:
         _last_walk = bot.get('_last_walk_at', 0) or bot.get('_exit_posted_at', now)
         if now - _last_walk >= APEX_MM_WALK_INTERVAL_S:
-            _new_price = min(current_price + 1, _max_profit_price)
-            _mode = f'creep +1c (alone, age={now - _last_walk:.0f}s, cap={_max_profit_price}c)'
+            _new_price = min(current_price + 1, _walk_cap)
+            _mode = f'creep +1c (alone, age={now - _last_walk:.0f}s, cap={_walk_cap}c [profit={_max_profit_price}, ask-1={_ask_cap}])'
 
     bot['_bbo_state'] = _bbo_state
     bot['_bbo_market_best'] = _market_best_bid

@@ -6021,6 +6021,58 @@ def _phantom_passive_fill_poll():
 threading.Thread(target=_phantom_passive_fill_poll, daemon=True,
                  name='phantom-fill-poll').start()
 
+# ─── Phantom Passive Fav Snap Poller ──────────────────────────────────────────
+# Backup for WS price-tick events that drop, leaving the fav hedge stale
+# (above or below the live bid). The existing monitor reads bot['live_{fav_side}_bid']
+# (WS cache) and only falls back to REST if the cache is 0 — stale-but-nonzero
+# values are invisible to it.
+#
+# This poller does a fresh REST orderbook read every 1s per unique hedge ticker
+# for any phantom in fav_hedge_posted, then calls the existing snap-up + snap-drop
+# functions with the fresh data. Same per-bot lock, same priority burst, same
+# amend path — just REST-fed bids instead of WS-cached bids.
+
+def _phantom_passive_fav_snap_poll():
+    while True:
+        try:
+            time.sleep(1.0)
+            _check_tickers = set()
+            for bot_id, bot in list(active_bots.items()):
+                if bot.get('bot_category') != 'anchor_dog':
+                    continue
+                if bot.get('status') != 'fav_hedge_posted':
+                    continue
+                _ht = bot.get('hedge_ticker') or bot.get('ticker')
+                if _ht:
+                    _check_tickers.add(_ht)
+
+            for tkr in _check_tickers:
+                try:
+                    api_read_limiter.wait()
+                    ob = kalshi_client.get_market_orderbook(tkr)
+                    yes_bid = _best_bid(ob, 'yes') or 0
+                    no_bid = _best_bid(ob, 'no') or 0
+                    yes_ask = _best_ask(ob, 'yes') or 0
+                    no_ask = _best_ask(ob, 'no') or 0
+                except Exception:
+                    continue
+                if yes_bid <= 0 and no_bid <= 0:
+                    continue
+
+                try:
+                    _ws_phantom_instant_snap_up(tkr, yes_bid, no_bid, yes_ask, no_ask)
+                except Exception as e:
+                    print(f'⚠ PASSIVE SNAP-UP ERROR ({tkr}): {e}')
+                try:
+                    _ws_phantom_instant_drop(tkr, yes_bid, no_bid, yes_ask, no_ask)
+                except Exception as e:
+                    print(f'⚠ PASSIVE SNAP-DROP ERROR ({tkr}): {e}')
+        except Exception as e:
+            print(f'⚠ PASSIVE FAV SNAP POLL ERROR: {e}')
+
+threading.Thread(target=_phantom_passive_fav_snap_poll, daemon=True,
+                 name='phantom-fav-snap-poll').start()
+
 # ─── Phantom Price Tape: log BBO + bot state for active phantoms (offline analytics) ──
 # Captures the price path during fav_hedge_posted state so we can backtest things like
 # "what if we capped at combined 100c?" or "do dumps usually recover?". Async writer

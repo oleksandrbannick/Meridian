@@ -7035,21 +7035,16 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         } else if (status === 'mm_exiting' && !_activeSell) {
             walkBadge = `<span style="background:#ff444422;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">EXIT PENDING</span>`;
         } else if (effExitPrice > 0) {
-            // Pure maker model: no SL, no wall park, no taker forced exits.
-            // Badges describe MAKER STATE relative to combined zones:
-            //   combined ≥ 95c → MATCH BID (we're tracking the live bid exactly)
-            //   combined < 95c → BBO+1 (one above next real bidder for queue priority)
-            // Color reflects loss/profit zone, not behavior.
-            const _bbo = bot._bbo_state || '';
-            const _isQueue = _bbo === 'queue';
+            // Simple profit-zone badge. Internal state (alone/queue/bbo+1) lives
+            // in bot._bbo_state for debugging — not surfaced in user-facing label.
             if (combined > 100) {
-                walkBadge = `<span style="background:#ff444422;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">${_isQueue ? 'MATCH BID' : 'ALONE'} ${combined - 100}c LOSS</span>`;
+                walkBadge = `<span style="background:#ff444422;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">−${combined - 100}¢ LOSS</span>`;
             } else if (combined === 100) {
                 walkBadge = `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">BREAKEVEN</span>`;
             } else if (combined >= 95) {
-                walkBadge = `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">${_isQueue ? 'MATCH BID' : 'ALONE'} +${100 - combined}c</span>`;
+                walkBadge = `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">+${100 - combined}¢ TIGHT</span>`;
             } else {
-                walkBadge = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">${_isQueue ? 'BBO QUEUE' : 'BBO+1'} +${100 - combined}c</span>`;
+                walkBadge = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">+${100 - combined}¢</span>`;
             }
         } else if (hasInv) {
             // Inventory held but no exit price yet — bot is mid-post
@@ -14499,6 +14494,13 @@ function filterApexMMLog() {
             badgeCol = '#00d4ff';
             badgeBg = '#00d4ff22';
             icon = '🏁';
+        } else if (t.result === 'mm_pnl_sync') {
+            // Synthetic adjustment row created when bot's RT log drifts from
+            // Kalshi's actual realized P&L. Not a real trade — accounting fix.
+            badge = pnl >= 0 ? 'KALSHI ADJ +' : 'KALSHI ADJ −';
+            badgeCol = '#888a8e';
+            badgeBg = '#888a8e22';
+            icon = '🔧';
         } else {
             badge = t.result || 'UNKNOWN';
             badgeCol = '#8892a6';

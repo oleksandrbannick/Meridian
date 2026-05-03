@@ -424,27 +424,43 @@ async function navigateToMarket(eventTickerPrefix) {
 }
 
 // Navigate from Markets tab to Bots tab and scroll/highlight the bot card
-function navigateToBot(ticker, botType) {
+async function navigateToBot(ticker, botType) {
     switchTab('bots');
     // Switch to the correct sub-tab based on bot type
     const subTab = botType === 'phantom' ? 'dog' : botType === 'meridian' ? 'middle' : botType === 'scout' ? 'bets' : 'arb';
     if (typeof setBotsTab === 'function') setBotsTab(subTab);
-    // After tab switch + render, find and highlight the bot card by ticker
-    setTimeout(() => {
-        const gameKey = ticker.split('-').length >= 2 ? ticker.split('-')[1] : ticker;
+
+    // switchTab('bots') kicks off loadBots() but doesn't await it. The old
+    // 300ms setTimeout often fired before the cards rendered, so the lookup
+    // hit an empty list. Force a fresh load + wait for paint, mirroring
+    // navigateToMarket's flow.
+    try { if (typeof loadBots === 'function') await loadBots(); } catch (_) {}
+
+    const gameKey = ticker.split('-').length >= 2 ? ticker.split('-')[1] : ticker;
+    const findCard = () => {
+        // Prefer stable data attributes when present
+        const byTicker = document.querySelector(`[data-event-ticker="${ticker}"]`);
+        if (byTicker) return byTicker;
+        // Fallback: substring match on text/html across all bot lists
         const allCards = document.querySelectorAll('#bots-list > div, #dog-bots-list > div, #middle-bots-list > div, #bets-bots-list > div');
         for (const card of allCards) {
             const text = card.textContent || '';
             const html = card.innerHTML || '';
-            if (html.includes(gameKey) || text.includes(gameKey)) {
-                card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                card.style.transition = 'box-shadow 0.3s';
-                card.style.boxShadow = `0 0 20px ${BOT_COLORS[botType] || '#00d4ff'}66, inset 0 0 8px ${BOT_COLORS[botType] || '#00d4ff'}22`;
-                setTimeout(() => { card.style.boxShadow = ''; }, 2500);
-                break;
-            }
+            if (html.includes(ticker) || html.includes(gameKey) || text.includes(gameKey)) return card;
         }
-    }, 300);
+        return null;
+    };
+
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            const card = findCard();
+            if (!card) return;
+            card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            card.style.transition = 'box-shadow 0.3s';
+            card.style.boxShadow = `0 0 20px ${BOT_COLORS[botType] || '#00d4ff'}66, inset 0 0 8px ${BOT_COLORS[botType] || '#00d4ff'}22`;
+            setTimeout(() => { card.style.boxShadow = ''; }, 2500);
+        });
+    });
 }
 
 // ─── LIVE SCORES ──────────────────────────────────────────────────────────────

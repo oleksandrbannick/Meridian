@@ -6931,7 +6931,10 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const avgNoCost = bot.avg_no_cost || 0;
     const realizedPnl = bot.realized_pnl_cents || 0;
     const unrealizedPnl = bot._unrealized_pnl || 0;
-    const totalPnl = realizedPnl + unrealizedPnl;
+    // Top-of-card P&L shows REALIZED only (Kalshi-confirmed actual money made).
+    // Unrealized is shown separately in the run history panel — it can vanish
+    // if the exit doesn't fill, so it should never be in the headline number.
+    const totalPnl = realizedPnl;
     const roundTrips = bot.round_trips_completed || 0;
     const midpoint = bot.midpoint || 0;
     const pullCount = bot._pull_count || 0;

@@ -10718,14 +10718,25 @@ def _apex_mm_verify_exit_health(bot_id, bot, exit_side, held_side):
         remaining = order.get('remaining_count_fp', order.get('remaining_count', None))
         try: remaining = float(remaining) if remaining is not None else None
         except Exception: remaining = None
-        # 'executed' means the order FILLED — that's the success state, not a
-        # ghost. WS fill handler will process the fill and amend_exit if more
-        # inventory remains. Recreating here causes duplicate exits.
+        # Compute current held inventory — required to distinguish "executed +
+        # bot now flat (clean fill, no action)" from "executed + bot still has
+        # inventory (stale OID from PRIOR cycle's exit; new inventory is naked)".
+        _net_yes_now = bot.get('net_yes', 0) or 0
+        _net_no_now = bot.get('net_no', 0) or 0
+        _net_held_now = abs(_net_yes_now - _net_no_now)
+
+        # canceled/expired = always dead, recreate.
         is_dead = status in ('canceled', 'cancelled', 'expired')
-        # Empty + canceled/expired = real ghost. Empty + executed = filled (skip).
-        is_empty_dead = remaining is not None and remaining <= 0 and status != 'executed' and status != 'resting' and status != 'partially_filled'
-        if is_dead or is_empty_dead:
-            print(f'🚨 APEX MM EXIT GHOST DETECTED: {bot_id} oid={oid[:12]} status={status} remaining={remaining} — RECREATING')
+        # executed = order fully filled. Healthy if bot is flat afterwards.
+        # If bot still holds inventory, this OID covered a PRIOR cycle and the
+        # current inventory has no live exit. Treat as stale → recreate.
+        is_stale_executed = status == 'executed' and _net_held_now > 0
+        # remaining=0 with non-fill, non-resting status (defensive — catches
+        # weird Kalshi states where order is consumed but status isn't 'executed').
+        is_empty_dead = (remaining is not None and remaining <= 0
+                         and status not in ('resting', 'partially_filled', 'executed'))
+        if is_dead or is_empty_dead or is_stale_executed:
+            print(f'🚨 APEX MM EXIT GHOST DETECTED: {bot_id} oid={oid[:12]} status={status} remaining={remaining} held_now={_net_held_now} — RECREATING')
             bot_log('APEX_MM_EXIT_GHOST', bot_id, {
                 'oid': oid[:12], 'status': status, 'remaining': remaining,
                 'exit_side': exit_side, 'held_side': held_side,

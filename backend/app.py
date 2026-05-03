@@ -10678,9 +10678,13 @@ def _apex_mm_verify_exit_health(bot_id, bot, exit_side, held_side):
         remaining = order.get('remaining_count_fp', order.get('remaining_count', None))
         try: remaining = float(remaining) if remaining is not None else None
         except Exception: remaining = None
-        is_dead = status in ('canceled', 'cancelled', 'executed', 'expired')
-        is_empty = remaining is not None and remaining <= 0
-        if is_dead or is_empty:
+        # 'executed' means the order FILLED — that's the success state, not a
+        # ghost. WS fill handler will process the fill and amend_exit if more
+        # inventory remains. Recreating here causes duplicate exits.
+        is_dead = status in ('canceled', 'cancelled', 'expired')
+        # Empty + canceled/expired = real ghost. Empty + executed = filled (skip).
+        is_empty_dead = remaining is not None and remaining <= 0 and status != 'executed' and status != 'resting' and status != 'partially_filled'
+        if is_dead or is_empty_dead:
             print(f'🚨 APEX MM EXIT GHOST DETECTED: {bot_id} oid={oid[:12]} status={status} remaining={remaining} — RECREATING')
             bot_log('APEX_MM_EXIT_GHOST', bot_id, {
                 'oid': oid[:12], 'status': status, 'remaining': remaining,

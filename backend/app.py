@@ -5948,6 +5948,79 @@ def _snap_worker_loop():
 for _i in range(_SNAP_WORKER_COUNT):
     threading.Thread(target=_snap_worker_loop, daemon=True, name=f'snap-worker-{_i}').start()
 
+# ─── Phantom Passive Fill Poller ──────────────────────────────────────────────
+# Backup for WS fill events that drop (reconnect, late delivery, packet loss).
+# Existing cancel-race catchers only fire when WE touch the order — silent fills
+# between amends are invisible to them. This poller is the only path that
+# detects fills without first poking the order.
+#
+# Cadence: 1s per bot. Detection ≈ 1s + 30-60ms REST read. Hedge POST itself
+# fires through the same _hedge_worker_queue → priority burst → create_order_maker
+# as the WS hot path, so once detected, hedge speed is identical.
+
+def _phantom_passive_fill_poll():
+    while True:
+        try:
+            time.sleep(1.0)
+            for bot_id, bot in list(active_bots.items()):
+                if bot.get('bot_category') != 'anchor_dog':
+                    continue
+                if bot.get('status') != 'dog_anchor_posted':
+                    continue
+                if bot.get('_hedge_fired'):
+                    continue
+                dog_oid = bot.get('dog_order_id')
+                dog_side = bot.get('dog_side')
+                if not dog_oid or not dog_side:
+                    continue
+
+                try:
+                    api_read_limiter.wait()
+                    _ord_resp = kalshi_client.get_order(dog_oid)
+                    _od = _ord_resp.get('order', _ord_resp) if isinstance(_ord_resp, dict) else {}
+                    _actual = _parse_fill_count(_od)
+                except Exception:
+                    continue
+
+                _local = bot.get(f'{dog_side}_fill_qty', 0) or 0
+                if _actual <= _local:
+                    continue
+
+                # Silent fill detected — claim ownership under ws_fill_lock so the
+                # WS handler can't double-fire if its event arrives mid-detection.
+                with ws_fill_lock:
+                    if bot.get('_hedge_fired'):
+                        continue
+                    if bot.get('status') != 'dog_anchor_posted':
+                        continue
+                    bot['_hedge_fired'] = True
+
+                bot['dog_fill_qty'] = _actual
+                bot[f'{dog_side}_fill_qty'] = _actual
+                bot['status'] = 'dog_filled'
+                bot['dog_filled_at'] = time.time()
+                _qty = bot.get('quantity', 1)
+                if _actual < _qty:
+                    bot['_original_qty'] = _qty
+                    bot['_partial_hedge_qty'] = _actual
+                _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
+
+                print(f'🚨 PASSIVE FILL DETECTED: {bot_id} oid {dog_oid[:12]} '
+                      f'actual={_actual} local={_local} — hedge queued')
+                bot_log('PHANTOM_PASSIVE_FILL_DETECT', bot_id, {
+                    'oid': dog_oid[:12], 'actual': _actual, 'local': _local,
+                }, level='WARN')
+                _audit('PHANTOM_PASSIVE_FILL_DETECT', bot_id, {
+                    'ticker': bot.get('ticker', ''), 'oid': dog_oid,
+                    'actual': _actual, 'local': _local,
+                })
+                save_state()
+        except Exception as e:
+            print(f'⚠ PASSIVE FILL POLL ERROR: {e}')
+
+threading.Thread(target=_phantom_passive_fill_poll, daemon=True,
+                 name='phantom-fill-poll').start()
+
 # ─── Phantom Price Tape: log BBO + bot state for active phantoms (offline analytics) ──
 # Captures the price path during fav_hedge_posted state so we can backtest things like
 # "what if we capped at combined 100c?" or "do dumps usually recover?". Async writer

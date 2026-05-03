@@ -9608,8 +9608,20 @@ APEX_MAX_PULL_CYCLES = 8        # Phantom: stop re-posting after 8 pulls
 APEX_MM_MAX_PULL_CYCLES = 999   # MM: effectively unlimited — MM is patient, keeps reposting
 APEX_MM_OBI_DEPTH = 5           # MM uses top-5 levels for OBI (wider view than phantom's top-3)
 
-# ── Pure maker exit: no SL, no soak, no wall, no phase-aware walk cadence ──
-APEX_MM_WALK_INTERVAL_S = 8     # Seconds between 1c voluntary creep steps when alone
+# ── Pure maker exit: phase-aware walk cadence (slower in pregame, faster live) ──
+# Pregame: wide spread + low flow + hours of patience available — walk slowly
+# so we don't burn profit unnecessarily. Live: bid moves rapidly, capture
+# fills quickly before market moves. End/OT: hyper-fast since the market is
+# about to resolve.
+APEX_MM_WALK_INTERVAL_S = 8     # Default fallback (used when no game context)
+APEX_MM_WALK_INTERVAL_BY_PHASE = {
+    'default':  30,             # Pregame / no live data: patient (30s)
+    'early':    10,             # Early game: moderate
+    'mid':      8,              # Mid game: standard
+    'late':     5,              # Final period, >2min: quicker
+    'end':      3,              # Final 2 min: fast capture
+    'ot':       2,              # Overtime: hyper-fast
+}
 
 # ── Sport-aware book thresholds ──
 # Native book depth varies wildly by sport: tennis runs 10-30 contracts at top
@@ -9672,6 +9684,47 @@ def _apex_mm_recover_min(ticker):
 def _apex_mm_width_floor(ticker):
     sport = _detect_sport(ticker)
     return APEX_MM_WIDTH_FLOOR_BY_SPORT.get(sport, APEX_MM_WIDTH_FLOOR_BY_SPORT['default'])
+
+
+def _apex_mm_game_phase(ticker):
+    """Return game phase for walk-cadence selection: 'early', 'mid', 'late',
+    'end', 'ot', or 'default' (pregame / no live data).
+    Same logic as the previously-removed phase helper — restored to power
+    APEX_MM_WALK_INTERVAL_BY_PHASE."""
+    series = ticker.split('-')[0].upper() if ticker else ''
+    rule = None
+    rule_key = ''
+    for prefix, r in _LATE_GAME_RULES.items():
+        if series.startswith(prefix) and len(prefix) > len(rule_key):
+            rule = r
+            rule_key = prefix
+    if not rule:
+        return 'default'
+    gc = _get_game_context(ticker)
+    if not gc:
+        return 'default'
+    status = gc.get('status', '')
+    if status != 'in':
+        return 'default'  # pregame / scheduled / postponed all count as 'default' (slow walk)
+    period = gc.get('period', 0)
+    secs = _parse_clock_seconds(gc.get('clock', ''))
+    if period > rule['final']:
+        return 'ot'
+    if period < rule['block_period']:
+        if period <= rule['final'] // 2:
+            return 'early'
+        return 'mid'
+    if secs is not None:
+        if secs <= 120:
+            return 'end'
+        return 'late'
+    return 'late'
+
+
+def _apex_mm_walk_interval(ticker):
+    """Return walk cadence in seconds for the bot's current game phase."""
+    phase = _apex_mm_game_phase(ticker)
+    return APEX_MM_WALK_INTERVAL_BY_PHASE.get(phase, APEX_MM_WALK_INTERVAL_S)
 
 
 def _apex_obi_snapshot(ticker):
@@ -10921,9 +10974,27 @@ def _apex_mm_verify_exit_health(bot_id, bot, exit_side, held_side):
     """REST-verify the exit OID is still live on Kalshi. If canceled/missing,
     null and recreate immediately. Catches ghost OIDs that walk_up's amend
     path won't detect (e.g. exit posted at price > live bid, never amended).
-    Held inventory must NEVER be naked."""
+    Held inventory must NEVER be naked.
+
+    Two race-window guards prevent the ghost-recreate spam loop:
+    1. FILL GRACE: skip verify if a fill happened within last 4s — WS handler
+       is processing it; bot dict will catch up on its own.
+    2. RECREATE COOLDOWN: skip if we already recreated in the last 6s — gives
+       the new order time to register on Kalshi before we re-verify."""
     oid = bot.get(f'_{exit_side}_exit_oid')
     if not oid:
+        return
+    _now_v = time.time()
+    # FILL GRACE — recent fill means WS is in flight. Bot dict net_held may not
+    # yet reflect the fill, so 'executed + held > 0' is a false positive.
+    _last_fill = max(bot.get(f'_last_yes_fill_at', 0), bot.get(f'_last_no_fill_at', 0))
+    if _last_fill > 0 and _now_v - _last_fill < 4:
+        return  # WS handler will process the fill; defer verify to next cycle
+    # RECREATE COOLDOWN — we just created a new exit; let it register before
+    # re-verifying. Otherwise transient executed/canceled states from the old
+    # OID can cause back-to-back recreates.
+    _last_recreate = bot.get('_exit_ghost_recreate_at', 0)
+    if _last_recreate > 0 and _now_v - _last_recreate < 6:
         return
     try:
         if not api_read_limiter.try_wait():
@@ -10958,11 +11029,13 @@ def _apex_mm_verify_exit_health(bot_id, bot, exit_side, held_side):
                 'exit_side': exit_side, 'held_side': held_side,
             }, level='WARN')
             bot[f'_{exit_side}_exit_oid'] = None
+            bot['_exit_ghost_recreate_at'] = _now_v  # cooldown stamp
             _apex_mm_amend_exit(bot_id, bot, held_side)
     except Exception as e:
         if '404' in str(e) or 'not found' in str(e).lower():
             print(f'🚨 APEX MM EXIT GHOST 404: {bot_id} oid={oid[:12]} — RECREATING')
             bot[f'_{exit_side}_exit_oid'] = None
+            bot['_exit_ghost_recreate_at'] = _now_v  # cooldown stamp
             try:
                 _apex_mm_amend_exit(bot_id, bot, held_side)
             except Exception:
@@ -10975,8 +11048,9 @@ def _apex_mm_walk_up(bot_id, bot):
       A. Outbidder appears above us → match UP to their bid. No cap on profit
          floor — we follow into loss if needed. (Matching as maker is always
          cheaper than crossing as taker.)
-      B. Alone in profit zone → time-decay creep +1c per cadence, shrinking
-         profit until fill. Voluntary creep caps at min(99-avg, ask-1).
+      B. Alone in profit zone → time-decay creep +1c per phase-aware cadence
+         (pregame 30s, live 8s, end-of-game 3s, OT 2s). Voluntary creep caps
+         at min(99-avg, ask-1).
       C. Stranded above real top (outbidder vanished, we're alone way above
          next bidder) → drop to follow real BBO:
             • combined ≥ 95c: match bid exactly (danger zone)
@@ -11028,23 +11102,26 @@ def _apex_mm_walk_up(bot_id, bot):
     elif _market_best_bid > 0 and _market_best_bid == current_price:
         _bbo_state = 'queue'
 
-    # Branch B: alone (we are BBO) → time-decay creep +1c per WALK_INTERVAL_S.
+    # Branch B: alone (we are BBO) → time-decay creep +1c per phase-aware interval.
     # Caps at min(99-avg, ask-1) so we never volunteer for losses AND never
-    # post at ask (would cross + get rejected).
+    # post at ask (would cross + get rejected). Pregame walks slowly (30s),
+    # live walks faster, end/OT hyper-fast — see APEX_MM_WALK_INTERVAL_BY_PHASE.
     _walk_cap = min(_max_profit_price, _ask_cap)
     if _new_price == 0 and current_price < _walk_cap:
         _last_walk = bot.get('_last_walk_at', 0) or bot.get('_exit_posted_at', now)
-        if now - _last_walk >= APEX_MM_WALK_INTERVAL_S:
+        _walk_iv = _apex_mm_walk_interval(ticker)
+        if now - _last_walk >= _walk_iv:
             _new_price = min(current_price + 1, _walk_cap)
-            _mode = f'creep +1c (alone, age={now - _last_walk:.0f}s, cap={_walk_cap}c [profit={_max_profit_price}, ask-1={_ask_cap}])'
+            _mode = f'creep +1c (alone, age={now - _last_walk:.0f}s, iv={_walk_iv}s, cap={_walk_cap}c)'
 
-    # Branch C: stranded above real top — outbidder vanished and left us
-    # alone way above the actual market. Drop to follow the real BBO so we
-    # don't sit in stale loss territory waiting for sellers that won't come.
+    # Branch C: drop to track the real BBO when above target.
     # Combined-based rule (per user spec):
-    #   - combined ≥ 95c: match bid exactly (danger zone — track, don't fight for +1)
-    #   - combined < 95c: bid+1 (safe zone — keep BBO with queue priority)
-    if _new_price == 0 and _market_best_bid > 0 and current_price > _market_best_bid + 1:
+    #   - combined ≥ 95c at target → match bid exactly (danger zone)
+    #   - combined < 95c at target → bid+1 (safe zone, queue priority)
+    # Compute target FIRST, then drop if current > target. (Previous trigger
+    # was current > bid+1 which missed the case where current=bid+1 but the
+    # rule says match exactly — bot would sit at bid+1 in danger zone forever.)
+    if _new_price == 0 and _market_best_bid > 0:
         _bid_match_combined = avg_held + _market_best_bid
         if _bid_match_combined >= 95:
             _candidate_drop = _market_best_bid          # match exactly in danger zone

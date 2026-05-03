@@ -10011,9 +10011,82 @@ def _apex_mm_skewed_midpoint(bot, raw_midpoint):
     return max(1, min(99, raw_midpoint + int(round(skew_total))))
 
 
+def _apex_mm_actual_cost_from_fills(ticker, side, missing_qty):
+    """Query Kalshi /fills for the most recent N fills on `side` of `ticker` and
+    compute the TRUE average cost of those fills. Used during reconcile when
+    Kalshi shows more inventory than bot dict — instead of inferring cost from
+    posted ladder rungs (which can be stale or off by cents), we read the
+    actual fill prices from Kalshi.
+
+    Returns avg cost in cents (float) on success, None on any failure (caller
+    should fall back to _infer_orphan_cost).
+    """
+    if missing_qty <= 0:
+        return None
+    if not api_read_limiter.try_wait():
+        return None  # rate-limited; let caller fall back
+    try:
+        # Pull recent fills for this ticker (limit 100 covers nearly any
+        # plausible drift scenario; recent ones come first).
+        _resp = kalshi_client.get_fills(ticker=ticker, limit=100)
+        _fills = _resp.get('fills', _resp.get('trades', [])) if isinstance(_resp, dict) else []
+        if not _fills:
+            return None
+        # Filter to BUY fills on this side (we only buy via maker entry orders).
+        # Kalshi fill schema: 'side' = 'yes'/'no', 'action' = 'buy'/'sell',
+        # price fields use cents fp suffix or *_dollars; handle both.
+        _matching = []
+        for _f in _fills:
+            if _f.get('ticker') != ticker:
+                continue
+            if (_f.get('side') or '').lower() != side:
+                continue
+            if (_f.get('action') or '').lower() != 'buy':
+                continue
+            # Price extraction — try cents first, then dollars × 100.
+            _p_raw = _f.get(f'{side}_price') or _f.get('price')
+            if _p_raw is None:
+                _p_d = _f.get(f'{side}_price_dollars') or _f.get('price_dollars')
+                if _p_d is not None:
+                    try: _p_raw = float(_p_d) * 100
+                    except Exception: continue
+                else:
+                    continue
+            try: _price = float(_p_raw)
+            except Exception: continue
+            # Quantity — use count_fp / count.
+            _q_raw = _f.get('count_fp') or _f.get('count') or _f.get('quantity')
+            try: _qty = float(_q_raw) if _q_raw is not None else 0
+            except Exception: continue
+            if _price <= 0 or _qty <= 0:
+                continue
+            _matching.append((_f.get('created_time', ''), _price, _qty))
+        if not _matching:
+            return None
+        # Sort newest first, sum the most recent `missing_qty` worth of fills.
+        _matching.sort(key=lambda x: x[0], reverse=True)
+        _remaining = float(missing_qty)
+        _total_cost = 0.0
+        _consumed = 0.0
+        for _ts, _price, _qty in _matching:
+            if _remaining <= 0:
+                break
+            _take = min(_qty, _remaining)
+            _total_cost += _price * _take
+            _consumed += _take
+            _remaining -= _take
+        if _consumed <= 0:
+            return None
+        return _total_cost / _consumed
+    except Exception as _e:
+        # Silent fallback — don't spam logs on transient API issues.
+        return None
+
+
 def _apex_mm_reconcile_inventory(bot_id, bot):
     """REST-based inventory reconcile. Compare bot's net_yes/net_no with Kalshi truth.
-    UPWARD mismatch (Kalshi has more): infer cost from posted ladder, add to inventory, post exit.
+    UPWARD mismatch (Kalshi has more): query Kalshi /fills for actual cost basis
+    (falls back to ladder-rung inference on API failure), add to inventory, post exit.
     DOWNWARD mismatch (bot has phantom): clamp to Kalshi.
     Returns True if reconcile ran successfully (used or skipped for valid reason)."""
     ticker = bot.get('ticker', '')
@@ -10068,9 +10141,15 @@ def _apex_mm_reconcile_inventory(bot_id, bot):
 
     if _ky > _bot_yes:
         _m = _ky - _bot_yes
-        _fl = [f for f in bot.get('_fill_log', []) if f.get('side') == 'yes' and not f.get('is_exit')]
-        _fb = _fl[-1]['price'] if _fl else bot.get('midpoint', 50)
-        _ec = _infer_orphan_cost(bot.get('yes_orders', {}), _m, _fb)
+        # Try Kalshi /fills first for ACTUAL cost basis (most accurate).
+        _ec = _apex_mm_actual_cost_from_fills(ticker, 'yes', _m)
+        _cost_source = 'kalshi_fills'
+        if _ec is None:
+            # Fallback: infer from posted ladder rungs + last fill log price.
+            _fl = [f for f in bot.get('_fill_log', []) if f.get('side') == 'yes' and not f.get('is_exit')]
+            _fb = _fl[-1]['price'] if _fl else bot.get('midpoint', 50)
+            _ec = _infer_orphan_cost(bot.get('yes_orders', {}), _m, _fb)
+            _cost_source = 'ladder_inference'
         # Rebase total from prev_avg × prev_qty (bounded 0-99c × qty) not from
         # bot['total_yes_cost'] which can be stale/corrupted from prior cycles.
         # Prevents the "avg balloons past 99c" bug seen on ZECGER (avg=372c).
@@ -10080,17 +10159,23 @@ def _apex_mm_reconcile_inventory(bot_id, bot):
         bot['net_yes'] = _ky
         bot['total_yes_cost'] = _new_total
         bot['avg_yes_cost'] = round(_new_total / _ky) if _ky > 0 else 0
+        print(f'🔧 RECONCILE COST YES: {bot_id} +{_m}@{_ec:.1f}c (source={_cost_source}, new_avg={bot["avg_yes_cost"]}c)')
     if _kn > _bot_no:
         _m = _kn - _bot_no
-        _fl = [f for f in bot.get('_fill_log', []) if f.get('side') == 'no' and not f.get('is_exit')]
-        _fb = _fl[-1]['price'] if _fl else (100 - bot.get('midpoint', 50))
-        _ec = _infer_orphan_cost(bot.get('no_orders', {}), _m, _fb)
+        _ec = _apex_mm_actual_cost_from_fills(ticker, 'no', _m)
+        _cost_source = 'kalshi_fills'
+        if _ec is None:
+            _fl = [f for f in bot.get('_fill_log', []) if f.get('side') == 'no' and not f.get('is_exit')]
+            _fb = _fl[-1]['price'] if _fl else (100 - bot.get('midpoint', 50))
+            _ec = _infer_orphan_cost(bot.get('no_orders', {}), _m, _fb)
+            _cost_source = 'ladder_inference'
         _prev_avg = bot.get('avg_no_cost', 0) or 0
         _prev_avg = min(99, max(0, _prev_avg))
         _new_total = (_prev_avg * _bot_no) + (_ec * _m)
         bot['net_no'] = _kn
         bot['total_no_cost'] = _new_total
         bot['avg_no_cost'] = round(_new_total / _kn) if _kn > 0 else 0
+        print(f'🔧 RECONCILE COST NO: {bot_id} +{_m}@{_ec:.1f}c (source={_cost_source}, new_avg={bot["avg_no_cost"]}c)')
     if _ky < _bot_yes:
         print(f'🛡️ RECONCILE CLAMP DOWN: {bot_id} YES {_bot_yes}→{_ky} (Kalshi authoritative)')
         bot['net_yes'] = _ky

@@ -16918,13 +16918,55 @@ def _handle_phantom(bot_id, bot, actions):
         except Exception:
             new_dog_price = bot.get('dog_price', 10)  # fallback to old price
 
-        # Defensive: cancel old dog order before placing new one
-        # DO NOT hedge cancel-race fills here — this order is from the COMPLETED run,
-        # its fills are already hedged. Hedging again creates naked orphan positions.
-        # The retreat path already handles its own cancel-race fills via _retreat_cancel
-        # (lines 3790-3824) which fires hedge if order filled during retreat cancel.
+        # Pre-cancel orphan sweep: REST-read the old order BEFORE cancelling.
+        # If actual fills > local fills, a WS fill event was missed and the
+        # leftover qty is unhedged. Fire the hedge via the same hot-path queue
+        # (priority burst, WS bid) before reanchoring — every ms the price decays.
         old_dog_oid = bot.get('dog_order_id')
         if old_dog_oid:
+            _orphan_fills = 0
+            _actual_fills = 0
+            _local_fills = bot.get(f'{dog_side}_fill_qty', 0) or 0
+            try:
+                api_read_limiter.wait(priority=True)
+                _ord_resp = kalshi_client.get_order(old_dog_oid)
+                _od = _ord_resp.get('order', _ord_resp) if isinstance(_ord_resp, dict) else {}
+                _actual_fills = _parse_fill_count(_od)
+                if _actual_fills > _local_fills:
+                    _orphan_fills = _actual_fills - _local_fills
+            except Exception:
+                pass
+
+            if _orphan_fills > 0 and not bot.get('_hedge_fired'):
+                bot['dog_order_id'] = None
+                if dog_side == 'yes':
+                    bot['yes_order_id'] = None
+                else:
+                    bot['no_order_id'] = None
+                bot['dog_fill_qty'] = _actual_fills
+                bot[f'{dog_side}_fill_qty'] = _actual_fills
+                bot['_hedge_fired'] = True
+                bot['dog_filled_at'] = time.time()
+                bot['status'] = 'dog_filled'
+                _qty_total = bot.get('quantity', 1)
+                if _orphan_fills < _qty_total:
+                    bot['_original_qty'] = _qty_total
+                    bot['_partial_hedge_qty'] = _orphan_fills
+                _hedge_worker_queue.put((_execute_phantom_hedge, (bot_id,)))
+                print(f'🚨 REANCHOR ORPHAN HEDGE: {bot_id} old oid {old_dog_oid[:12]} '
+                      f'actual={_actual_fills} local={_local_fills} orphan={_orphan_fills} — hedging now')
+                bot_log('PHANTOM_REANCHOR_ORPHAN_HEDGE', bot_id, {
+                    'old_oid': old_dog_oid[:12], 'actual_fills': _actual_fills,
+                    'local_fills': _local_fills, 'orphan_qty': _orphan_fills,
+                }, level='WARN')
+                _audit('PHANTOM_REANCHOR_ORPHAN_HEDGE', bot_id, {
+                    'ticker': ticker, 'old_oid': old_dog_oid,
+                    'actual_fills': _actual_fills, 'local_fills': _local_fills,
+                    'orphan_qty': _orphan_fills,
+                })
+                save_state()
+                return
+
             _rc = _safe_cancel(old_dog_oid, f'phantom repeat cleanup {bot_id}')
             if _rc == False:
                 print(f'⚠ REPEAT REPOST ABORTED: {bot_id} cancel of old order failed — not posting duplicate')

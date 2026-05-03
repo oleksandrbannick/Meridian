@@ -5804,10 +5804,19 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
             try:
                 price_kwarg = {f'{exit_side}_price': snap_price}
                 api_rate_limiter.wait()
-                kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
+                _amend_resp = kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
                                           count=net_held, action='buy', **price_kwarg)
+                # Kalshi may reassign order_id on amend (amend = cancel+repost internally).
+                # MUST capture the new ID, otherwise the dict tracks a canceled order.
+                _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
+                _new_oid = _amend_ord.get('order_id', '') if isinstance(_amend_ord, dict) else ''
+                if _new_oid and _new_oid != exit_oid:
+                    bot[f'_{exit_side}_exit_oid'] = _new_oid
+                    bot.setdefault('_all_placed_order_ids', []).append(_new_oid)
                 bot['_exit_price'] = snap_price
                 bot['_last_walk_at'] = time.time()
+                # Force a ghost re-verify within ~8s so any silent reassign gets caught fast.
+                bot['_exit_health_at'] = time.time() - 22  # next monitor tick triggers verify
                 combined = held_avg + snap_price
                 print(f'📊 APEX MM WS SNAP-UP: {bot_id} {exit_side.upper()} {current_price}→{snap_price}c (combined={combined}c, bid={exit_bid})')
                 bot_log('APEX_MM_WS_SNAP_UP', bot_id, {
@@ -10703,13 +10712,18 @@ def _apex_mm_walk_up(bot_id, bot):
         _amend_resp = kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
                                   count=net_held, action='buy', **price_kwarg)
         _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
-        _new_oid = _amend_ord.get('order_id', '')
+        _new_oid = _amend_ord.get('order_id', '') if isinstance(_amend_ord, dict) else ''
         if _new_oid and _new_oid != exit_oid:
             bot[f'_{exit_side}_exit_oid'] = _new_oid
+            bot.setdefault('_all_placed_order_ids', []).append(_new_oid)
         old_price = current_price
         bot['_exit_price'] = _new_price
         bot['_exit_walk_count'] = bot.get('_exit_walk_count', 0) + (_new_price - old_price)
         bot['_last_walk_at'] = now
+        # Force a ghost re-verify within ~8s. If the amend silently dropped the
+        # order (Kalshi reassigned ID + we missed it, or partial reject), the
+        # next monitor tick will catch and recreate. Held inventory cannot wait.
+        bot['_exit_health_at'] = now - 22
         _combined = avg_held + _new_price
         _profit = 100 - _combined
         _icon = '💚' if _combined < 100 else '🧱' if _combined == 100 else '⚠'
@@ -17538,7 +17552,10 @@ def _handle_apex(bot_id, bot, actions):
             threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _xg_held), daemon=True).start()
         else:
             _now_xg = time.time()
-            if _now_xg - bot.get('_exit_health_at', 0) >= 30:
+            # 8s cadence — must be ≤ walk interval so we catch silent amend drops
+            # within a single walk cycle. walk_up sets _exit_health_at = now-22
+            # post-amend to force this check on the very next monitor tick.
+            if _now_xg - (bot.get('_exit_health_at') or 0) >= 8:
                 bot['_exit_health_at'] = _now_xg
                 threading.Thread(target=_apex_mm_verify_exit_health,
                                  args=(bot_id, bot, _xg_exit_side, _xg_held),

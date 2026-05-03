@@ -6198,16 +6198,33 @@ function selectMMWidthAuto() {
     updateMMPreview();
 }
 
+// Compact mode = 2 rungs × 2x qty. Off by default.
+let _mmCompactMode = false;
+
+function toggleMMCompactMode() {
+    _mmCompactMode = !_mmCompactMode;
+    const btn = document.getElementById('mm-compact-toggle');
+    const display = document.getElementById('mm-rungs-display');
+    if (btn) {
+        btn.style.background = _mmCompactMode ? '#00ff8822' : 'transparent';
+        btn.style.borderColor = _mmCompactMode ? '#00ff88' : '#1e2740';
+        btn.style.color = _mmCompactMode ? '#00ff88' : '#556';
+        btn.textContent = _mmCompactMode ? '2×2 ✓' : '2×2';
+    }
+    if (display) {
+        display.textContent = _mmCompactMode ? '2 (×2 qty)' : '4';
+        display.style.background = _mmCompactMode ? '#00ff8822' : '#ff704318';
+        display.style.borderColor = _mmCompactMode ? '#00ff88' : '#ff7043';
+        display.style.color = _mmCompactMode ? '#00ff88' : '#ff7043';
+    }
+    document.getElementById('mm-levels').value = _mmCompactMode ? 2 : 4;
+    updateMMMaxDefault();
+    updateMMPreview();
+}
+
+// Legacy stub — picker was removed, kept for any stale callers.
 function selectMMLevels(n) {
-    _mmSelectedLevels = n;
     document.getElementById('mm-levels').value = n;
-    document.querySelectorAll('.mm-levels-btn').forEach(btn => {
-        const bl = parseInt(btn.dataset.levels);
-        const sel = bl === n;
-        btn.style.borderColor = sel ? '#ff7043' : '#1e2740';
-        btn.style.color = sel ? '#ff7043' : '#556';
-        btn.style.background = sel ? '#ff704318' : 'transparent';
-    });
     updateMMMaxDefault();
     updateMMPreview();
 }
@@ -6242,9 +6259,10 @@ function updateMMPreview() {
     if (yesBid <= 0 || noBid <= 0) { el.innerHTML = '<span style="color:#ff4444;">No orderbook data</span>'; return; }
     const mid = Math.round((yesBid + (100 - noBid)) / 2);
     const gap = parseInt(document.getElementById('mm-start-gap')?.value) || 2;
-    const levels = parseInt(document.getElementById('mm-levels')?.value) || 4;
+    const levels = _mmCompactMode ? 2 : 4;
     const spacing = parseInt(document.getElementById('mm-spacing')?.value) || 1;
-    const baseQty = parseInt(document.getElementById('mm-qty-per-level')?.value) || 1;
+    const baseQtyRaw = parseInt(document.getElementById('mm-qty-per-level')?.value) || 1;
+    const baseQty = _mmCompactMode ? baseQtyRaw * 2 : baseQtyRaw;
     const noAnchor = 100 - mid;
     const yesLevels = [], noLevels = [];
     for (let i = 0; i < levels; i++) {
@@ -6281,16 +6299,19 @@ async function deployMarketMaker() {
     if (!currentArbMarket) { alert('No market selected'); return; }
     const ticker = currentArbMarket.ticker;
     const startGap = parseInt(document.getElementById('mm-start-gap')?.value) || 2;
-    const levels = parseInt(document.getElementById('mm-levels')?.value) || 4;
     const spacing = parseInt(document.getElementById('mm-spacing')?.value) || 1;
-    const qtyPerLevel = parseInt(document.getElementById('mm-qty-per-level')?.value) || 1;
+    const qtyPerLevelRaw = parseInt(document.getElementById('mm-qty-per-level')?.value) || 1;
+    // Compact mode toggle: 2 rungs × 2x qty (same total exposure as 4×1).
+    const levels = _mmCompactMode ? 2 : 4;
+    const qtyPerLevel = _mmCompactMode ? qtyPerLevelRaw * 2 : qtyPerLevelRaw;
     const invLimit = levels * qtyPerLevel * 2;
     const lossLimitCents = parseInt(document.getElementById('mm-loss-limit')?.value) || 0;
     const width = _mmSelectedWidth;
     const widthLabel = _mmAutoWidth ? 'AUTO (adapts to room)' : `${width}¢`;
     const lossStr = lossLimitCents > 0 ? `Loss limit: $${(lossLimitCents/100).toFixed(2)}` : 'No loss limit';
+    const modeLabel = _mmCompactMode ? ` (COMPACT: 2×${qtyPerLevel})` : '';
 
-    if (!confirm(`Deploy Apex MM\n\nMarket: ${ticker}\nWidth: ${widthLabel} · ${levels} rungs · ${qtyPerLevel}x/rung\n${lossStr}\n\nContinue?`)) return;
+    if (!confirm(`Deploy Apex MM\n\nMarket: ${ticker}\nWidth: ${widthLabel} · ${levels} rungs · ${qtyPerLevel}x/rung${modeLabel}\n${lossStr}\n\nContinue?`)) return;
 
     const deployBtn = document.getElementById('deploy-btn');
     if (deployBtn) { deployBtn.disabled = true; deployBtn.textContent = 'Deploying...'; }
@@ -10415,7 +10436,7 @@ async function apexMmModify(botId) {
         ? '<div style="color:#00e5ff;font-size:10px;margin-bottom:8px;">Pulled — changes apply on next repost</div>'
         : '<div style="color:#ff8800;font-size:10px;margin-bottom:8px;">Holding inventory — changes queued for next cycle</div>';
     const _widths = [2, 4, 6, 8, 10, 15, 20, 30];
-    const _rungs = [2, 3, 5, 7, 10];
+    const _rungs = [3, 5, 7, 10];
     const _autoWidth = !!bot._auto_width;
     const _wBtnStyle = (active) => `width:36px;height:36px;border-radius:50%;background:${active ? '#00d4ff18' : 'transparent'};border:1px solid ${active ? '#00d4ff' : '#1e2740'};color:${active ? '#00d4ff' : '#556'};cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;`;
     const _rBtnStyle = (active) => `width:36px;height:36px;border-radius:50%;background:${active ? '#ff704318' : 'transparent'};border:1px solid ${active ? '#ff7043' : '#1e2740'};color:${active ? '#ff7043' : '#556'};cursor:pointer;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;`;

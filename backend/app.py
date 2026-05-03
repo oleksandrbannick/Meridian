@@ -9833,22 +9833,12 @@ def _apex_mm_effective_gap_qty(bot, base_qty):
     return eff_gap, eff_qty
 
 
-# Sports where book is natively thin (10-30 contracts top depth). Collapsing
-# 4 thin rungs into 2 fatter rungs gives better queue priority + cleaner
-# footprint without changing total exposure. Total qty preserved by mult.
-APEX_MM_THIN_BOOK_SPORTS = ('tennis',)
-
-
 def _apex_mm_effective_levels(bot):
-    """Sport-aware (levels, qty_mult) override for ladder construction.
-    Thin-book sports collapse to 2 levels with proportionally larger qty."""
-    cfg_levels = bot.get('levels', 4) or 4
-    sport = _detect_sport(bot.get('ticker', ''))
-    if sport in APEX_MM_THIN_BOOK_SPORTS and cfg_levels > 2:
-        new_levels = 2
-        qty_mult = max(1, cfg_levels // new_levels)
-        return new_levels, qty_mult
-    return cfg_levels, 1
+    """Returns (levels, qty_multiplier) — straight pass-through of the bot's
+    configured levels with no qty multiplier. The earlier silent tennis
+    auto-collapse (4 → 2 with 2x qty) is removed; users now control compact
+    mode explicitly via the UI toggle, which sends levels=2 + 2x qty directly."""
+    return bot.get('levels', 4) or 4, 1
 
 
 def _apex_mm_skewed_midpoint(bot, raw_midpoint):

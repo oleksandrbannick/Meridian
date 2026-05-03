@@ -7296,7 +7296,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                         <span style="color:${pCol};font-weight:700;text-align:right;">${fmtDollars(rt.pnl, {sign:true})}</span>
                     </div>`;
                 }).join('') : ''}
-                ${exitLog.length > 0 ? `<div style="margin-top:6px;padding-top:4px;border-top:1px solid #1a0a0a;"><div style="color:#ff7043;font-size:8px;font-weight:800;letter-spacing:1px;margin-bottom:2px;padding-bottom:2px;border-bottom:1px solid #ff704320;">EXITS</div>` +
+                ${exitLog.length > 0 ? `<div style="margin-top:6px;padding-top:4px;border-top:1px solid #1a0a0a;"><div style="color:#ff7043;font-size:8px;font-weight:800;letter-spacing:1px;margin-bottom:2px;padding-bottom:2px;border-bottom:1px solid #ff704320;">SETTLED</div>` +
                     exitLog.map((ex, i) => {
                         const pCol = ex.pnl >= 0 ? '#00ff88' : '#ff4444';
                         const sideLabel = ex.type === 'arb_complete' ? 'ARB' : (ex.held_side === 'yes') ? 'YES' : 'NO';

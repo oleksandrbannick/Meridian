@@ -23485,6 +23485,61 @@ def stop_bot(bot_id):
                         'message': f'Stop pending (status: {status})'})
 
 
+@app.route('/api/bot/release-preview/<bot_id>', methods=['GET'])
+def release_preview(bot_id):
+    """Return Kalshi-truth held quantities for the bot's ticker so the UI can
+    show a precise confirm dialog ('Release will leave X YES @ Yc + N NO @ Mc
+    on Kalshi as orphans'). Uses raw Kalshi /positions — no bot-tracking
+    inference, no avg-cost drift. Sub-1 fractional residues floored to 0."""
+    bot = active_bots.get(bot_id)
+    if not bot:
+        return jsonify({'error': 'Bot not found'}), 404
+    ticker = bot.get('ticker', '')
+    if not ticker:
+        return jsonify({'error': 'Bot has no ticker'}), 400
+    if not kalshi_client:
+        return jsonify({'error': 'Not authenticated'}), 401
+    if not api_read_limiter.try_wait():
+        return jsonify({'error': 'Rate limited — try again shortly'}), 429
+    try:
+        _resp = kalshi_client.get_positions(ticker=ticker)
+        _list = _resp.get('market_positions', _resp.get('positions', []))
+        held_yes = 0
+        held_no = 0
+        avg_yes = 0
+        avg_no = 0
+        for _p in _list:
+            if _p.get('ticker') != ticker:
+                continue
+            _net = _parse_position_qty(_p)
+            held_yes = max(0, _net)
+            held_no = max(0, -_net)
+            # exposure_dollars / qty = avg cost in dollars, * 100 = cents
+            _exp = _p.get('market_exposure_dollars', _p.get('market_exposure', 0))
+            try:
+                _exp_c = round(float(str(_exp)) * 100) if isinstance(_exp, str) else int(_exp)
+            except Exception:
+                _exp_c = 0
+            _abs = abs(_net)
+            if _abs > 0:
+                _avg = round(_exp_c / _abs)
+                if held_yes > 0:
+                    avg_yes = _avg
+                if held_no > 0:
+                    avg_no = _avg
+            break
+        return jsonify({
+            'success': True,
+            'ticker': ticker,
+            'held_yes': held_yes,
+            'held_no': held_no,
+            'avg_yes': avg_yes,
+            'avg_no': avg_no,
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/bot/release/<bot_id>', methods=['POST'])
 def release_bot(bot_id):
     """Release a bot's positions — cancel all orders, orphan filled positions.

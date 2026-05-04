@@ -10628,7 +10628,27 @@ async function stopBot(botId) {
 }
 
 async function releaseBot(botId) {
-    if (!confirm('Release positions? They will become unmanaged orphans.\nYou can assign Scout from the Positions view.')) return;
+    // Fetch Kalshi-truth held qty for this bot's ticker so the confirm shows
+    // exactly what will become orphans (no bot-tracking guessing).
+    let preview = null;
+    try {
+        const _pr = await fetch(`${API_BASE}/bot/release-preview/${botId}`);
+        if (_pr.ok) preview = await _pr.json();
+    } catch (e) { /* preview is optional; fall through to generic confirm */ }
+    let confirmMsg;
+    if (preview && preview.success) {
+        const parts = [];
+        if (preview.held_yes > 0) parts.push(`${preview.held_yes} YES${preview.avg_yes ? ` @ ${preview.avg_yes}¢` : ''}`);
+        if (preview.held_no > 0)  parts.push(`${preview.held_no} NO${preview.avg_no ? ` @ ${preview.avg_no}¢` : ''}`);
+        if (parts.length === 0) {
+            confirmMsg = `Release this bot?\n\nKalshi shows 0 contracts on ${preview.ticker} — nothing to orphan, just cancels any leftover orders.`;
+        } else {
+            confirmMsg = `Release this bot?\n\nTicker ${preview.ticker} currently holds:\n  ${parts.join('\n  ')}\n\nThese will become orphans (no bot managing). All open orders will be cancelled.\nAssign Scout from the Positions tab to manage them, or sell manually.`;
+        }
+    } else {
+        confirmMsg = 'Release positions? They will become unmanaged orphans.\nYou can assign Scout from the Positions view.';
+    }
+    if (!confirm(confirmMsg)) return;
     try {
         const btn = document.querySelector(`button[onclick*="releaseBot('${botId}')"]`);
         if (btn) { btn.disabled = true; btn.textContent = '⏳'; btn.style.opacity = '0.5'; }

@@ -18200,20 +18200,20 @@ def _handle_apex(bot_id, bot, actions):
     except Exception:
         pass
 
-    # ── HEARTBEAT RECONCILE: 20s cadence regardless of state ──
-    # Catches WS dropouts / Cloudflare hiccups while actively quoting (was
-    # only firing while pulled — invisible inventory drift caused orphans).
-    # Tightened 60s→20s 2026-05-04 — divergence persisting for up to a minute
-    # was the root of multiple orphan/phantom-inventory incidents (NYMLAA
-    # thrashing, LEW orphan). 20s gives drift detection within ~half a phase
-    # interval. API cost: ~3 reads/min/bot, well within Advanced tier ceiling.
-    if now - bot.get('_last_reconcile', 0) >= 20:
+    # ── HEARTBEAT RECONCILE: 20s cadence + per-bot jitter ──
+    # JITTER (added 2026-05-04) — without it, all active bots' reconciles fire
+    # on the same monitor tick and compete for the read budget, starving each
+    # other and skipping reconciles. abs(hash(bot_id)) % 8 spreads each bot's
+    # cadence across 20-27s, breaking the synchronization storm. Same trick on
+    # pnl_sync (60s + 0-15s jitter).
+    _jit = abs(hash(bot_id)) % 8
+    if now - bot.get('_last_reconcile', 0) >= (20 + _jit):
         bot['_last_reconcile'] = now
         _apex_mm_reconcile_inventory(bot_id, bot)
 
-    # ── P&L KALSHI-TRUTH SYNC: 60s cadence floor (also called after every RT
-    # via _apex_mm_pnl_sync helper for tighter accuracy)
-    if now - bot.get('_last_pnl_sync', 0) >= 60:
+    # ── P&L KALSHI-TRUTH SYNC: 60s + per-bot jitter (also called after every
+    # RT via _apex_mm_pnl_sync helper for tighter accuracy)
+    if now - bot.get('_last_pnl_sync', 0) >= (60 + (_jit * 2)):
         _apex_mm_pnl_sync(bot_id, bot)
 
     # ── AUTO-WIDTH LIVE SYNC: keep bot['start_gap'] current even while pulled ──
@@ -18273,8 +18273,9 @@ def _handle_apex(bot_id, bot, actions):
 
     # ── STATUS: mm_depth_pulled — check recovery ──
     if status == 'mm_depth_pulled':
-        # Extra reconcile while pulled (30s cadence) — orphan-prone state
-        if now - bot.get('_last_reconcile', 0) >= 30:
+        # Extra reconcile while pulled (30s cadence + jitter) — orphan-prone state
+        _jit_p = abs(hash(bot_id)) % 8
+        if now - bot.get('_last_reconcile', 0) >= (30 + _jit_p):
             bot['_last_reconcile'] = now
             _apex_mm_reconcile_inventory(bot_id, bot)
 

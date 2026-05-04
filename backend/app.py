@@ -6926,6 +6926,11 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     close_qty = min(count, opp_held)
                     _pre_y_close = bot.get('net_yes', 0)
                     _pre_n_close = bot.get('net_no', 0)
+                    # Force reconcile on the next monitor tick — RT close is the
+                    # critical moment to verify net flat against Kalshi truth, not
+                    # wait up to 20s for the heartbeat. Catches phantom RT closes
+                    # where bot tracking deducts qty that Kalshi shows as still held.
+                    bot['_last_reconcile'] = 0
                     _apex_mm_record_round_trip(bot_id, bot, matched_side, matched_price, close_qty)
                     # Also deduct from this side since it was used to close
                     bot[f'net_{matched_side}'] = max(0, bot.get(f'net_{matched_side}', 0) - close_qty)
@@ -10535,6 +10540,7 @@ def _apex_mm_pull_all(bot_id, bot, reason):
                     bot.setdefault('_counted_order_fills', {})[oid] = _kalshi_fills
                     level['fill_qty'] = _kalshi_fills
                     print(f'🚨 PULL LATE FILL: {bot_id} {_side.upper()} +{_new_fills}x @{_price}c during cancel (kalshi={_kalshi_fills} ws_had={_ws_already})')
+                    bot['_last_reconcile'] = 0  # force reconcile next tick
                     bot_log('APEX_MM_PULL_LATE_FILL', bot_id, {
                         'side': _side, 'fills': _kalshi_fills, 'new_fills': _new_fills,
                         'price': _price, 'ws_already': _ws_already,
@@ -10634,6 +10640,7 @@ def _apex_mm_pull_entry_rungs(bot_id, bot, reason):
                         _n = bot[f'net_{_side}']
                         bot[f'avg_{_side}_cost'] = round(bot[f'total_{_side}_cost'] / _n) if _n > 0 else 0
                         bot.setdefault('_counted_order_fills', {})[oid] = _kf
+                        bot['_last_reconcile'] = 0  # force reconcile next tick
                         print(f'🚨 {reason.upper()} LATE FILL: {bot_id} {_side.upper()} +{_nf}x @{_pr}c')
                 elif cr and cr != '404':
                     cancelled += 1
@@ -11746,6 +11753,7 @@ def _apex_mm_cycle_reset(bot_id, bot):
                         bot[f'avg_{_side}_cost'] = round(bot[f'total_{_side}_cost'] / _net) if _net > 0 else 0
                         level['fill_qty'] = _kalshi_fills
                         bot.setdefault('_counted_order_fills', {})[oid] = _kalshi_fills
+                        bot['_last_reconcile'] = 0  # force reconcile next tick
                         print(f'🚨 CYCLE RESET LATE FILL: {bot_id} {_side.upper()} +{_new_fills}x @{_price}c (kalshi={_kalshi_fills} ws_had={_ws_already})')
                     elif _kalshi_fills > 0:
                         bot.setdefault('_counted_order_fills', {})[oid] = _kalshi_fills
@@ -12222,6 +12230,7 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
                             _net = bot[f'net_{_side}']
                             bot[f'avg_{_side}_cost'] = round(bot[f'total_{_side}_cost'] / _net) if _net > 0 else 0
                             bot.setdefault('_counted_order_fills', {})[oid] = _kalshi_fills
+                            bot['_last_reconcile'] = 0  # force reconcile next tick
                             print(f'🚨 REFILL LATE FILL: {bot_id} {_side.upper()} +{_new_fills}x @{_price}c')
                 level['oid'] = None
         # If late fills found, abort and handle inventory
@@ -12480,6 +12489,7 @@ def _apex_mm_begin_exit_inner(bot_id, bot, reason):
                     bot[f'total_{_side}_cost'] = bot.get(f'total_{_side}_cost', 0) + (_price * _new_fills)
                     _net = bot[f'net_{_side}']
                     bot[f'avg_{_side}_cost'] = round(bot[f'total_{_side}_cost'] / _net) if _net > 0 else 0
+                    bot['_last_reconcile'] = 0  # force reconcile next tick
                     print(f'🚨 APEX MM BEGIN EXIT LATE FILL: {bot_id} {_side.upper()} +{_new_fills}x @{_price}c (kalshi={_kalshi_fills} ws_had={_ws_already})')
             level['oid'] = None
 
@@ -18110,10 +18120,14 @@ def _handle_apex(bot_id, bot, actions):
     except Exception:
         pass
 
-    # ── HEARTBEAT RECONCILE: 60s cadence regardless of state ──
+    # ── HEARTBEAT RECONCILE: 20s cadence regardless of state ──
     # Catches WS dropouts / Cloudflare hiccups while actively quoting (was
     # only firing while pulled — invisible inventory drift caused orphans).
-    if now - bot.get('_last_reconcile', 0) >= 60:
+    # Tightened 60s→20s 2026-05-04 — divergence persisting for up to a minute
+    # was the root of multiple orphan/phantom-inventory incidents (NYMLAA
+    # thrashing, LEW orphan). 20s gives drift detection within ~half a phase
+    # interval. API cost: ~3 reads/min/bot, well within Advanced tier ceiling.
+    if now - bot.get('_last_reconcile', 0) >= 20:
         bot['_last_reconcile'] = now
         _apex_mm_reconcile_inventory(bot_id, bot)
 

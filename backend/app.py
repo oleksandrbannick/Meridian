@@ -5776,7 +5776,14 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
             if bot.get('type') != 'apex_mm':
                 continue
             status = bot.get('status', '')
-            if status not in ('market_making_active', 'mm_exiting'):
+            # Held inventory MUST always have an active WS snap path. Previously
+            # mm_depth_pulled bots with inventory were excluded from WS snap-up
+            # entirely — they could only walk via the (slow) monitor cycle, and
+            # only if drift_guard was engaged. That left held positions naked
+            # at stale exit prices for many minutes at a time. Now: if status
+            # is one of the active set OR the bot holds inventory, participate.
+            _has_inv_ws = (bot.get('net_yes', 0) > 0) or (bot.get('net_no', 0) > 0)
+            if status not in ('market_making_active', 'mm_exiting') and not _has_inv_ws:
                 continue
             if bot.get('ticker') != ticker:
                 continue
@@ -10580,6 +10587,21 @@ def _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels):
     yes_paused = bot.get('_yes_side_paused', False)
     no_paused = bot.get('_no_side_paused', False)
 
+    # Hard cap on entry price: never submit a rung at or above the drift-guard
+    # threshold. The active drift guard would immediately cancel it anyway —
+    # filtering here saves API churn and prevents the brief toxic-flow window
+    # where a stale rung could be hit before the WS guard fires.
+    _pre_yes = len(yes_levels)
+    _pre_no = len(no_levels)
+    yes_levels = [(p, q) for p, q in yes_levels if p < APEX_MM_DRIFT_GUARD_BID]
+    no_levels = [(p, q) for p, q in no_levels if p < APEX_MM_DRIFT_GUARD_BID]
+    _dropped = (_pre_yes - len(yes_levels)) + (_pre_no - len(no_levels))
+    if _dropped:
+        print(f'🛡️ APEX MM POST CAP: {bot_id} dropped {_dropped} rungs at >= {APEX_MM_DRIFT_GUARD_BID}c (pre-empted drift guard)')
+        bot_log('APEX_MM_POST_CAP', bot_id, {
+            'dropped': _dropped, 'threshold': APEX_MM_DRIFT_GUARD_BID,
+        })
+
     total_contracts = sum(q for _, q in yes_levels) + sum(q for _, q in no_levels)
     _order_group_id = None
     try:
@@ -11407,6 +11429,16 @@ def _apex_mm_refill_entry(bot_id, bot, freed_qty):
         refill_price = (100 - midpoint) - start_gap
 
     if refill_price < 1 or refill_price > 98:
+        return
+
+    # ── GATE 2.5: Drift guard hard cap — never refill at >= guard threshold ──
+    # Active drift guard would cancel it within ~50ms anyway. Skip the API churn.
+    if refill_price >= APEX_MM_DRIFT_GUARD_BID:
+        bot_log('APEX_MM_REFILL_BLOCKED', bot_id, {
+            'gate': 'drift_guard_bid', 'refill': refill_price,
+            'threshold': APEX_MM_DRIFT_GUARD_BID,
+        })
+        print(f'🛡️ APEX MM REFILL CAP: {bot_id} refill {refill_price}c >= {APEX_MM_DRIFT_GUARD_BID}c — skipped')
         return
 
     # ── GATE 3: Spread gap — refill + exit must leave room for profit ──
@@ -17942,6 +17974,17 @@ def _handle_apex(bot_id, bot, actions):
         if now - bot.get('_last_reconcile', 0) >= 30:
             bot['_last_reconcile'] = now
             _apex_mm_reconcile_inventory(bot_id, bot)
+
+        # ── HELD INVENTORY ALWAYS WALKS ──
+        # Held qty must never sit static. Walk_up was previously gated behind
+        # the drift_guard branch below; a pulled bot with held inventory but no
+        # active drift would freeze its exit forever (KXNBA3PT-...-CLEJTYSON20-3
+        # sat at 44c for 31m). Status doesn't determine inventory safety — qty does.
+        _net_yes_p = bot.get('net_yes', 0)
+        _net_no_p = bot.get('net_no', 0)
+        if _net_yes_p > 0 or _net_no_p > 0:
+            try: _apex_mm_walk_up(bot_id, bot)
+            except Exception: pass
 
         if bot.get('_pull_count', 0) >= APEX_MM_MAX_PULL_CYCLES:
             _apex_mm_begin_exit(bot_id, bot, 'max_pull_cycles')

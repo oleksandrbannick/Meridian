@@ -11360,13 +11360,20 @@ def _apex_mm_walk_up(bot_id, bot):
             'combined': _combined, 'profit': _profit, 'mode': _mode,
         })
     except Exception as e:
-        if 'filled' in str(e).lower():
+        _es = str(e)
+        if 'filled' in _es.lower():
             print(f'⚡ APEX MM WALK FILLED: {bot_id}')
-        elif '404' in str(e) or 'not found' in str(e).lower():
-            print(f'🚨 APEX MM WALK 404: {bot_id} exit order gone — RECREATING immediately')
+        elif '404' in _es or 'not found' in _es.lower() or '409' in _es or 'conflict' in _es.lower():
+            # 404 = order gone; 409 = order in non-amendable state (already canceled,
+            # executed, or stuck mid-amend). Both mean "this OID is dead, recreate".
+            # Without this, walk_up retried the same dead OID every monitor cycle
+            # forever — observed ~30min loop on a Raptors bot at 44c (held 3 YES,
+            # log: 'APEX MM WALK FAIL: 409 Client Error' repeating every 2s).
+            _code = '404' if '404' in _es or 'not found' in _es.lower() else '409'
+            print(f'🚨 APEX MM WALK {_code}: {bot_id} exit order dead — RECREATING via reactor pool')
             bot[f'_{exit_side}_exit_oid'] = None
-            # NEVER leave held inventory naked — recreate exit in background.
-            threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, held_side), daemon=True).start()
+            # Use reactor pool not ad-hoc thread — same path as WS fill recreates.
+            _apex_mm_reactor_queue.put((_apex_mm_amend_exit, (bot_id, bot, held_side)))
         else:
             print(f'⚠ APEX MM WALK FAIL: {bot_id} {e}')
 

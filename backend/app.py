@@ -6834,6 +6834,8 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
 
                 # Add to inventory
                 _was_flat = bot.get(f'net_{matched_side}', 0) == 0
+                _pre_y = bot.get('net_yes', 0)
+                _pre_n = bot.get('net_no', 0)
                 bot[f'net_{matched_side}'] = bot.get(f'net_{matched_side}', 0) + count
                 bot[f'total_{matched_side}_cost'] = bot.get(f'total_{matched_side}_cost', 0) + (matched_price * count)
                 total_qty = bot[f'net_{matched_side}']
@@ -6843,7 +6845,17 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     bot[f'_{matched_side}_inv_since'] = time.time()
                 bot[f'_last_{matched_side}_fill_at'] = time.time()
 
-                print(f'📊 WS APEX MM FILL: {bot_id} {matched_side.upper()} +{count} @{matched_price}c → net_{matched_side}={bot[f"net_{matched_side}"]} avg={bot[f"avg_{matched_side}_cost"]}c')
+                # Diagnostic: which order_id, was it in this bot's known orders, dedup state.
+                _own_known = order_id in (bot.get('_all_placed_order_ids', []) or [])
+                _ded_count = bot.get('_counted_order_fills', {}).get(order_id, 0) if order_id else 0
+                print(f'🧾 INV+ENTRY: {bot_id} oid={order_id[:12] if order_id else "-"} own={_own_known} {matched_side}+{count}@{matched_price} dedup_cum={_ded_count} y {_pre_y}→{bot.get("net_yes",0)} n {_pre_n}→{bot.get("net_no",0)} avg={bot[f"avg_{matched_side}_cost"]}c')
+                bot_log('APEX_MM_INV_ADD', bot_id, {
+                    'order_id': order_id, 'own_known': _own_known,
+                    'side': matched_side, 'count': count, 'price': matched_price,
+                    'pre_y': _pre_y, 'pre_n': _pre_n,
+                    'post_y': bot.get('net_yes', 0), 'post_n': bot.get('net_no', 0),
+                    'dedup_cum': _ded_count,
+                })
 
                 # Log fill for card display
                 bot.setdefault('_fill_log', []).append({
@@ -6912,6 +6924,8 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 opp_held = bot.get(f'net_{opposite}', 0)
                 if opp_held > 0:
                     close_qty = min(count, opp_held)
+                    _pre_y_close = bot.get('net_yes', 0)
+                    _pre_n_close = bot.get('net_no', 0)
                     _apex_mm_record_round_trip(bot_id, bot, matched_side, matched_price, close_qty)
                     # Also deduct from this side since it was used to close
                     bot[f'net_{matched_side}'] = max(0, bot.get(f'net_{matched_side}', 0) - close_qty)
@@ -6921,6 +6935,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     else:
                         bot[f'avg_{matched_side}_cost'] = 0
                         bot[f'total_{matched_side}_cost'] = 0
+                    print(f'🧾 INV-CLOSE: {bot_id} matched={matched_side} closed_opp={opposite} qty={close_qty} y {_pre_y_close}→{bot.get("net_yes",0)} n {_pre_n_close}→{bot.get("net_no",0)}')
 
                 # If ladder RT made us flat, cancel exit order NOW to prevent orphan fills
                 if opp_held > 0 and bot.get('net_yes', 0) == 0 and bot.get('net_no', 0) == 0:

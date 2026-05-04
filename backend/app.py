@@ -985,17 +985,19 @@ def get_markets():
         # Inject milestone_status + start_date for tennis markets (cached, no API call)
         _refresh_milestones_cache()
         ms_data = _milestones_cache['data']
-        # Build set of player codes currently live in API Tennis. Used as a
-        # fallback when Kalshi milestones miss/lag so live ATP/WTA matches
-        # with a tennis-API score still get tagged live in the UI.
-        _live_tennis_codes = set()
+        # Build set of live PAIRS (frozenset of both player codes) from API Tennis.
+        # The previous one-code matching marked any market sharing a single 3-letter
+        # surname code with a live match as live too — e.g. if any "Kwon" was live
+        # anywhere, every Kalshi -KWO ticker (Kwon vs anyone) flipped to live even
+        # when it was actually pregame. Requiring BOTH players match eliminates
+        # those false positives.
+        _live_tennis_pairs = set()
         for _tm in (_api_tennis_cache.get('data') or []):
             if _tm.get('event_live') == '1' or (_tm.get('event_status') or '').lower() in ('interrupted', 'break time'):
-                for _p in (_tm.get('event_first_player', ''), _tm.get('event_second_player', '')):
-                    if _p:
-                        _c = _tennis_player_code(_p)
-                        if _c:
-                            _live_tennis_codes.add(_c)
+                _c1 = _tennis_player_code(_tm.get('event_first_player', '') or '')
+                _c2 = _tennis_player_code(_tm.get('event_second_player', '') or '')
+                if _c1 and _c2:
+                    _live_tennis_pairs.add(frozenset([_c1, _c2]))
         for m in unique_markets:
             ticker_str = m.get('ticker', '')
             if not ticker_str.startswith(('KXATP', 'KXWTA', 'KXITF')):
@@ -1006,12 +1008,19 @@ def get_markets():
                 _sd = ms_data[et].get('start_date', '')
                 if _sd:
                     m['milestone_start_date'] = _sd
-            # API Tennis fallback: if Kalshi milestone isn't 'live' but the
-            # market's player code matches a live API-Tennis match, force live.
-            if m.get('milestone_status') != 'live' and _live_tennis_codes:
-                parts_t = ticker_str.split('-')
-                if len(parts_t) >= 3 and parts_t[-1].upper() in _live_tennis_codes:
-                    m['milestone_status'] = 'live'
+            # API Tennis fallback: only override to live when BOTH players match a
+            # live API-Tennis pair. Extract both codes from the event_ticker's
+            # middle segment (after stripping the date/time prefix) — for tennis
+            # Kalshi encodes player pairs as 3+3 letters (e.g. KWOUCH = KWO+UCH).
+            if m.get('milestone_status') != 'live' and _live_tennis_pairs:
+                _et_parts = (m.get('event_ticker') or '').split('-')
+                if len(_et_parts) >= 2:
+                    import re as _re_t
+                    _mid_codes = _re_t.sub(r'^\d{2}[A-Z]{3}\d{2}(\d{4})?', '', _et_parts[1]).upper()
+                    if len(_mid_codes) == 6:
+                        _ca, _cb = _mid_codes[:3], _mid_codes[3:]
+                        if frozenset([_ca, _cb]) in _live_tennis_pairs:
+                            m['milestone_status'] = 'live'
 
         # Overlay WS cache prices where available (fresher than Kalshi API snapshot)
         ws_overlaid = 0

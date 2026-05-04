@@ -991,18 +991,24 @@ def get_markets():
         # anywhere, every Kalshi -KWO ticker (Kwon vs anyone) flipped to live even
         # when it was actually pregame. Requiring BOTH players match eliminates
         # those false positives.
+        # Set of 6-char Kalshi mid-segment patterns that map to a live API-Tennis
+        # match. Using all 3-letter prefixes from each player's name (Huertas Del
+        # Pino Cordova → HUE/DEL/PIN/COR) covers compound surnames where the
+        # last-word code (COR) doesn't match what Kalshi encodes (HUE).
         _live_tennis_pairs = set()
         for _tm in (_api_tennis_cache.get('data') or []):
             _ts_lower = (_tm.get('event_status') or '').lower()
-            # Skip match-ending statuses even if event_live='1' is still stale —
-            # retired/walkover/defaulted means the match is over, not in progress.
             if _ts_lower in ('retired', 'walkover', 'defaulted'):
                 continue
             if _tm.get('event_live') == '1' or _ts_lower in ('interrupted', 'break time'):
-                _c1 = _tennis_player_code(_tm.get('event_first_player', '') or '')
-                _c2 = _tennis_player_code(_tm.get('event_second_player', '') or '')
-                if _c1 and _c2:
-                    _live_tennis_pairs.add(frozenset([_c1, _c2]))
+                _codes1 = _tennis_player_all_codes(_tm.get('event_first_player', '') or '')
+                _codes2 = _tennis_player_all_codes(_tm.get('event_second_player', '') or '')
+                _pre1 = [c for c in _codes1 if len(c) == 3]
+                _pre2 = [c for c in _codes2 if len(c) == 3]
+                for _p1 in _pre1:
+                    for _p2 in _pre2:
+                        _live_tennis_pairs.add(_p1 + _p2)
+                        _live_tennis_pairs.add(_p2 + _p1)
         for m in unique_markets:
             ticker_str = m.get('ticker', '')
             if not ticker_str.startswith(('KXATP', 'KXWTA', 'KXITF')):
@@ -1013,19 +1019,15 @@ def get_markets():
                 _sd = ms_data[et].get('start_date', '')
                 if _sd:
                     m['milestone_start_date'] = _sd
-            # API Tennis fallback: only override to live when BOTH players match a
-            # live API-Tennis pair. Extract both codes from the event_ticker's
-            # middle segment (after stripping the date/time prefix) — for tennis
-            # Kalshi encodes player pairs as 3+3 letters (e.g. KWOUCH = KWO+UCH).
+            # API Tennis fallback: override to live only when the Kalshi
+            # event_ticker's 6-char mid-segment matches a known live pair.
             if m.get('milestone_status') != 'live' and _live_tennis_pairs:
                 _et_parts = (m.get('event_ticker') or '').split('-')
                 if len(_et_parts) >= 2:
                     import re as _re_t
                     _mid_codes = _re_t.sub(r'^\d{2}[A-Z]{3}\d{2}(\d{4})?', '', _et_parts[1]).upper()
-                    if len(_mid_codes) == 6:
-                        _ca, _cb = _mid_codes[:3], _mid_codes[3:]
-                        if frozenset([_ca, _cb]) in _live_tennis_pairs:
-                            m['milestone_status'] = 'live'
+                    if len(_mid_codes) == 6 and _mid_codes in _live_tennis_pairs:
+                        m['milestone_status'] = 'live'
 
         # Overlay WS cache prices where available (fresher than Kalshi API snapshot)
         ws_overlaid = 0
@@ -9198,13 +9200,16 @@ def _get_game_score_for_ticker(ticker: str) -> dict:
             for _tm in _api_tennis_cache['data']:
                 _p1 = _tm.get('event_first_player', '')
                 _p2 = _tm.get('event_second_player', '')
-                _c1 = _tennis_player_code(_p1)
-                _c2 = _tennis_player_code(_p2)
-                if player_code not in (_c1, _c2):
+                # Compound surnames (Huertas Del Pino Cordova) need every name
+                # part as a candidate code — last-word matching alone misses the
+                # surname Kalshi actually encodes (HUE, not COR).
+                _all1 = set(_tennis_player_all_codes(_p1))
+                _all2 = set(_tennis_player_all_codes(_p2))
+                if player_code not in _all1 and player_code not in _all2:
                     continue
                 # Verify BOTH players match the game segment (prevents cross-match collision)
-                _other_code = _c1 if player_code == _c2 else _c2
-                if _game_seg_upper and _other_code and _other_code not in _game_seg_upper:
+                _other_codes = _all2 if player_code in _all1 else _all1
+                if _game_seg_upper and _other_codes and not any(c in _game_seg_upper for c in _other_codes):
                     continue  # wrong match — other player doesn't appear in ticker
                 # Found the match — determine state
                 _is_live = _tm.get('event_live') == '1'

@@ -9230,8 +9230,10 @@ def _get_game_score_for_ticker(ticker: str) -> dict:
                     p2_sets = sum(1 for s in scores if int(float(s.get('score_second', 0))) > int(float(s.get('score_first', 0))) and (int(float(s.get('score_second', 0))) >= 6))
                     cur_set = len(scores) or 1
                     game_score = _tm.get('event_game_result', '') or ''
+                    _team1 = _tennis_player_code(_p1)  # display abbreviation
+                    _team2 = _tennis_player_code(_p2)
                     return {
-                        'home_team': _c2, 'away_team': _c1,
+                        'home_team': _team2, 'away_team': _team1,
                         'home_score': p2_sets, 'away_score': p1_sets,
                         'period': cur_set, 'clock': game_score if game_score != '-' else '',
                         'status_detail': f'set {cur_set}' if _state == 'in' else ('Final' if _state == 'post' else (_status_str or f'set {cur_set}')),

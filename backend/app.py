@@ -10335,8 +10335,12 @@ def _apex_mm_reconcile_inventory(bot_id, bot):
         return False
     if not api_read_limiter.try_wait():
         # Visible skip: silent rate-limit was making divergence persist invisibly.
-        print(f'🔍 RECONCILE SKIP: {bot_id} rate-limited (api_read tokens exhausted)')
-        bot_log('APEX_MM_RECONCILE_SKIP', bot_id, {'reason': 'rate_limit'})
+        # BACKOFF: push this bot's _last_reconcile forward by 5s so it doesn't
+        # retry in the next monitor tick (~2s) — gives other bots a turn at the
+        # read budget instead of all racing again on the next cycle.
+        bot['_last_reconcile'] = time.time() + 5
+        print(f'🔍 RECONCILE SKIP: {bot_id} rate-limited (api_read tokens exhausted, backed off +5s)')
+        bot_log('APEX_MM_RECONCILE_SKIP', bot_id, {'reason': 'rate_limit', 'backoff_s': 5})
         return False
     try:
         _pos = kalshi_client.get_positions(ticker=ticker)

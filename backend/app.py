@@ -10269,17 +10269,25 @@ def _apex_mm_reconcile_inventory(bot_id, bot):
     if not ticker:
         return False
     if not api_read_limiter.try_wait():
-        return False  # rate-limited; skip this tick
+        # Visible skip: silent rate-limit was making divergence persist invisibly.
+        print(f'🔍 RECONCILE SKIP: {bot_id} rate-limited (api_read tokens exhausted)')
+        bot_log('APEX_MM_RECONCILE_SKIP', bot_id, {'reason': 'rate_limit'})
+        return False
     try:
         _pos = kalshi_client.get_positions(ticker=ticker)
         _pos_list = _pos.get('market_positions', _pos.get('positions', []))
         _kalshi_net = 0
+        _kalshi_pos_seen = False
         for _p in _pos_list:
             if _p.get('ticker') == ticker:
                 _kalshi_net = _parse_position_qty(_p)
+                _kalshi_pos_seen = True
                 break
+        if not _kalshi_pos_seen:
+            print(f'🔍 RECONCILE: {bot_id} no Kalshi position entry for ticker={ticker} — assuming flat')
     except Exception as _e:
         print(f'⚠ APEX MM RECONCILE FAIL: {bot_id} {_e}')
+        bot_log('APEX_MM_RECONCILE_FAIL', bot_id, {'error': str(_e)[:200]})
         return False
 
     _ky = max(0, _kalshi_net)
@@ -10288,6 +10296,15 @@ def _apex_mm_reconcile_inventory(bot_id, bot):
     _bot_no = bot.get('net_no', 0)
     if _ky == _bot_yes and _kn == _bot_no:
         return True  # in sync, nothing to do
+    # Divergence detected — log loudly so we can trace recurring patterns.
+    print(f'🔍 RECONCILE DIVERGENCE: {bot_id} ticker={ticker}')
+    print(f'    bot tracking: yes={_bot_yes} no={_bot_no}')
+    print(f'    kalshi truth: yes={_ky} no={_kn} (net={_kalshi_net})')
+    bot_log('APEX_MM_RECONCILE_DIVERGENCE', bot_id, {
+        'bot_yes': _bot_yes, 'bot_no': _bot_no,
+        'kalshi_yes': _ky, 'kalshi_no': _kn,
+        'kalshi_net': _kalshi_net,
+    }, level='WARN')
 
     # Infer missing-inventory cost from posted ladder rungs (sweep top→bottom).
     def _infer_orphan_cost(posted, missing_qty, fallback_price):
@@ -11159,22 +11176,26 @@ def _apex_mm_reconstruct_rt_log_from_fills(bot_id, bot):
             if _oid:
                 _own_oids.add(_oid)
     if not _own_oids:
-        # Bot has placed no orders yet → nothing to reconstruct. Caller falls
-        # back to the position-based realized sync.
+        print(f'🔍 RT REBUILD SKIP: {bot_id} no own_oids tracked — falling back to position sync')
         return False, None, None
     if not api_read_limiter.try_wait():
-        return False, None, None  # rate-limited
+        print(f'🔍 RT REBUILD SKIP: {bot_id} rate-limited')
+        return False, None, None
     try:
         resp = kalshi_client.get_fills(ticker=ticker, limit=500)
         fills = resp.get('fills', resp.get('trades', [])) if isinstance(resp, dict) else []
-        # Filter to this ticker AND order_ids this bot placed.
-        ticker_fills = [
-            f for f in fills
-            if f.get('ticker') == ticker and f.get('order_id') in _own_oids
-        ]
+        ticker_all = [f for f in fills if f.get('ticker') == ticker]
+        ticker_fills = [f for f in ticker_all if f.get('order_id') in _own_oids]
         # Sort chronologically (oldest first)
         ticker_fills.sort(key=lambda f: f.get('created_time') or f.get('timestamp') or 0)
+        # Visibility: log how many ticker fills were considered vs accepted (rejected
+        # = fills from prior bots on the same ticker — exactly the bug ownership
+        # filter exists to prevent).
+        _rejected = len(ticker_all) - len(ticker_fills)
+        if _rejected > 0:
+            print(f'🔍 RT REBUILD: {bot_id} ticker={ticker} fills considered={len(ticker_all)} accepted={len(ticker_fills)} rejected={_rejected} (not_own_order_id)')
         if not ticker_fills:
+            print(f'🔍 RT REBUILD: {bot_id} no own fills yet — keeping existing _rt_log')
             return False, None, None
 
         net_y, total_y_cost = 0.0, 0.0

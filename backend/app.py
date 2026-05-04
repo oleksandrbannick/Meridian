@@ -5857,6 +5857,30 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                             })
                             print(f'⚡ APEX MM WS DRIFT: {bot_id} mid {_stored_mid}→{_live_mid} (Δ{_drift_amt}c) → reactor reprice')
 
+            # ── WS-driven drift guard (max-bid spike) ──
+            # Mirrors monitor-cycle drift guard at APEX_MM_DRIFT_GUARD_BID, but
+            # fires on every WS BBO tick instead of every 2s. Closes the toxic-flow
+            # window where stale entries get hit by hostile fills before the next
+            # monitor sweep. Per-bot cooldown prevents reactor spam while bid stays
+            # above threshold. Flat → pull_all (status changes to mm_depth_pulled);
+            # holding → pull entry rungs on BOTH sides via reactor pool, exit kept.
+            _max_bid_ws = max(yes_bid or 0, no_bid or 0)
+            if _max_bid_ws >= APEX_MM_DRIFT_GUARD_BID:
+                _now_dg = time.time()
+                if _now_dg - bot.get('_last_ws_drift_guard_at', 0) >= APEX_MM_WS_DRIFT_GUARD_COOLDOWN_S:
+                    bot['_last_ws_drift_guard_at'] = _now_dg
+                    if net_yes <= 0 and net_no <= 0:
+                        _apex_mm_reactor_queue.put((
+                            _apex_mm_pull_all, (bot_id, bot,
+                                f'ws_drift_guard (max_bid={_max_bid_ws}c >= {APEX_MM_DRIFT_GUARD_BID}c)')))
+                    else:
+                        _apex_mm_reactor_queue.put((
+                            _apex_mm_pull_entry_rungs, (bot_id, bot, 'apex_mm_ws_drift_guard')))
+                    bot_log('APEX_MM_WS_DRIFT_GUARD', bot_id, {
+                        'max_bid': _max_bid_ws, 'flat': (net_yes == 0 and net_no == 0),
+                    })
+                    print(f'⚡ APEX MM WS DRIFT GUARD: {bot_id} max_bid={_max_bid_ws}c (≥{APEX_MM_DRIFT_GUARD_BID}c) → reactor pull')
+
             if net_yes <= 0 and net_no <= 0:
                 continue
 
@@ -9726,12 +9750,21 @@ APEX_MM_WIDTH_FLOOR_BY_SPORT = {
 APEX_MM_OBI_SKEW_K = 2          # max cents of midpoint shift at |obi|=1.0
 
 # ── Drift Guard Dormancy ──
-# When flat in a decided market (max_bid >= 80c), pulling/reposting forever
-# burns API tokens for zero EV. After N consecutive guard pulls go dormant
-# until max_bid drops below DORMANT_RECOVER for SETTLE_S sustained.
+# When flat in a decided market (max_bid >= APEX_MM_DRIFT_GUARD_BID), pulling/
+# reposting forever burns API tokens for zero EV. After N consecutive guard
+# pulls go dormant until max_bid drops below DORMANT_RECOVER for SETTLE_S sustained.
 APEX_MM_DRIFT_DORMANT_STRIKES = 3
 APEX_MM_DRIFT_DORMANT_RECOVER_BID = 70
 APEX_MM_DRIFT_DORMANT_RECOVER_S = 30
+
+# ── Drift Guard Thresholds ──
+# Active: max(yes_bid, no_bid) >= this triggers entry-rung pull (kept at 80).
+# Recovery: while mm_depth_pulled, stay pulled until max_bid drops below this.
+# WS cooldown: per-bot suppress on WS-tick fires so one bid spike doesn't enqueue
+# many cancel jobs in quick succession.
+APEX_MM_DRIFT_GUARD_BID = 80
+APEX_MM_DRIFT_GUARD_RECOVERY = 85
+APEX_MM_WS_DRIFT_GUARD_COOLDOWN_S = 1.0
 
 
 def _apex_mm_pull_min(ticker):
@@ -10498,6 +10531,48 @@ def _apex_mm_pull_all(bot_id, bot, reason):
     save_state()
 
 
+def _apex_mm_pull_entry_rungs(bot_id, bot, reason):
+    """Cancel ALL entry rungs across BOTH yes_orders AND no_orders. Held-side exit
+    (in _yes_exit_oid / _no_exit_oid) is untouched — walk_up keeps moving it.
+    Used by room_guard and drift_guard when holding inventory: kill new-position
+    risk on both sides without abandoning the held position. Status stays as-is
+    (no mm_depth_pulled transition — caller decides flow control).
+    Mirrors _apex_mm_pull_all's late-fill capture so cancel-race fills land in
+    inventory instead of becoming orphans."""
+    cancelled = 0
+    for side_key in ('yes_orders', 'no_orders'):
+        _side = 'yes' if side_key == 'yes_orders' else 'no'
+        for price_str, level in list(bot.get(side_key, {}).items()):
+            oid = level.get('oid')
+            if not oid:
+                continue
+            if level.get('fill_qty', 0) >= level.get('qty', 1) and level.get('fill_qty', 0) > 0:
+                level['oid'] = None
+                continue
+            cr = _safe_cancel(oid, f'{reason}_{bot_id}')
+            with ws_fill_lock:
+                if isinstance(cr, tuple) and cr[0] == 'filled':
+                    _kf = cr[1]
+                    _ws = max(level.get('fill_qty', 0), bot.get('_counted_order_fills', {}).get(oid, 0))
+                    _nf = max(0, _kf - _ws)
+                    if _nf > 0:
+                        _pr = int(price_str)
+                        bot[f'net_{_side}'] = bot.get(f'net_{_side}', 0) + _nf
+                        bot[f'total_{_side}_cost'] = bot.get(f'total_{_side}_cost', 0) + (_pr * _nf)
+                        _n = bot[f'net_{_side}']
+                        bot[f'avg_{_side}_cost'] = round(bot[f'total_{_side}_cost'] / _n) if _n > 0 else 0
+                        bot.setdefault('_counted_order_fills', {})[oid] = _kf
+                        print(f'🚨 {reason.upper()} LATE FILL: {bot_id} {_side.upper()} +{_nf}x @{_pr}c')
+                elif cr and cr != '404':
+                    cancelled += 1
+            level['oid'] = None
+    if cancelled:
+        bot['_pull_count'] = bot.get('_pull_count', 0) + 1
+        bot['_last_pull_at'] = time.time()
+        bot['_last_pull_reason'] = reason
+    return cancelled
+
+
 def _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels):
     """Post the full ladder. Accepts list of (price, qty) tuples.
     Returns True on success. Builds yes_orders and no_orders dicts keyed by price string."""
@@ -11169,7 +11244,11 @@ def _apex_mm_walk_up(bot_id, bot):
     net_held = abs(net_yes - net_no)
 
     _market_best_bid = _apex_mm_market_best_bid(bot, exit_side)
-    _max_profit_price = max(1, 99 - avg_held)  # 1c profit floor for VOLUNTARY walk
+    # Walk cap = combined 95c. Voluntary creep stops at 5c profit floor (not 1c).
+    # Per design memo project_apex_mm_maker_model_2026_05_02: "95c walk cap".
+    # Prior 99-avg_held let the creep eat all the way to 1c profit, burning the
+    # spread voluntarily in active markets.
+    _max_profit_price = max(1, 95 - avg_held)
     # ASK CLAMP — post_only buy at price >= live ask is rejected by Kalshi
     # (would cross). Without this, walk to 49c when ask=49c → Kalshi cancels
     # the order silently. Walk_up loops forever recreating the same canceled
@@ -11191,8 +11270,8 @@ def _apex_mm_walk_up(bot_id, bot):
         _bbo_state = 'queue'
 
     # Branch B: alone (we are BBO) → time-decay creep +1c per phase-aware interval.
-    # Caps at min(99-avg, ask-1) so we never volunteer for losses AND never
-    # post at ask (would cross + get rejected). Pregame walks slowly (30s),
+    # Caps at min(95-avg, ask-1) so we never volunteer below the 5c profit floor
+    # AND never post at ask (would cross + get rejected). Pregame walks slowly (30s),
     # live walks faster, end/OT hyper-fast — see APEX_MM_WALK_INTERVAL_BY_PHASE.
     _walk_cap = min(_max_profit_price, _ask_cap)
     if _new_price == 0 and current_price < _walk_cap:
@@ -17874,7 +17953,7 @@ def _handle_apex(bot_id, bot, actions):
 
         # Drift guard: don't recover if market is too decided
         _drift_max = max(bot.get('live_yes_bid', 0), bot.get('live_no_bid', 0))
-        if _drift_max >= 85:
+        if _drift_max >= APEX_MM_DRIFT_GUARD_RECOVERY:
             # Update pull reason to show drift guard is active (overrides OBI reason)
             bot['_last_pull_reason'] = f'drift guard {_drift_max}c (market decided)'
             if not bot.get('_drift_pulled'):
@@ -17889,7 +17968,7 @@ def _handle_apex(bot_id, bot, actions):
             # Flat + drift: settlement poll + stale-flat purge already handled above.
             return
         elif bot.get('_drift_pulled'):
-            # Below 75 — recover
+            # Below APEX_MM_DRIFT_GUARD_RECOVERY — allow recovery
             bot['_drift_pulled'] = False
             print(f'📊 APEX MM DRIFT CLEAR: {bot_id} max_bid={_drift_max}c — allowing recovery')
         # Clear stale side pauses when flat — pauses are for inventory management,
@@ -18111,9 +18190,9 @@ def _handle_apex(bot_id, bot, actions):
     # never force-exit held positions. Held side rides to settlement via walk_up.
     # After N consecutive flat strikes, go dormant to stop API churn.
     _active_max_bid = max(bot.get('live_yes_bid', 0), bot.get('live_no_bid', 0))
-    if _active_max_bid >= 80:
+    if _active_max_bid >= APEX_MM_DRIFT_GUARD_BID:
         if net_yes <= 0 and net_no <= 0:
-            _apex_mm_pull_all(bot_id, bot, f'active_drift_guard (max_bid={_active_max_bid}c >= 80c)')
+            _apex_mm_pull_all(bot_id, bot, f'active_drift_guard (max_bid={_active_max_bid}c >= {APEX_MM_DRIFT_GUARD_BID}c)')
             bot['_drift_dormant_strikes'] = bot.get('_drift_dormant_strikes', 0) + 1
             _strikes_dd = bot['_drift_dormant_strikes']
             if _strikes_dd >= APEX_MM_DRIFT_DORMANT_STRIKES:
@@ -18127,20 +18206,13 @@ def _handle_apex(bot_id, bot, actions):
             else:
                 print(f'🛡️ APEX MM ACTIVE DRIFT GUARD: {bot_id} max_bid={_active_max_bid}c — flat, pulling (strike {_strikes_dd}/{APEX_MM_DRIFT_DORMANT_STRIKES})')
             return
-        # Holding inventory: pull entry-side rungs only, keep exit alive for walk_up.
-        _held_side_dg = 'yes' if net_yes > net_no else 'no'
-        _entry_side_dg = 'no' if _held_side_dg == 'yes' else 'yes'
-        _entry_key_dg = f'{_entry_side_dg}_orders'
-        _cancelled_dg = 0
-        for _ps_dg, _lvl_dg in list(bot.get(_entry_key_dg, {}).items()):
-            _oid_dg = _lvl_dg.get('oid')
-            if not _oid_dg:
-                continue
-            _safe_cancel(_oid_dg, f'apex_mm_drift_guard_{bot_id}')
-            _lvl_dg['oid'] = None
-            _cancelled_dg += 1
+        # Holding inventory: pull ALL entry rungs on BOTH sides (yes_orders + no_orders).
+        # Held-side exit lives in _{exit_side}_exit_oid and is untouched, so walk_up keeps
+        # working. Pulling both sides prevents stale rungs on the non-held side from
+        # eating fills at unprofitable prices during a bid spike.
+        _cancelled_dg = _apex_mm_pull_entry_rungs(bot_id, bot, 'apex_mm_drift_guard')
         if _cancelled_dg:
-            print(f'🛡️ APEX MM DRIFT GUARD: {bot_id} max_bid={_active_max_bid}c — pulled {_cancelled_dg} {_entry_side_dg} entry rungs (held side rides walk_up)')
+            print(f'🛡️ APEX MM DRIFT GUARD: {bot_id} max_bid={_active_max_bid}c — pulled {_cancelled_dg} entry rungs (both sides, exit kept)')
         try: _apex_mm_walk_up(bot_id, bot)
         except Exception: pass
         return
@@ -18166,37 +18238,15 @@ def _handle_apex(bot_id, bot, actions):
             print(f'🛡️ APEX MM ROOM GUARD: {bot_id} room={_room}c < width={_width}c — pulling (flat)')
             return
         else:
-            # Holding inventory — only pull entry side, keep exit alive
-            entry_side_key = 'no_orders' if net_yes > net_no else 'yes_orders'
-            _entry_side = 'no' if entry_side_key == 'no_orders' else 'yes'
-            cancelled = 0
-            for price_str, level in list(bot.get(entry_side_key, {}).items()):
-                oid = level.get('oid')
-                if oid:
-                    if level.get('fill_qty', 0) >= level.get('qty', 1) and level.get('fill_qty', 0) > 0:
-                        level['oid'] = None
-                        continue
-                    cr = _safe_cancel(oid, f'apex_mm_room_guard_{bot_id}')
-                    if isinstance(cr, tuple) and cr[0] == 'filled':
-                        _kf = cr[1]
-                        _ws = max(level.get('fill_qty', 0), bot.get('_counted_order_fills', {}).get(oid, 0))
-                        _nf = max(0, _kf - _ws)
-                        if _nf > 0:
-                            _pr = int(price_str)
-                            bot[f'net_{_entry_side}'] = bot.get(f'net_{_entry_side}', 0) + _nf
-                            bot[f'total_{_entry_side}_cost'] = bot.get(f'total_{_entry_side}_cost', 0) + (_pr * _nf)
-                            _n = bot[f'net_{_entry_side}']
-                            bot[f'avg_{_entry_side}_cost'] = round(bot[f'total_{_entry_side}_cost'] / _n) if _n > 0 else 0
-                            bot.setdefault('_counted_order_fills', {})[oid] = _kf
-                            print(f'🚨 ROOM GUARD LATE FILL: {bot_id} {_entry_side.upper()} +{_nf}x @{_pr}c')
-                    elif cr and cr != '404':
-                        cancelled += 1
-                    level['oid'] = None
-            bot['_pull_count'] = bot.get('_pull_count', 0) + 1
-            bot['_last_pull_at'] = time.time()
-            bot['_last_pull_reason'] = f'room_guard (room={_room}c < W{_width}, entry only)'
+            # Holding inventory — pull ALL entry rungs on BOTH sides, keep exit alive.
+            # Helper handles late-fill capture (cancel-race fills land in inventory)
+            # and increments _pull_count + _last_pull_at + _last_pull_reason internally.
+            cancelled = _apex_mm_pull_entry_rungs(
+                bot_id, bot,
+                f'apex_mm_room_guard (room={_room}c < W{_width}, entry only)',
+            )
             bot_log('APEX_MM_ROOM_GUARD_PULL', bot_id, {'room': _room, 'width': _width, 'cancelled': cancelled})
-            print(f'🛡️ APEX MM ROOM GUARD: {bot_id} room={_room}c < W{_width} — pulled {cancelled} entry orders (keeping exit)')
+            print(f'🛡️ APEX MM ROOM GUARD: {bot_id} room={_room}c < W{_width} — pulled {cancelled} entry rungs (both sides, exit kept)')
             save_state()
             # Fall through to walk_up so exit order follows market
 

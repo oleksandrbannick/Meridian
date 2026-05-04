@@ -7289,6 +7289,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 <div style="display:flex;gap:10px;font-size:10px;">
                     <span style="color:#8892a6;">Realized: <strong style="color:${realizedPnl >= 0 ? '#00ff88' : '#ff4444'};">${_fmtC(realizedPnl, {sign:true})}</strong></span>
                     ${rtPnlSum !== 0 ? `<span style="color:#556;font-size:9px;" title="Sum of round trip P&L below — should match Realized post-sync">Σruns: <strong style="color:${rtPnlSum >= 0 ? '#00ff88' : '#ff4444'};">${_fmtC(rtPnlSum, {sign:true})}</strong></span>` : ''}
+                    ${exitPnl !== 0 && rtLog.length > 0 ? `<span style="color:#556;font-size:9px;" title="KALSHI ADJ — cancel-race PNL drift sync. Realized = Σruns + ADJ.">ADJ: <strong style="color:${exitPnl >= 0 ? '#00ff88' : '#ff4444'};">${_fmtC(exitPnl, {sign:true})}</strong></span>` : ''}
                     ${unrealizedPnl !== 0 ? `<span style="color:#8892a6;">Unreal: <strong style="color:${unrealizedPnl >= 0 ? '#00ff88' : '#ff4444'};">${_fmtC(unrealizedPnl, {sign:true})}</strong></span>` : ''}
                     <span style="color:#ff7043;">${roundTrips} RTs</span>
                 </div>
@@ -8518,9 +8519,12 @@ async function loadBots() {
                 if (b.type === 'watch') {
                     return sum + ((100 - (b.entry_price || 50)) * (b.quantity || 1));
                 }
-                // Apex MM: uses realized_pnl_cents + _unrealized_pnl (not Phantom-style fields)
+                // Apex MM: realized only — matches per-card top P&L (commit 2319113).
+                // Group total used to add _unrealized_pnl too, which made the group
+                // header disagree with the cards underneath it (e.g. card shows +$0.12
+                // realized but group showed +$0.20 because of +8c unrealized).
                 if (b.bot_category === 'ladder_arb' && b.type === 'apex_mm') {
-                    return sum + (b.realized_pnl_cents || 0) + (b._unrealized_pnl || 0);
+                    return sum + (b.realized_pnl_cents || 0);
                 }
                 // Use lifetime_pnl or net_pnl_cents for accumulated P&L across all runs
                 if (b.bot_category === 'ladder_arb' || b.bot_category === 'anchor_dog' || b.bot_category === 'anchor_ladder') {

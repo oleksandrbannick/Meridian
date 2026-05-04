@@ -11232,6 +11232,19 @@ def _apex_mm_reconstruct_rt_log_from_fills(bot_id, bot):
         if not ticker_fills:
             print(f'🔍 RT REBUILD: {bot_id} no own fills yet — keeping existing _rt_log')
             return False, None, None
+        # GUARD: if more fills are rejected than accepted, the ownership data
+        # (_all_placed_order_ids) is incomplete — bot was loaded from disk after
+        # the cumulative-fix went live but its on-disk list was already wiped
+        # by previous overwrites. Committing a partial rebuild here wipes the
+        # RT log to garbage. Fall back to position-based realized sync instead;
+        # _rt_log stays as bot's running record.
+        if _rejected > len(ticker_fills):
+            print(f'🔍 RT REBUILD GUARD: {bot_id} rejected ({_rejected}) > accepted ({len(ticker_fills)}) — ownership data stale, skipping rebuild to protect existing RT log')
+            bot_log('APEX_MM_RT_REBUILD_GUARD', bot_id, {
+                'considered': len(ticker_all), 'accepted': len(ticker_fills),
+                'rejected': _rejected, 'reason': 'stale_ownership',
+            }, level='WARN')
+            return False, None, None
 
         net_y, total_y_cost = 0.0, 0.0
         net_n, total_n_cost = 0.0, 0.0

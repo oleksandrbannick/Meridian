@@ -6357,7 +6357,14 @@ function buildScoreBadgeHtml(gs, size = 'normal') {
     const away = gs.away_score ?? 0;
     const home = gs.home_score ?? 0;
     const detail = gs.status_detail || '';
-    const isLive = detail && !detail.toLowerCase().includes('final');
+    // Trust gs.status when present — match-ending statuses (retired/walkover/
+    // defaulted) used to slip through as "live" because detail wasn't "final",
+    // producing red-dot LIVE badges for matches that never started or are over.
+    const _detailLower = detail.toLowerCase();
+    const _matchOverDetail = ['final','retired','walkover','defaulted','cancelled','postponed'].some(s => _detailLower.includes(s));
+    const isLive = gs.status
+        ? (gs.status === 'in' && !_matchOverDetail)
+        : (detail && !_matchOverDetail);
 
     if (size === 'compact') {
         // Tiny pill for individual bot rows

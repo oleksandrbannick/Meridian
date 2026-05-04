@@ -993,7 +993,12 @@ def get_markets():
         # those false positives.
         _live_tennis_pairs = set()
         for _tm in (_api_tennis_cache.get('data') or []):
-            if _tm.get('event_live') == '1' or (_tm.get('event_status') or '').lower() in ('interrupted', 'break time'):
+            _ts_lower = (_tm.get('event_status') or '').lower()
+            # Skip match-ending statuses even if event_live='1' is still stale —
+            # retired/walkover/defaulted means the match is over, not in progress.
+            if _ts_lower in ('retired', 'walkover', 'defaulted'):
+                continue
+            if _tm.get('event_live') == '1' or _ts_lower in ('interrupted', 'break time'):
                 _c1 = _tennis_player_code(_tm.get('event_first_player', '') or '')
                 _c2 = _tennis_player_code(_tm.get('event_second_player', '') or '')
                 if _c1 and _c2:
@@ -2240,10 +2245,15 @@ def _fetch_api_tennis_scoreboard(tour_filter):
         result_str = m.get('event_final_result', '') or '-'
         winner = m.get('event_winner', '')
 
-        if is_live:
+        # Match-ending statuses always mean the match is OVER, even when API
+        # Tennis still has event_live='1' set (the live flag goes stale for
+        # several minutes after a retirement / walkover / default).
+        if status_str in ('retired', 'walkover', 'defaulted'):
+            state = 'post'
+        elif is_live:
             state = 'in'
-        elif status_str in ('interrupted', 'break time', 'retired', 'walkover', 'defaulted'):
-            # Match in progress but on break/interrupted — treat as live
+        elif status_str in ('interrupted', 'break time'):
+            # Match in progress but on break — treat as live
             state = 'in'
         elif winner or 'finished' in status_str:
             state = 'post'
@@ -9166,7 +9176,10 @@ def _get_game_score_for_ticker(ticker: str) -> dict:
                 _is_live = _tm.get('event_live') == '1'
                 _status_str = (_tm.get('event_status') or '').lower()
                 _winner = _tm.get('event_winner', '')
-                if _is_live or _status_str in ('interrupted', 'break time'):
+                # Match-ending statuses override stale event_live='1'
+                if _status_str in ('retired', 'walkover', 'defaulted'):
+                    _state = 'post'
+                elif _is_live or _status_str in ('interrupted', 'break time'):
                     _state = 'in'
                 elif _winner or 'finished' in _status_str:
                     _state = 'post'

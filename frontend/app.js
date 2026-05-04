@@ -8674,9 +8674,17 @@ async function loadBots() {
                 mm_depth_pulled:        '📊 PULLED',
                 mm_exiting:             '🚪 EXITING',
             }[bot.status] || (bot.status || '').replace(/_/g, ' ').toUpperCase();
-            const phase       = bot.game_phase || 'pregame';
-            const phaseIcon   = phase === 'live' ? '🔴' : '⏳';
-            const phaseLabel  = phase === 'live' ? 'LIVE' : 'PRE';
+            // Live detection mirrors the group header (line 8512) so the per-bot
+            // PRE/LIVE button can't disagree with it. bot.game_phase alone goes
+            // stale and used to produce cards that simultaneously read "🔴 LIVE"
+            // (group header) and "⏳ PRE" (this button) for the same game.
+            const _botGsForPhase = gameScores[gameKey] || {};
+            const _isGameLiveNow = _botGsForPhase.status === 'in'
+                || bot.game_phase === 'live'
+                || (bot.live_yes_bid > 0 && bot.live_no_bid > 0);
+            const phase       = _isGameLiveNow ? 'live' : (bot.game_phase || 'pregame');
+            const phaseIcon   = _isGameLiveNow ? '🔴' : '⏳';
+            const phaseLabel  = _isGameLiveNow ? 'LIVE' : 'PRE';
             const statusClass = {
                 both_posted:    'monitoring',
                 fav_posted:     'monitoring',   // keep for legacy

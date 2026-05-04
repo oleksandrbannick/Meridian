@@ -26360,6 +26360,23 @@ def get_active_positions():
                 # Live orphan detection: compare position qty vs bot-managed qty
                 _managed = sum(mb['qty'] for mb in _breakdown_list(ticker, side))
                 _orphan_qty = max(0, abs_qty - _managed)
+                # False-orphan suppression for Apex MM:
+                # The bot's net_yes/net_no tracking can lag mid-trip (WS event in
+                # flight, partial fill residual not yet booked). When that happens,
+                # Kalshi has N contracts on a side that the bot's tracking shows as
+                # 0 — _orphan_qty looks > 0 even though the bot IS responsible for
+                # the position via continuous two-sided quoting. Per project memory,
+                # bots never disappear while holding contracts, so an active apex_mm
+                # for this ticker = supervised, regardless of side-count mismatch.
+                # Real orphans are caught when the apex_mm bot has been purged from
+                # active_bots entirely.
+                if _orphan_qty > 0 and any(
+                    isinstance(_b, dict)
+                    and _b.get('ticker') == ticker
+                    and _b.get('type') == 'apex_mm'
+                    for _b in active_bots.values()
+                ):
+                    _orphan_qty = 0
                 orphan_info = {'orphaned_qty': _orphan_qty} if _orphan_qty > 0 else {}
                 # Parse team matchup from ticker for cleaner display
                 _parts = ticker.split('-')

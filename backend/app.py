@@ -11137,16 +11137,41 @@ def _apex_mm_reconstruct_rt_log_from_fills(bot_id, bot):
     Why we can do this: Apex MM only ever issues 'buy' orders (entries on either
     side, exits expressed as buy on the opposite side). Order of buys determines
     the RT structure: a 'buy NO' while long YES = exit (close YES, RT row); a
-    'buy NO' while flat or short YES = entry (add NO inventory, no RT)."""
+    'buy NO' while flat or short YES = entry (add NO inventory, no RT).
+
+    CRITICAL: filter fills to ONLY orders this bot placed. /fills is account-wide
+    per ticker, so a previous phantom or apex bot's fills on the same ticker
+    would otherwise be reconstructed as this bot's RTs — observed bug where a
+    brand-new Apex MM with 0 minutes uptime showed 3 RTs from the prior phantom."""
     ticker = bot.get('ticker', '')
     if not ticker:
+        return False, None, None
+    # Build ownership filter from this bot's tracked order IDs (historical +
+    # currently-live). Without this, fills from a prior bot on the same ticker
+    # get attributed to this bot.
+    _own_oids = set(bot.get('_all_placed_order_ids', []) or [])
+    for _side in ('yes', 'no'):
+        _eo = bot.get(f'_{_side}_exit_oid')
+        if _eo:
+            _own_oids.add(_eo)
+        for _lvl in (bot.get(f'{_side}_orders', {}) or {}).values():
+            _oid = _lvl.get('oid') if isinstance(_lvl, dict) else None
+            if _oid:
+                _own_oids.add(_oid)
+    if not _own_oids:
+        # Bot has placed no orders yet → nothing to reconstruct. Caller falls
+        # back to the position-based realized sync.
         return False, None, None
     if not api_read_limiter.try_wait():
         return False, None, None  # rate-limited
     try:
         resp = kalshi_client.get_fills(ticker=ticker, limit=500)
         fills = resp.get('fills', resp.get('trades', [])) if isinstance(resp, dict) else []
-        ticker_fills = [f for f in fills if f.get('ticker') == ticker]
+        # Filter to this ticker AND order_ids this bot placed.
+        ticker_fills = [
+            f for f in fills
+            if f.get('ticker') == ticker and f.get('order_id') in _own_oids
+        ]
         # Sort chronologically (oldest first)
         ticker_fills.sort(key=lambda f: f.get('created_time') or f.get('timestamp') or 0)
         if not ticker_fills:

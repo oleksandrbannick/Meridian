@@ -8514,12 +8514,12 @@ async function loadBots() {
             if (groupBots.length === 0) return;
             const sampleBot = bots[groupBots[0]];
             const groupMatchup = formatBotDisplayName(sampleBot.ticker, '', sampleBot.market_title || '').split('·')[0].split('—')[0].trim();
-            // Live detection: use game_scores from backend OR Kalshi-native live detection
+            // Trust the scoreboard signal alone. The previous OR fallback to
+            // bot.game_phase / live_yes_bid let stale flags keep the group
+            // header stuck on LIVE even after the match ended (or before it
+            // started), producing headers that read LIVE + PREGAME together.
             const groupGameScore = gameScores[gameKey] || {};
-            const groupIsLive = groupGameScore.status === 'in' || groupBots.some(id => {
-                const b = bots[id];
-                return b.game_phase === 'live' || (b.live_yes_bid > 0 && b.live_no_bid > 0);
-            });
+            const groupIsLive = groupGameScore.status === 'in';
             const groupPhase = groupIsLive ? '🔴 LIVE' : (groupGameScore.status === 'post' ? '✅ FINAL' : '⏳ PRE');
             const groupProfitTotal = groupBots.reduce((sum, id) => {
                 const b = bots[id];
@@ -8681,15 +8681,11 @@ async function loadBots() {
                 mm_depth_pulled:        '📊 PULLED',
                 mm_exiting:             '🚪 EXITING',
             }[bot.status] || (bot.status || '').replace(/_/g, ' ').toUpperCase();
-            // Live detection mirrors the group header (line 8512) so the per-bot
-            // PRE/LIVE button can't disagree with it. bot.game_phase alone goes
-            // stale and used to produce cards that simultaneously read "🔴 LIVE"
-            // (group header) and "⏳ PRE" (this button) for the same game.
+            // Mirror groupIsLive — single source of truth so the per-bot PRE/LIVE
+            // button can't contradict the group header.
             const _botGsForPhase = gameScores[gameKey] || {};
-            const _isGameLiveNow = _botGsForPhase.status === 'in'
-                || bot.game_phase === 'live'
-                || (bot.live_yes_bid > 0 && bot.live_no_bid > 0);
-            const phase       = _isGameLiveNow ? 'live' : (bot.game_phase || 'pregame');
+            const _isGameLiveNow = _botGsForPhase.status === 'in';
+            const phase       = _isGameLiveNow ? 'live' : 'pregame';
             const phaseIcon   = _isGameLiveNow ? '🔴' : '⏳';
             const phaseLabel  = _isGameLiveNow ? 'LIVE' : 'PRE';
             const statusClass = {

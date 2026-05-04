@@ -11933,7 +11933,13 @@ def _apex_mm_cycle_reset(bot_id, bot):
             _oid = _lvl.get('oid')
             if _oid:
                 _current_oids.add(_oid)
-    bot['_all_placed_order_ids'] = list(_current_oids)
+    # CUMULATIVE — merge new with existing, never wipe. The /fills RT rebuild
+    # uses this list to attribute fills back to this bot; clearing it caused
+    # all historical fills to be rejected as "not_own_order_id" and the rebuild
+    # to wipe the RT log to 0 RTs / 0c realized.
+    _existing = set(bot.get('_all_placed_order_ids', []) or [])
+    _existing.update(_current_oids)
+    bot['_all_placed_order_ids'] = list(_existing)
     bot['_counted_order_fills'] = {}
     # Snapshot P&L at cycle start — used to detect losing cycles for smart mode
     bot['_cycle_start_pnl'] = bot.get('realized_pnl_cents', 0)
@@ -12058,7 +12064,10 @@ def _apex_mm_fresh_ladder(bot_id, bot):
             _oid = _lvl.get('oid')
             if _oid:
                 _current_oids.add(_oid)
-    bot['_all_placed_order_ids'] = list(_current_oids)
+    # CUMULATIVE — see APEX_MM_CYCLE_RESET. /fills RT rebuild needs lifetime oids.
+    _existing = set(bot.get('_all_placed_order_ids', []) or [])
+    _existing.update(_current_oids)
+    bot['_all_placed_order_ids'] = list(_existing)
     bot['_counted_order_fills'] = {}
     bot['_cycle_start_pnl'] = bot.get('realized_pnl_cents', 0)
     save_state()
@@ -12417,7 +12426,10 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
                 _o = _lv.get('oid')
                 if _o:
                     _live_oids.add(_o)
-        bot['_all_placed_order_ids'] = list(_live_oids)
+        # CUMULATIVE — see APEX_MM_CYCLE_RESET. /fills RT rebuild needs lifetime oids.
+        _existing_rf = set(bot.get('_all_placed_order_ids', []) or [])
+        _existing_rf.update(_live_oids)
+        bot['_all_placed_order_ids'] = list(_existing_rf)
         _old_counted = bot.get('_counted_order_fills', {})
         bot['_counted_order_fills'] = {k: v for k, v in _old_counted.items() if k in _live_oids}
 
@@ -12582,8 +12594,10 @@ def _apex_mm_begin_exit_inner(bot_id, bot, reason):
             }, level='ERROR')
             # Fall through to the else branch below to post exit sell
 
-        # NOW safe to clear tracking — Kalshi check has caught any in-flight fills
-        bot['_all_placed_order_ids'] = []
+        # NOW safe to clear tracking — Kalshi check has caught any in-flight fills.
+        # NOTE: keep _all_placed_order_ids (cumulative) intact — the /fills RT
+        # rebuild needs lifetime oids to correctly attribute historical fills.
+        # Only clear _counted_order_fills (the per-cycle dedup state).
         bot['_counted_order_fills'] = {}
 
         if net_yes == 0 and net_no == 0:

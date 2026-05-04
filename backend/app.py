@@ -19273,8 +19273,6 @@ def _run_monitor():
                 continue
             if _sc_bot.get('_market_settled_at'):
                 continue
-            if _sc_bot.get('_smart_stop_reason') == 'manual' and _sc_bot.get('status') != 'awaiting_settlement':
-                continue  # manually stopped — don't auto-mark as settled (except awaiting_settlement which always waits)
             if _settle_check_now - _sc_bot.get('_last_settle_check_global', 0) < 60:
                 continue
             _sc_bot['_last_settle_check_global'] = _settle_check_now
@@ -19308,7 +19306,6 @@ def _run_monitor():
                       if (b.get('status') == 'cancelled'
                           and (b.get('cancelled_at') or 0) < _purge_cutoff)
                       or (b.get('status') in ('completed', 'stopped')
-                          and b.get('_smart_stop_reason') != 'manual'
                           and b.get('_market_settled_at', 0) > 0
                           and b['_market_settled_at'] < _purge_cutoff)
                       ]

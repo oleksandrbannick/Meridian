@@ -3900,11 +3900,16 @@ class RateLimiter:
     """Sliding-window rate limiter — caps at `burst` requests per ROLLING 1-second
     window. Matches Kalshi's enforcement (fixed-reset limiters overshoot at window
     boundaries: 30 fired at t=0.05 + 30 at t=1.05 = 60 in Kalshi's rolling view → 429).
-    Reserves 2 tokens for priority hedge operations."""
+    Optionally reserves N tokens for priority operations (writes/hedges).
+
+    For reads, priority reservation is unnecessary (no fast-path reads need to
+    bypass other reads), so the read limiter uses reserve_for_priority=False
+    and gets the full burst budget."""
     RESERVED_HEDGE_TOKENS = 2
 
-    def __init__(self, burst: int = 10):
+    def __init__(self, burst: int = 10, reserve_for_priority: bool = True):
         self.burst = burst
+        self._reserve_for_priority = reserve_for_priority
         self._times = deque()  # timestamps of granted calls within last 1s
         self._lock = threading.Lock()
         self._total_calls = 0
@@ -3939,7 +3944,10 @@ class RateLimiter:
             with self._lock:
                 now = time.time()
                 self._prune(now)
-                effective_burst = self.burst if priority else (self.burst - self.RESERVED_HEDGE_TOKENS)
+                if self._reserve_for_priority:
+                    effective_burst = self.burst if priority else (self.burst - self.RESERVED_HEDGE_TOKENS)
+                else:
+                    effective_burst = self.burst
                 if len(self._times) < effective_burst:
                     self._grant(now)
                     return
@@ -3953,14 +3961,17 @@ class RateLimiter:
         with self._lock:
             now = time.time()
             self._prune(now)
-            effective_burst = self.burst - self.RESERVED_HEDGE_TOKENS
+            if self._reserve_for_priority:
+                effective_burst = self.burst - self.RESERVED_HEDGE_TOKENS
+            else:
+                effective_burst = self.burst
             if len(self._times) < effective_burst:
                 self._grant(now)
                 return True
             return False
 
-api_rate_limiter = RateLimiter(burst=27)  # Kalshi advanced tier: 30 writes/s — 27 = 10% safety margin for rolling-window jitter
-api_read_limiter = RateLimiter(burst=27)  # Kalshi advanced tier: 30 reads/s — 27 = 10% safety margin for rolling-window jitter
+api_rate_limiter = RateLimiter(burst=27)  # Kalshi advanced tier: 30 writes/s — 27 = 10% margin, reserves 2 for priority hedge writes
+api_read_limiter = RateLimiter(burst=29, reserve_for_priority=False)  # 30 reads/s tier; 29 = 1-token margin; reads have no priority concept so full budget available to all consumers (was 25 effective due to inherited priority-reserve, causing reconcile starvation)
 
 # ── 429 Rate Limit Tracking (read / write / hedge split) ──
 _rate_limit_hits = 0

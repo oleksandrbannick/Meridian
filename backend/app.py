@@ -11116,24 +11116,144 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
         _apex_mm_amend_exit_lock.release()
 
 
-def _apex_mm_pnl_sync(bot_id, bot):
-    """Ground bot's realized_pnl_cents to Kalshi's authoritative number.
-    Called periodically (60s cadence in monitor) AND after every round trip
-    (per-RT cadence) so the displayed P&L stays close to reality and doesn't
-    drift dollars between syncs. Without this, cost-basis sanitize events
-    (avg→clamp) and partial-fill accounting cause drift — bot books artificial
-    profits because avg_held was rewritten or fill counts were aggregated.
+def _apex_mm_reconstruct_rt_log_from_fills(bot_id, bot):
+    """Rebuild bot._rt_log from Kalshi /fills as source of truth. Walks fills
+    chronologically with rolling avg-cost accounting; each fill that NETS toward
+    zero (closes opposite-side inventory) becomes an RT row with prices/qty/pnl
+    derived from actual Kalshi data — NOT from bot tracking which can drift due
+    to partial fills, missed WS events, or cancel-races.
 
-    Writes a synthetic mm_pnl_sync trade row for the drift so daily P&L /
-    calendar stays bounded to Kalshi reality. Per-RT detail still lives in
-    trades.jsonl + _rt_log."""
+    Returns (success, rt_log, realized_pnl_cents). Caller writes back if success.
+
+    Why we can do this: Apex MM only ever issues 'buy' orders (entries on either
+    side, exits expressed as buy on the opposite side). Order of buys determines
+    the RT structure: a 'buy NO' while long YES = exit (close YES, RT row); a
+    'buy NO' while flat or short YES = entry (add NO inventory, no RT)."""
+    ticker = bot.get('ticker', '')
+    if not ticker:
+        return False, None, None
+    if not api_read_limiter.try_wait():
+        return False, None, None  # rate-limited
+    try:
+        resp = kalshi_client.get_fills(ticker=ticker, limit=500)
+        fills = resp.get('fills', resp.get('trades', [])) if isinstance(resp, dict) else []
+        ticker_fills = [f for f in fills if f.get('ticker') == ticker]
+        # Sort chronologically (oldest first)
+        ticker_fills.sort(key=lambda f: f.get('created_time') or f.get('timestamp') or 0)
+        if not ticker_fills:
+            return False, None, None
+
+        net_y, total_y_cost = 0.0, 0.0
+        net_n, total_n_cost = 0.0, 0.0
+        rt_log = []
+
+        for f in ticker_fills:
+            side = (f.get('side') or '').lower()
+            action = (f.get('action') or '').lower()
+            if action != 'buy' or side not in ('yes', 'no'):
+                continue  # Apex MM only buys; ignore anything else
+            # Price extraction (cents preferred, fall back to dollars × 100)
+            _p_raw = f.get(f'{side}_price') or f.get('price')
+            if _p_raw is None:
+                _p_d = f.get(f'{side}_price_dollars') or f.get('price_dollars')
+                _p_raw = float(_p_d) * 100 if _p_d is not None else None
+            if _p_raw is None:
+                continue
+            try: price = float(_p_raw)
+            except Exception: continue
+            try: qty = float(f.get('count_fp') or f.get('count') or f.get('quantity') or 0)
+            except Exception: continue
+            if qty <= 0:
+                continue
+            ts = f.get('created_time') or f.get('timestamp') or 0
+
+            # Process: closes opposite inventory first (RT), residual goes to entry.
+            if side == 'yes':
+                # 'buy YES' while holding NO = exit NO
+                if net_n > 1e-9:
+                    close_qty = min(qty, net_n)
+                    avg_no = total_n_cost / net_n if net_n > 1e-9 else 0
+                    pnl = (100 - avg_no - price) * close_qty
+                    rt_log.append({
+                        'entry_price': round(avg_no),
+                        'exit_price': round(price),
+                        'combined': round(avg_no + price),
+                        'qty': round(close_qty, 2),
+                        'pnl': round(pnl, 2),
+                        'timestamp': ts,
+                    })
+                    total_n_cost -= avg_no * close_qty
+                    net_n -= close_qty
+                    qty -= close_qty
+                if qty > 1e-9:
+                    net_y += qty
+                    total_y_cost += price * qty
+            else:  # side == 'no'
+                if net_y > 1e-9:
+                    close_qty = min(qty, net_y)
+                    avg_yes = total_y_cost / net_y if net_y > 1e-9 else 0
+                    pnl = (100 - avg_yes - price) * close_qty
+                    rt_log.append({
+                        'entry_price': round(avg_yes),
+                        'exit_price': round(price),
+                        'combined': round(avg_yes + price),
+                        'qty': round(close_qty, 2),
+                        'pnl': round(pnl, 2),
+                        'timestamp': ts,
+                    })
+                    total_y_cost -= avg_yes * close_qty
+                    net_y -= close_qty
+                    qty -= close_qty
+                if qty > 1e-9:
+                    net_n += qty
+                    total_n_cost += price * qty
+
+        realized = round(sum(rt['pnl'] for rt in rt_log), 2)
+        return True, rt_log, realized
+    except Exception as e:
+        print(f'⚠ APEX MM RT RECONSTRUCT FAIL: {bot_id} {e}')
+        return False, None, None
+
+
+def _apex_mm_pnl_sync(bot_id, bot):
+    """Ground bot's RT log + realized_pnl_cents to Kalshi /fills source of truth.
+    Called periodically (60s) and after every RT.
+
+    NEW behavior (2026-05-04): rebuilds the entire _rt_log from Kalshi /fills
+    chronologically. Each RT row's prices/qty/pnl come from actual Kalshi data,
+    not bot tracking. realized_pnl_cents = sum of reconstructed RTs.
+
+    OLD behavior (deprecated): only synced realized_pnl_cents from Kalshi position
+    and emitted a synthetic mm_pnl_sync ADJ row for the drift. That left _rt_log
+    drifted from reality — Σruns disagreed with Realized by the ADJ amount.
+
+    Falls back to the OLD position-based sync if /fills query fails — never
+    leaves realized_pnl_cents drifted."""
     ticker = bot.get('ticker', '')
     if not ticker:
         return
     bot['_last_pnl_sync'] = time.time()
+
+    # Try the authoritative path: rebuild RT log from /fills
+    ok, new_rt_log, new_realized = _apex_mm_reconstruct_rt_log_from_fills(bot_id, bot)
+    if ok and new_rt_log is not None:
+        old_realized = bot.get('realized_pnl_cents', 0) or 0
+        old_rt_count = len(bot.get('_rt_log', []) or [])
+        bot['_rt_log'] = new_rt_log
+        bot['realized_pnl_cents'] = new_realized
+        bot['round_trips_completed'] = len(new_rt_log)
+        if abs(new_realized - old_realized) > 0.5 or len(new_rt_log) != old_rt_count:
+            print(f'📊 APEX MM RT SYNC: {bot_id} rt_count {old_rt_count}→{len(new_rt_log)} realized {old_realized:.2f}c→{new_realized:.2f}c (rebuilt from /fills)')
+            bot_log('APEX_MM_RT_SYNC', bot_id, {
+                'old_rt_count': old_rt_count, 'new_rt_count': len(new_rt_log),
+                'old_realized': old_realized, 'new_realized': new_realized,
+            })
+        return
+
+    # Fallback: position-based realized sync (no RT rebuild)
     try:
         if not api_read_limiter.try_wait():
-            return  # rate-limited, skip this cycle
+            return
         _pnl_resp = kalshi_client.get_positions(ticker=ticker)
         _pnl_list = _pnl_resp.get('market_positions', _pnl_resp.get('positions', []))
         for _pp in _pnl_list:
@@ -11143,27 +11263,15 @@ def _apex_mm_pnl_sync(bot_id, bot):
             _stored = bot.get('realized_pnl_cents', 0) or 0
             _drift = _ksh_pnl_c - _stored
             if abs(_drift) > 0.5:
-                print(f'📊 APEX MM PNL SYNC: {bot_id} stored={_stored:.2f}c → kalshi={_ksh_pnl_c:.2f}c (drift {_drift:+.2f}c)')
+                print(f'📊 APEX MM PNL SYNC (fallback): {bot_id} stored={_stored:.2f}c → kalshi={_ksh_pnl_c:.2f}c (drift {_drift:+.2f}c)')
                 bot['realized_pnl_cents'] = round(_ksh_pnl_c, 2)
-                bot_log('APEX_MM_PNL_SYNC', bot_id, {
+                bot_log('APEX_MM_PNL_SYNC_FALLBACK', bot_id, {
                     'old_stored': _stored, 'new_stored': _ksh_pnl_c,
                     'drift_cents': _drift,
                 })
-                _drift_pnl = round(_drift, 2)
-                _record_trade({
-                    'bot_id': bot_id, 'ticker': ticker, 'bot_category': 'ladder_arb',
-                    'result': 'mm_pnl_sync', 'exit_via': 'kalshi_drift_sync',
-                    'is_exit': True, 'exit_type': 'drift_sync',
-                    'quantity': 0, 'fee_cents': 0,
-                    'profit_cents': max(0, _drift_pnl),
-                    'loss_cents': abs(min(0, _drift_pnl)),
-                    'net_pnl': _drift_pnl,
-                    'timestamp': time.time(), 'fill_source': 'apex_mm_drift_sync',
-                    'game_phase': bot.get('game_phase', ''),
-                }, bot)
             break
     except Exception:
-        pass  # silent fail — next cadence will retry
+        pass
 
 
 def _apex_mm_verify_exit_health(bot_id, bot, exit_side, held_side):

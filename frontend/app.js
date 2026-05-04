@@ -425,6 +425,7 @@ async function navigateToMarket(eventTickerPrefix) {
 
 // Navigate from Markets tab to Bots tab and scroll/highlight the bot card
 async function navigateToBot(ticker, botType) {
+    console.log('[navigateToBot]', { ticker, botType });
     switchTab('bots');
     // Switch to the correct sub-tab based on bot type
     const subTab = botType === 'phantom' ? 'dog' : botType === 'meridian' ? 'middle' : botType === 'scout' ? 'bets' : 'arb';
@@ -438,12 +439,18 @@ async function navigateToBot(ticker, botType) {
 
     const gameKey = ticker.split('-').length >= 2 ? ticker.split('-')[1] : ticker;
     const findCard = () => {
-        // Prefer stable data attributes when present
+        // Prefer stable data-event-ticker (now set on every phantom + apex card)
         const byTicker = document.querySelector(`[data-event-ticker="${ticker}"]`);
         if (byTicker) return byTicker;
-        // Fallback: substring match on text/html across all bot lists
-        const allCards = document.querySelectorAll('#bots-list > div, #dog-bots-list > div, #middle-bots-list > div, #bets-bots-list > div');
+        // Same-game fallback: any bot card on this game (different sub-market)
+        const allCards = document.querySelectorAll('[data-event-ticker]');
         for (const card of allCards) {
+            const t = card.getAttribute('data-event-ticker') || '';
+            if (gameKey && t.includes(gameKey)) return card;
+        }
+        // Last-resort substring match (covers non-attributed cards e.g. middle/scout)
+        const fallback = document.querySelectorAll('#bots-list > div, #dog-bots-list > div, #middle-bots-list > div, #bets-bots-list > div');
+        for (const card of fallback) {
             const text = card.textContent || '';
             const html = card.innerHTML || '';
             if (html.includes(ticker) || html.includes(gameKey) || text.includes(gameKey)) return card;
@@ -451,16 +458,21 @@ async function navigateToBot(ticker, botType) {
         return null;
     };
 
-    requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-            const card = findCard();
-            if (!card) return;
+    // Try a few paint cycles — switchTab + setBotsTab + render can take time
+    let attempts = 0;
+    const tryFind = () => {
+        const card = findCard();
+        if (card) {
             card.scrollIntoView({ behavior: 'smooth', block: 'center' });
             card.style.transition = 'box-shadow 0.3s';
             card.style.boxShadow = `0 0 20px ${BOT_COLORS[botType] || '#00d4ff'}66, inset 0 0 8px ${BOT_COLORS[botType] || '#00d4ff'}22`;
             setTimeout(() => { card.style.boxShadow = ''; }, 2500);
-        });
-    });
+            return;
+        }
+        if (++attempts < 20) requestAnimationFrame(tryFind);  // up to ~333ms of retries
+        else console.warn('[navigateToBot] no matching card found for', ticker, gameKey);
+    };
+    requestAnimationFrame(tryFind);
 }
 
 // ─── LIVE SCORES ──────────────────────────────────────────────────────────────
@@ -6577,6 +6589,8 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
 
     const item = document.createElement('div');
     item.style.cssText = `background:#0f1419;border:1px solid #ff66aa33;border-left:3px solid ${borderCol};border-radius:12px;padding:14px;margin-bottom:10px;cursor:pointer;`;
+    item.setAttribute('data-bot-id', botId);
+    item.setAttribute('data-event-ticker', bot.ticker || '');
     item.onclick = (e) => { if (!e.target.closest('button') && !e.target.closest('a')) showBotDetail(botId); };
     try {
     item.innerHTML = `
@@ -7335,6 +7349,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const item = document.createElement('div');
     const _borderAccent = isAwaitingSettlement ? '#818cf8' : isCompleted ? (_apexSettled ? '#00ff88' : '#ff8800') : '#00d4ff';
     item.style.cssText = `background:#0c1018;border:1px solid ${_borderAccent}18;border-left:3px solid ${_borderAccent};border-radius:10px;padding:12px;margin-bottom:8px;box-shadow:0 0 12px rgba(0,212,255,0.04);cursor:pointer;`;
+    item.setAttribute('data-bot-id', botId);
+    item.setAttribute('data-event-ticker', bot.ticker || '');
     item.onclick = (e) => { if (!e.target.closest('button') && !e.target.closest('a')) showBotDetail(botId); };
     item.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">

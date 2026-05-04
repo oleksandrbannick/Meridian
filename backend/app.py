@@ -23342,6 +23342,19 @@ def stop_bot(bot_id):
                 # Don't change status — leave as market_making_active so walk_up + WS
                 # snap-up continue running on the held side.
                 print(f'⏹ STOP MM SMART: {bot_id} pulled {_cancelled_se} entry rungs, keeping exit alive')
+            # Thorough cleanup: cancel any historical order groups (orphan rungs from
+            # prior amend chains, etc) but NOT the live exit_oid. Cancelling old
+            # order_groups is no-op if already terminal, but catches anything stale.
+            _live_exit_oids = {bot.get('_yes_exit_oid'), bot.get('_no_exit_oid')} - {None, ''}
+            for _gid_st in list(bot.get('_all_order_group_ids', []) or []):
+                # Skip the current group — it owns the live exit.
+                if _gid_st == bot.get('_order_group_id'):
+                    continue
+                try:
+                    api_rate_limiter.wait()
+                    kalshi_client.cancel_order_group(_gid_st)
+                except Exception:
+                    pass
             if net_yes > 0 or net_no > 0:
                 bot_log('STOP_MM_PENDING', bot_id, {
                     'net_yes': net_yes, 'net_no': net_no,
@@ -23555,7 +23568,7 @@ def release_bot(bot_id):
                                 cancelled_orders.append(f'ladder_{price_key}')
                             except Exception:
                                 pass
-                # Cancel exit sell orders
+                # Cancel exit sell orders (mm_exiting state)
                 for side, sell_data in bot.get('_exit_sell_oids', {}).items():
                     if sell_data.get('oid'):
                         try:
@@ -23564,6 +23577,21 @@ def release_bot(bot_id):
                             cancelled_orders.append(f'exit_{side}')
                         except Exception:
                             pass
+                # Cancel walk_up exit orders (_yes_exit_oid / _no_exit_oid) — these
+                # are the active breakeven exits for held inventory in market_making_
+                # active / mm_depth_pulled states. Group cancellation may not always
+                # catch them if the group is shared with closed orders; explicit
+                # cancellation here closes the gap so Release fully wipes orders.
+                for _exit_side in ('yes', 'no'):
+                    _exit_oid_rel = bot.get(f'_{_exit_side}_exit_oid')
+                    if _exit_oid_rel:
+                        try:
+                            api_rate_limiter.wait()
+                            kalshi_client.cancel_order(_exit_oid_rel)
+                            cancelled_orders.append(f'walkup_exit_{_exit_side}')
+                        except Exception:
+                            pass
+                        bot[f'_{_exit_side}_exit_oid'] = None
 
             else:
                 # Phantom / Apex: cancel dog, fav, yes, no orders

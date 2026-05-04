@@ -7375,7 +7375,11 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
                 <span style="color:${pnlColor};font-weight:800;font-size:13px;">${fmtDollars(totalPnl, {sign:true})}</span>
                 <span style="color:#334;font-size:9px;">${ageStr}</span>
                 ${!isCompleted && !isAwaitingSettlement ? `<button onclick="apexMmModify('${botId}')" style="background:#ff704315;color:#ff7043;border:1px solid #ff704330;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Edit</button>` : ''}
-                ${!bot._smart_stopped && !bot._stop_pending && !bot._smart_stop_pending && !isCompleted && !isAwaitingSettlement ? `<button onclick="stopBot('${botId}')" style="background:#ff880015;color:#ff8800;border:1px solid #ff880030;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Stop</button>` : ''}
+                ${!isCompleted && !isAwaitingSettlement ? (
+                    (bot._smart_stopped || bot._stop_pending || bot._smart_stop_pending)
+                        ? `<button disabled style="background:#ff880030;color:#ff8800;border:1px solid #ff8800;border-radius:5px;padding:3px 7px;font-size:9px;cursor:not-allowed;font-weight:700;animation:apex-stopping-flash 1s ease-in-out infinite;" title="Stop in progress — exit walking to fill, then bot finalizes. Click Release to cancel + dump immediately.">⏸ Stopping…</button>`
+                        : `<button onclick="stopBot('${botId}')" style="background:#ff880015;color:#ff8800;border:1px solid #ff880030;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Stop</button>`
+                ) : ''}
                 ${!isCompleted && !isAwaitingSettlement ? `<button onclick="releaseBot('${botId}')" style="background:#4488ff15;color:#4488ff;border:1px solid #4488ff30;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Release</button>` : ''}
                 ${smartMode > 0 && (bot._smart_stopped || isCompleted || isAwaitingSettlement) ? `<button onclick="restartSmart('${botId}')" style="background:#00d4ff15;color:#00d4ff;border:1px solid #00d4ff30;border-radius:5px;padding:3px 7px;font-size:9px;cursor:pointer;font-weight:700;">Restart</button>` : ''}
                 <button onclick="cancelBot('${botId}')" style="background:#ff444415;color:#ff4444;border:1px solid #ff444430;border-radius:5px;padding:3px 7px;font-size:10px;cursor:pointer;">x</button>

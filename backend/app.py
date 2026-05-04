@@ -5810,9 +5810,16 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
 
                     try:
                         _sh_price_kwarg = {f'{_sh_side}_price': _sh_live}
-                        api_rate_limiter.wait()
+                        # Priority: WS-driven shadow of an active exit — same hot
+                        # path as Phantom's snap. Reserved tokens prevent monitor
+                        # reads from starving the amend.
+                        api_rate_limiter.wait(priority=True)
+                        _sh_t0 = time.time()
                         kalshi_client.amend_order(_sh_oid, ticker=ticker, side=_sh_side,
                                                   count=_sh_qty, action=_sh_action, **_sh_price_kwarg)
+                        try: _record_latency('apex_mm_snap', (time.time() - _sh_t0) * 1000,
+                                             {'kind': 'shadow', 'ticker': ticker})
+                        except Exception: pass
                         _sh_info['price'] = _sh_live
                         _sh_info['posted_at'] = time.time()
                         print(f'👤 APEX MM SHADOW: {bot_id} {_sh_action} {_sh_side.upper()} {_sh_current}→{_sh_live}c')
@@ -5828,6 +5835,28 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
             # See _apex_mm_walk_up for the alone/voluntary-creep branch.
             net_yes = bot.get('net_yes', 0)
             net_no = bot.get('net_no', 0)
+
+            # ── WS-driven midpoint drift reprice (flat-only) ──
+            # When holding inventory, monitor-cycle skew_reprice handles drift —
+            # touching anchors mid-fill is the cancel-race orphan factory we avoid.
+            # Flat ladder + drift ≥ threshold = full reprice via reactor pool.
+            if (APEX_MM_WS_DRIFT_REPRICE and net_yes == 0 and net_no == 0
+                    and yes_bid > 0 and no_bid > 0):
+                _stored_mid = bot.get('midpoint', 0)
+                if _stored_mid > 0:
+                    _live_mid = round((yes_bid + (100 - no_bid)) / 2)
+                    _drift_amt = abs(_live_mid - _stored_mid)
+                    if _drift_amt >= APEX_MM_DRIFT_THRESHOLD:
+                        _now_ts = time.time()
+                        if _now_ts - bot.get('_last_ws_drift_at', 0) >= APEX_MM_WS_DRIFT_COOLDOWN_S:
+                            bot['_last_ws_drift_at'] = _now_ts
+                            bot['_ws_drift_event_ts'] = _now_ts
+                            _apex_mm_reactor_queue.put((_apex_mm_repost_ladder, (bot_id, bot)))
+                            bot_log('APEX_MM_WS_DRIFT', bot_id, {
+                                'stored': _stored_mid, 'live': _live_mid, 'drift': _drift_amt,
+                            })
+                            print(f'⚡ APEX MM WS DRIFT: {bot_id} mid {_stored_mid}→{_live_mid} (Δ{_drift_amt}c) → reactor reprice')
+
             if net_yes <= 0 and net_no <= 0:
                 continue
 
@@ -5864,9 +5893,15 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 continue
             try:
                 price_kwarg = {f'{exit_side}_price': snap_price}
-                api_rate_limiter.wait()
+                # Priority: outbidder match is the Apex MM equivalent of Phantom's
+                # snap-up. Reserved tokens guarantee we beat monitor-cycle reads.
+                api_rate_limiter.wait(priority=True)
+                _snap_t0 = time.time()
                 _amend_resp = kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
                                           count=net_held, action='buy', **price_kwarg)
+                try: _record_latency('apex_mm_snap', (time.time() - _snap_t0) * 1000,
+                                     {'kind': 'snap_up', 'ticker': ticker})
+                except Exception: pass
                 # Kalshi may reassign order_id on amend (amend = cancel+repost internally).
                 # MUST capture the new ID, otherwise the dict tracks a canceled order.
                 _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
@@ -5889,8 +5924,8 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 if '404' in _err_s or 'not found' in _err_s.lower():
                     print(f'🚨 APEX MM WS SNAP 404: {bot_id} exit order gone — RECREATING immediately')
                     bot[f'_{exit_side}_exit_oid'] = None
-                    # NEVER leave held inventory naked — recreate exit in background.
-                    threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, held_side), daemon=True).start()
+                    # NEVER leave held inventory naked — recreate exit via reactor pool.
+                    _apex_mm_reactor_queue.put((_apex_mm_amend_exit, (bot_id, bot, held_side)))
                 elif 'filled' not in _err_s.lower():
                     print(f'⚠ APEX MM WS SNAP-UP FAIL: {bot_id}: {e}')
     finally:
@@ -5947,6 +5982,34 @@ def _snap_worker_loop():
 
 for _i in range(_SNAP_WORKER_COUNT):
     threading.Thread(target=_snap_worker_loop, daemon=True, name=f'snap-worker-{_i}').start()
+
+# ─── Apex MM Reactor: pre-warmed threads for fill reactions + WS drift reprice ──
+# Mirrors the hedge worker design — eliminates per-WS-event threading.Thread spawn
+# overhead. Handles (a) post-fill amend_exit/cycle_refill/refill_entry and (b) WS
+# midpoint-drift reprice. 3 workers because a single fill can dispatch 3 jobs.
+_apex_mm_reactor_queue = _queue_mod.Queue()
+_APEX_MM_REACTOR_COUNT = 3
+
+def _apex_mm_reactor_loop():
+    while True:
+        try:
+            job = _apex_mm_reactor_queue.get()
+            if job is None:
+                break
+            fn, args = job
+            fn(*args)
+        except Exception as e:
+            print(f'⚠ APEX MM REACTOR ERROR: {e}')
+
+for _i in range(_APEX_MM_REACTOR_COUNT):
+    threading.Thread(target=_apex_mm_reactor_loop, daemon=True, name=f'apex-mm-reactor-{_i}').start()
+
+# Kill switch for WS-driven full ladder reprice on midpoint drift. Default ON;
+# flip to False if drift-triggered reposts cause cancel-race orphan spike.
+APEX_MM_WS_DRIFT_REPRICE = True
+# Suppress further WS drift-reprice fires per-bot for this many seconds after one
+# fires. Prevents reactor spam when drift sits above threshold across many ticks.
+APEX_MM_WS_DRIFT_COOLDOWN_S = 2.0
 
 # ─── Phantom Passive Fill Poller ──────────────────────────────────────────────
 # Backup for WS fill events that drop (reconnect, late delivery, packet loss).
@@ -6619,14 +6682,14 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 net_no = bot.get('net_no', 0)
                 if net_yes == 0 and net_no == 0:
                     bot[f'_{matched_side}_exit_oid'] = None
-                    threading.Thread(target=_apex_mm_cycle_refill, args=(bot_id, bot), daemon=True).start()
+                    _apex_mm_reactor_queue.put((_apex_mm_cycle_refill, (bot_id, bot)))
                     print(f'📊 APEX MM FLAT: {bot_id} → cycle refill')
                 elif abs(net_yes - net_no) > 0:
                     # Still holding some — amend exit order with reduced count + refill freed slots
-                    threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, matched_side), daemon=True).start()
+                    _apex_mm_reactor_queue.put((_apex_mm_amend_exit, (bot_id, bot, matched_side)))
                     # Slot-recovery: refill freed entry rung if gates pass
                     if close_qty > 0:
-                        threading.Thread(target=_apex_mm_refill_entry, args=(bot_id, bot, close_qty), daemon=True).start()
+                        _apex_mm_reactor_queue.put((_apex_mm_refill_entry, (bot_id, bot, close_qty)))
 
                 bot_log('APEX_MM_EXIT_FILL', bot_id, {
                     'side': matched_side, 'price': exit_price, 'count': count,
@@ -10514,8 +10577,33 @@ def _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels):
     return total_posted > 0
 
 
+_apex_mm_repost_locks = {}  # bot_id → threading.Lock — serialize WS+monitor reprice per bot
+
 def _apex_mm_repost_ladder(bot_id, bot):
-    """Recalculate midpoint and repost full ladder at fresh prices after OBI recovery."""
+    """Recalculate midpoint and repost full ladder at fresh prices after OBI recovery
+    or WS-driven midpoint drift. Per-bot lock + ws_fill_lock prevents inventory race
+    against the WS fill handler that writes net_yes/net_no concurrently."""
+    # Per-bot non-blocking lock so WS reactor and monitor cycle can't double-fire on
+    # the same bot. Cross-bot fires stay parallel.
+    _bot_lock = _apex_mm_repost_locks.setdefault(bot_id, threading.Lock())
+    if not _bot_lock.acquire(blocking=False):
+        return
+    try:
+        # Drift-event latency: stamped in _ws_apex_mm_tick when drift fires.
+        _drift_evt_ts = bot.pop('_ws_drift_event_ts', None)
+        if _drift_evt_ts is not None:
+            try: _record_latency('apex_mm_drift', (time.time() - _drift_evt_ts) * 1000,
+                                 {'ticker': bot.get('ticker', '')})
+            except Exception: pass
+        # ws_fill_lock (RLock) serializes net_yes/net_no reads against the WS fill
+        # handler. Re-entrant — safe if caller already holds it.
+        with ws_fill_lock:
+            _apex_mm_repost_ladder_inner(bot_id, bot)
+    finally:
+        _bot_lock.release()
+
+
+def _apex_mm_repost_ladder_inner(bot_id, bot):
     ticker = bot['ticker']
     now = time.time()
 
@@ -11145,7 +11233,8 @@ def _apex_mm_walk_up(bot_id, bot):
 
     try:
         price_kwarg = {f'{exit_side}_price': _new_price}
-        api_rate_limiter.wait()
+        # Priority: walk_up of an active exit hedge — same urgency as primary amend.
+        api_rate_limiter.wait(priority=True)
         _amend_resp = kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,
                                   count=net_held, action='buy', **price_kwarg)
         _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
@@ -11258,8 +11347,11 @@ def _apex_mm_refill_entry(bot_id, bot, freed_qty):
 
     # ── Post the refill ──
     try:
-        api_rate_limiter.wait()
-        resp, actual_price = create_order_maker(ticker, held_side, 'buy', refill_qty, refill_price)
+        # Priority: refill fires from the WS reactor pool after a fill — same hot
+        # path as Phantom's hedge post. create_order_maker has its own rate-limiter
+        # wait, so skip_rate_limit avoids a redundant token grab.
+        resp, actual_price = create_order_maker(ticker, held_side, 'buy', refill_qty, refill_price,
+                                                priority=True)
         oid = resp.get('order', {}).get('order_id', '') if isinstance(resp, dict) else ''
         if oid:
             # Track as normal ladder order
@@ -11674,7 +11766,7 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
         _held = 'yes' if net_yes > net_no else 'no'
         print(f'⚠ APEX MM CYCLE REFILL: {bot_id} not flat (Y={net_yes} N={net_no}) — posting exit instead of cycle_reset')
         bot_log('APEX_MM_REFILL_NOT_FLAT', bot_id, {'net_yes': net_yes, 'net_no': net_no})
-        threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _held), daemon=True).start()
+        _apex_mm_reactor_queue.put((_apex_mm_amend_exit, (bot_id, bot, _held)))
         return
 
     # SAFETY: verify Kalshi agrees we're flat before refilling

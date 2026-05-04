@@ -11728,9 +11728,9 @@ function showScanResults(opportunities, minWidth, totalScanned) {
                         <div style="color:${roomColor};font-weight:800;font-size:1.3rem;">${room}¢</div>
                         <div style="color:#6a7488;font-size:10px;">room · W${recW}</div>
                     </div>
-                    <button onclick="quickApexMM('${opp.ticker}', ${Math.floor(recW / 2)}, ${room})"
+                    <button onclick="setupApexFromScan('${opp.ticker}', ${recW})"
                             style="background:linear-gradient(135deg,#00d4ff,#00ff88);color:#000;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-weight:700;font-size:12px;">
-                        📊 Apex MM
+                        △ Set Up
                     </button>
                 </div>
             </div>`;
@@ -11885,6 +11885,25 @@ async function quickBot(ticker, yesPrice, noPrice) {
         }
     } catch (err) {
         showNotification(`❌ Network error: ${err.message}`);
+    }
+}
+
+// Scanner → standard Apex creation form. Closes scanner, opens the bot modal
+// with this market preloaded, switches to Apex mode, and prefills the suggested
+// width. User reviews qty/rungs/loss-limit in the familiar form before deploy.
+function setupApexFromScan(ticker, suggestedWidth) {
+    const market = (allMarkets || []).find(m => m && m.ticker === ticker);
+    if (!market) {
+        showNotification(`⚠ Market not loaded: ${ticker} — refresh markets and try again`);
+        return;
+    }
+    closeScanModal();
+    openBotModal(market);
+    setTradeMode('arb');
+    if (Number.isFinite(suggestedWidth) && suggestedWidth >= 2 && suggestedWidth <= 80) {
+        selectMMWidthCustom(suggestedWidth);
+        const cust = document.getElementById('mm-width-custom');
+        if (cust) cust.value = suggestedWidth;
     }
 }
 

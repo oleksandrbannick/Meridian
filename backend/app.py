@@ -6708,13 +6708,24 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     'ts': time.time(), 'is_exit': True,
                 })
 
-                # Check if flat → cycle reset
+                # Check if flat → cycle reset (or finalize pending stop)
                 net_yes = bot.get('net_yes', 0)
                 net_no = bot.get('net_no', 0)
                 if net_yes == 0 and net_no == 0:
                     bot[f'_{matched_side}_exit_oid'] = None
-                    _apex_mm_reactor_queue.put((_apex_mm_cycle_refill, (bot_id, bot)))
-                    print(f'📊 APEX MM FLAT: {bot_id} → cycle refill')
+                    if bot.get('_stop_pending'):
+                        # Smart stop was waiting for this fill — finalize.
+                        bot['status'] = 'stopped'
+                        bot['stopped_at'] = time.time()
+                        bot['_stop_pending'] = False
+                        bot_log('STOP_MM_FINALIZED', bot_id, {
+                            'final_pnl': bot.get('realized_pnl_cents', 0),
+                            'matched_side': matched_side, 'exit_price': exit_price,
+                        })
+                        print(f'⏹ APEX MM STOP FINALIZED: {bot_id} exit filled @{exit_price}c → stopped')
+                    else:
+                        _apex_mm_reactor_queue.put((_apex_mm_cycle_refill, (bot_id, bot)))
+                        print(f'📊 APEX MM FLAT: {bot_id} → cycle refill')
                 elif abs(net_yes - net_no) > 0:
                     # Still holding some — amend exit order with reduced count + refill freed slots
                     _apex_mm_reactor_queue.put((_apex_mm_amend_exit, (bot_id, bot, matched_side)))
@@ -23114,32 +23125,54 @@ def stop_bot(bot_id):
     bot_type = bot.get('type', 'arb')
     bot_cat = bot.get('bot_category', '')
 
-    # ── Apex MM: always handle gracefully (smart mode or not) ──
+    # ── Apex MM: SMART STOP — let current round trip finish ──
+    # Stop = "don't take new positions, but let the existing exit walk to fill".
+    # We pull ENTRY rungs (no new inventory) but keep the live exit_oid + walk_up.
+    # When the exit fills and bot goes flat, it transitions to 'stopped' (handled
+    # in the WS fill handler's flat-check).
+    # For an immediate cancel + dump positions, the user uses Release (which is
+    # the existing _apex_mm_begin_exit / mm_exiting flow).
     if bot_type == 'apex_mm':
         bot['_smart_stopped'] = True
         bot['_smart_stop_reason'] = 'manual'
+        bot['_stop_pending'] = True  # WS fill handler watches this on flat → 'stopped'
         net_yes = bot.get('net_yes', 0)
         net_no = bot.get('net_no', 0)
         if status == 'mm_exiting':
-            # Already exiting — let it finish, just mark as manual stop
+            # Already in the cancel-and-dump flow (Release path) — just let it finish.
             bot_log('STOP_MM_LET_EXIT', bot_id, {'net_yes': net_yes, 'net_no': net_no})
             print(f'⏹ STOP MM — already exiting, letting exit finish: {bot_id}')
             save_state()
-            return jsonify({'success': True, 'mode': 'graceful', 'message': 'Apex MM stopping — letting exit order finish'})
+            return jsonify({'success': True, 'mode': 'graceful', 'message': 'Apex MM stopping — letting exit finish'})
         if status in ('market_making_active', 'mm_depth_pulled'):
+            # Pull entries only — keep exit_oid alive so walk_up can finish the RT.
+            # Held-inventory walk_up fires every monitor cycle and on every WS BBO
+            # tick (per the held-inventory-always-walks fix), so the exit will keep
+            # tracking the bid until it fills.
             if status == 'market_making_active':
-                _apex_mm_pull_all(bot_id, bot, 'stop_manual')
+                _cancelled_se = _apex_mm_pull_entry_rungs(bot_id, bot, 'stop_manual_smart (entries only)')
+                # Don't change status — leave as market_making_active so walk_up + WS
+                # snap-up continue running on the held side.
+                print(f'⏹ STOP MM SMART: {bot_id} pulled {_cancelled_se} entry rungs, keeping exit alive')
             if net_yes > 0 or net_no > 0:
-                _apex_mm_begin_exit(bot_id, bot, 'stop (manual, holding inventory)')
-                bot_log('STOP_MM_EXIT', bot_id, {'net_yes': net_yes, 'net_no': net_no})
-                print(f'⏹ STOP MM → EXITING: {bot_id} holding YES={net_yes} NO={net_no}')
+                bot_log('STOP_MM_PENDING', bot_id, {
+                    'net_yes': net_yes, 'net_no': net_no,
+                    'mode': 'wait_for_exit_fill',
+                })
+                _held_qty = abs(net_yes - net_no)
+                print(f'⏹ STOP MM PENDING: {bot_id} holding YES={net_yes} NO={net_no} — waiting for exit to fill (use Release to cancel + dump)')
+                save_state()
+                return jsonify({
+                    'success': True, 'mode': 'pending',
+                    'message': f'Stop pending — waiting for {_held_qty} contract(s) to exit. Use Release to cancel and dump immediately.',
+                })
             else:
                 bot['status'] = 'stopped'
                 bot['stopped_at'] = time.time()
                 bot_log('STOP_MM_FLAT', bot_id, {'prev_status': status})
-                print(f'⏹ STOP MM: {bot_id} flat — stopped')
-            save_state()
-            return jsonify({'success': True, 'mode': 'graceful', 'message': 'Apex MM stopped' + (' — exiting inventory gracefully' if (net_yes > 0 or net_no > 0) else '')})
+                print(f'⏹ STOP MM: {bot_id} flat — stopped immediately')
+                save_state()
+                return jsonify({'success': True, 'mode': 'graceful', 'message': 'Apex MM stopped (was flat)'})
 
     # ── Smart mode bots (non-MM): delegate to existing smart_stop logic ──
     if bot.get('smart_mode'):

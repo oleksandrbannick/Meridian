@@ -6734,14 +6734,28 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     bot[f'_{matched_side}_exit_oid'] = None
                     if bot.get('_stop_pending'):
                         # Smart stop was waiting for this fill — finalize.
-                        bot['status'] = 'stopped'
-                        bot['stopped_at'] = time.time()
-                        bot['_stop_pending'] = False
-                        bot_log('STOP_MM_FINALIZED', bot_id, {
-                            'final_pnl': bot.get('realized_pnl_cents', 0),
-                            'matched_side': matched_side, 'exit_price': exit_price,
-                        })
-                        print(f'⏹ APEX MM STOP FINALIZED: {bot_id} exit filled @{exit_price}c → stopped')
+                        # KALSHI-TRUTH GATE: bot tracking can diverge from Kalshi
+                        # (logged divergence cases all session: NYMLAA, LEW, MBCHEI).
+                        # If bot says flat but Kalshi has held inventory, transitioning
+                        # to stopped here orphans those positions. Verify with /positions
+                        # before declaring stopped; if Kalshi disagrees, leave _stop_pending
+                        # set so walk_up keeps working the recovered exit.
+                        if _apex_mm_kalshi_truly_flat(bot_id, bot):
+                            bot['status'] = 'stopped'
+                            bot['stopped_at'] = time.time()
+                            bot['_stop_pending'] = False
+                            bot_log('STOP_MM_FINALIZED', bot_id, {
+                                'final_pnl': bot.get('realized_pnl_cents', 0),
+                                'matched_side': matched_side, 'exit_price': exit_price,
+                            })
+                            print(f'⏹ APEX MM STOP FINALIZED: {bot_id} exit filled @{exit_price}c → stopped (kalshi-confirmed flat)')
+                        else:
+                            # Kalshi still shows inventory — defer the transition.
+                            # Force reconcile next tick to rebuild bot tracking from
+                            # Kalshi truth; that will re-post an exit and let walk_up
+                            # finish the actual close.
+                            bot['_last_reconcile'] = 0
+                            print(f'⏹ APEX MM STOP DEFERRED: {bot_id} bot tracking flat but Kalshi has held — staying supervised (forced reconcile)')
                     else:
                         _apex_mm_reactor_queue.put((_apex_mm_cycle_refill, (bot_id, bot)))
                         print(f'📊 APEX MM FLAT: {bot_id} → cycle refill')
@@ -11175,6 +11189,42 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
         })
     finally:
         _apex_mm_amend_exit_lock.release()
+
+
+def _apex_mm_kalshi_truly_flat(bot_id, bot):
+    """REST-verify Kalshi shows truly flat (0 position, ignoring sub-1 fractional
+    residues that get parsed to 0 anyway). Returns True only if Kalshi confirms
+    flat. On rate-limit or exception, returns False (conservative — don't risk
+    declaring stopped when Kalshi might still hold inventory).
+
+    Used as a gate before any flat→stopped/completed transition. Without this,
+    bot tracking divergence (very common per session logs) caused bots to
+    transition to stopped while Kalshi still held positions → orphans."""
+    ticker = bot.get('ticker', '')
+    if not ticker:
+        return True
+    if not api_read_limiter.try_wait():
+        print(f'🛡️ FLAT GATE SKIP: {bot_id} rate-limited — defaulting to NOT-flat (conservative)')
+        return False
+    try:
+        resp = kalshi_client.get_positions(ticker=ticker)
+        plist = resp.get('market_positions', resp.get('positions', []))
+        for p in plist:
+            if p.get('ticker') == ticker:
+                qty = abs(_parse_position_qty(p))
+                if qty >= 1:
+                    print(f'🛡️ FLAT GATE: {bot_id} Kalshi shows {qty} contracts on {ticker} — NOT flat, aborting transition')
+                    bot_log('APEX_MM_FLAT_GATE_BLOCKED', bot_id, {
+                        'ticker': ticker, 'kalshi_qty': qty,
+                        'bot_net_yes': bot.get('net_yes', 0),
+                        'bot_net_no': bot.get('net_no', 0),
+                    }, level='WARN')
+                    return False
+                break
+        return True
+    except Exception as e:
+        print(f'⚠ FLAT GATE FAIL: {bot_id} {e} — defaulting to NOT-flat (conservative)')
+        return False
 
 
 def _apex_mm_reconstruct_rt_log_from_fills(bot_id, bot):
@@ -23412,12 +23462,25 @@ def stop_bot(bot_id):
                     'message': f'Stop pending — waiting for {_held_qty} contract(s) to exit. Use Release to cancel and dump immediately.',
                 })
             else:
-                bot['status'] = 'stopped'
-                bot['stopped_at'] = time.time()
-                bot_log('STOP_MM_FLAT', bot_id, {'prev_status': status})
-                print(f'⏹ STOP MM: {bot_id} flat — stopped immediately')
-                save_state()
-                return jsonify({'success': True, 'mode': 'graceful', 'message': 'Apex MM stopped (was flat)'})
+                # KALSHI-TRUTH GATE: don't trust bot tracking alone before declaring stopped.
+                # If Kalshi shows held inventory, leave _stop_pending=True and let walk_up
+                # work the recovered exit (next reconcile will pull cost basis from /fills).
+                if _apex_mm_kalshi_truly_flat(bot_id, bot):
+                    bot['status'] = 'stopped'
+                    bot['stopped_at'] = time.time()
+                    bot_log('STOP_MM_FLAT', bot_id, {'prev_status': status})
+                    print(f'⏹ STOP MM: {bot_id} flat — stopped immediately (kalshi-confirmed)')
+                    save_state()
+                    return jsonify({'success': True, 'mode': 'graceful', 'message': 'Apex MM stopped (was flat)'})
+                else:
+                    bot['_last_reconcile'] = 0  # force reconcile to rebuild from kalshi truth
+                    bot_log('STOP_MM_DEFERRED', bot_id, {'reason': 'kalshi_has_inventory'}, level='WARN')
+                    print(f'⏹ STOP MM DEFERRED: {bot_id} bot tracking flat but Kalshi has held — staying supervised, exit will walk to fill')
+                    save_state()
+                    return jsonify({
+                        'success': True, 'mode': 'pending',
+                        'message': 'Stop pending — Kalshi shows held inventory the bot lost track of. Exit will walk to fill.',
+                    })
 
     # ── Smart mode bots (non-MM): delegate to existing smart_stop logic ──
     if bot.get('smart_mode'):

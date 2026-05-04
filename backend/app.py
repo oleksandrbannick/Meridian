@@ -5864,7 +5864,9 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                         print(f'👤 APEX MM SHADOW: {bot_id} {_sh_action} {_sh_side.upper()} {_sh_current}→{_sh_live}c')
                     except Exception as _sh_e:
                         _sh_err = str(_sh_e)
-                        if '404' not in _sh_err and 'filled' not in _sh_err.lower():
+                        if 'AMEND_ORDER_NO_OP' in _sh_err or 'no_op' in _sh_err.lower():
+                            pass  # benign — Kalshi rejects no-op amends; tracking already updated
+                        elif '404' not in _sh_err and 'filled' not in _sh_err.lower():
                             print(f'⚠ APEX MM SHADOW FAIL: {bot_id} {_sh_side}: {_sh_e}')
                 continue  # mm_exiting bots skip stop-loss/snap-down
 
@@ -5989,6 +5991,9 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                     bot[f'_{exit_side}_exit_oid'] = None
                     # NEVER leave held inventory naked — recreate exit via reactor pool.
                     _apex_mm_reactor_queue.put((_apex_mm_amend_exit, (bot_id, bot, held_side)))
+                elif 'AMEND_ORDER_NO_OP' in _err_s or 'no_op' in _err_s.lower():
+                    # benign — Kalshi rejects no-op amend; tracking already updated
+                    pass
                 elif 'filled' not in _err_s.lower():
                     print(f'⚠ APEX MM WS SNAP-UP FAIL: {bot_id}: {e}')
     finally:
@@ -6968,6 +6973,17 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                         bot[f'avg_{matched_side}_cost'] = 0
                         bot[f'total_{matched_side}_cost'] = 0
                     print(f'🧾 INV-CLOSE: {bot_id} matched={matched_side} closed_opp={opposite} qty={close_qty} y {_pre_y_close}→{bot.get("net_yes",0)} n {_pre_n_close}→{bot.get("net_no",0)}')
+                    # RT-CLOSE EXIT-DISPLAY RESET: after a partial RT close, the
+                    # exit's _exit_total_qty / _exit_fill_qty still show cumulative
+                    # state from the original order (e.g. 8/10 filled). The bot
+                    # then amends the exit down to cover only the residual (e.g. 2
+                    # contracts) but the card still reads "8/10 filled". Reset the
+                    # display tracking so the card reflects fresh state for the
+                    # remaining holding (0/2 instead of 8/10).
+                    _remaining_held = abs(bot.get('net_yes', 0) - bot.get('net_no', 0))
+                    if _remaining_held > 0:
+                        bot['_exit_total_qty'] = int(_remaining_held) if _remaining_held == int(_remaining_held) else _remaining_held
+                        bot['_exit_fill_qty'] = 0
 
                 # If ladder RT made us flat, cancel exit order NOW to prevent orphan fills
                 if opp_held > 0 and bot.get('net_yes', 0) == 0 and bot.get('net_no', 0) == 0:
@@ -11201,9 +11217,17 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
                     else:
                         print(f'⚠ APEX MM EXIT RECREATE FAILED: {bot_id} no order_id')
                 except Exception as _re:
-                    print(f'⚠ APEX MM EXIT RECREATE ERROR: {bot_id} {_re}')
+                    _re_s = str(_re)
+                    if 'AMEND_ORDER_NO_OP' in _re_s or 'no_op' in _re_s.lower():
+                        pass  # benign
+                    else:
+                        print(f'⚠ APEX MM EXIT RECREATE ERROR: {bot_id} {_re}')
             else:
-                print(f'⚠ APEX MM AMEND EXIT ERROR: {bot_id} {e}')
+                _amerr_s = str(e)
+                if 'AMEND_ORDER_NO_OP' in _amerr_s or 'no_op' in _amerr_s.lower():
+                    pass  # benign — amend was no-op (same price+count)
+                else:
+                    print(f'⚠ APEX MM AMEND EXIT ERROR: {bot_id} {e}')
 
         bot_log('APEX_MM_AMEND_EXIT', bot_id, {
             'exit_side': exit_side, 'exit_price': exit_price, 'net_held': net_held,
@@ -11660,6 +11684,19 @@ def _apex_mm_walk_up(bot_id, bot):
         _es = str(e)
         if 'filled' in _es.lower():
             print(f'⚡ APEX MM WALK FILLED: {bot_id}')
+        elif 'AMEND_ORDER_NO_OP' in _es or 'no_op' in _es.lower():
+            # Kalshi rejects amends that wouldn't change anything (same price+count).
+            # Benign — order is already at the requested state. Update bot's tracking
+            # to match (the amend was a logical success, just rejected by Kalshi as
+            # redundant) and don't recreate. Was spamming 'WALK FAIL: 400' repeatedly
+            # because walk_up kept asking for the same price every monitor tick.
+            old_price = current_price
+            bot['_exit_price'] = _new_price  # update tracking anyway
+            bot['_last_walk_at'] = now       # mark as walked (no-op = success-equivalent)
+            # Silent skip — log only once at debug-info level via bot_log for visibility
+            bot_log('APEX_MM_WALK_NOOP', bot_id, {
+                'price': _new_price, 'note': 'amend_was_redundant',
+            })
         elif '404' in _es or 'not found' in _es.lower() or '409' in _es or 'conflict' in _es.lower():
             # 404 = order gone; 409 = order in non-amendable state (already canceled,
             # executed, or stuck mid-amend). Both mean "this OID is dead, recreate".

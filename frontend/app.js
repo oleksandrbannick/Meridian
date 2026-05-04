@@ -8212,6 +8212,10 @@ async function loadBots() {
         // Within-group sort priority: lower = more urgent (floats to top)
         // Tier 1: hedge-in-flight. Tier 2: live posting. Tier 3: paused. Tier 4: terminal.
         function _getStatePriority(b) {
+            // Apex MM cycles between Active/Exiting on every fill — urgency-tier
+            // sort caused cards to rotate constantly. Collapse to one tier so Apex
+            // cards sort by created_at only and stay in stable order.
+            if (b && b.bot_category === 'ladder_arb') return 2;
             const l = _getBotDotLabel(b);
             if (l === 'Hedging' || l === 'Exiting') return 1;
             if (l === 'Anchor'  || l === 'Active')  return 2;

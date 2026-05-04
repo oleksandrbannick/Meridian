@@ -3256,11 +3256,15 @@ def _smart_mode_should_repeat(bot, cycle_pnl, exit_type=None):
     if bot.get('type') == 'apex_mm':
         total_pnl = bot.get('realized_pnl_cents', 0)
         loss_limit = bot.get('loss_limit_cents', 0)
+        # Baseline captures lifetime P&L at last restart so the SL counts fresh from
+        # zero on restart (previously a bot stopped at -$2 would re-trip immediately).
+        baseline = bot.get('_loss_limit_baseline', 0)
+        cycle_pnl_since_baseline = total_pnl - baseline
         # loss_limit_cents is stored as positive (e.g., 50 = stop after losing 50c)
-        if loss_limit > 0 and total_pnl <= -loss_limit:
+        if loss_limit > 0 and cycle_pnl_since_baseline <= -loss_limit:
             bot['_smart_stopped'] = True
             bot['_smart_stop_reason'] = 'loss_limit'
-            return False, f'loss_limit (pnl={total_pnl}c <= -{loss_limit}c)'
+            return False, f'loss_limit (cycle_pnl={cycle_pnl_since_baseline}c <= -{loss_limit}c, lifetime={total_pnl}c)'
         # Track wins/losses for stats display (but don't stop on consecutive losses)
         if cycle_pnl < 0:
             bot['consecutive_losses'] = bot.get('consecutive_losses', 0) + 1
@@ -5887,16 +5891,26 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 if _stored_mid > 0:
                     _live_mid = round((yes_bid + (100 - no_bid)) / 2)
                     _drift_amt = abs(_live_mid - _stored_mid)
-                    if _drift_amt >= APEX_MM_DRIFT_THRESHOLD:
+                    # Per-side BBO drift catches symmetric widening (mid stable but both sides moved)
+                    _ladder_yb = bot.get('_ladder_yes_bid', 0)
+                    _ladder_nb = bot.get('_ladder_no_bid', 0)
+                    _yes_side_drift = abs(yes_bid - _ladder_yb) if _ladder_yb > 0 else 0
+                    _no_side_drift = abs(no_bid - _ladder_nb) if _ladder_nb > 0 else 0
+                    _max_side_drift = max(_yes_side_drift, _no_side_drift)
+                    _trigger_mid = _drift_amt >= APEX_MM_DRIFT_THRESHOLD
+                    _trigger_side = _max_side_drift >= APEX_MM_SIDE_DRIFT_THRESHOLD
+                    if _trigger_mid or _trigger_side:
                         _now_ts = time.time()
                         if _now_ts - bot.get('_last_ws_drift_at', 0) >= APEX_MM_WS_DRIFT_COOLDOWN_S:
                             bot['_last_ws_drift_at'] = _now_ts
                             bot['_ws_drift_event_ts'] = _now_ts
                             _apex_mm_reactor_queue.put((_apex_mm_repost_ladder, (bot_id, bot)))
+                            _trig = 'mid' if _trigger_mid else 'side'
                             bot_log('APEX_MM_WS_DRIFT', bot_id, {
                                 'stored': _stored_mid, 'live': _live_mid, 'drift': _drift_amt,
+                                'yes_drift': _yes_side_drift, 'no_drift': _no_side_drift, 'trigger': _trig,
                             })
-                            print(f'⚡ APEX MM WS DRIFT: {bot_id} mid {_stored_mid}→{_live_mid} (Δ{_drift_amt}c) → reactor reprice')
+                            print(f'⚡ APEX MM WS DRIFT [{_trig}]: {bot_id} mid {_stored_mid}→{_live_mid} (Δ{_drift_amt}c) yes Δ{_yes_side_drift}c no Δ{_no_side_drift}c → reactor reprice')
 
             # ── WS-driven drift guard (max-bid spike) ──
             # Mirrors monitor-cycle drift guard at APEX_MM_DRIFT_GUARD_BID, but
@@ -9785,6 +9799,7 @@ def create_bot():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 APEX_MM_DRIFT_THRESHOLD = 4        # Reprice ladder if midpoint moves 4+ cents (preserves queue priority on tick-level noise)
+APEX_MM_SIDE_DRIFT_THRESHOLD = 2   # Reprice if EITHER side's BBO drifted 2+ cents — catches symmetric BBO widening that leaves midpoint stable
 APEX_MM_INVENTORY_HYSTERESIS = 10  # Resume quoting side when inv drops this far below limit
 
 
@@ -10913,6 +10928,8 @@ def _apex_mm_repost_ladder_inner(bot_id, bot):
         success = _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
         if success:
             bot['midpoint'] = midpoint
+            bot['_ladder_yes_bid'] = bot.get('live_yes_bid', 0)
+            bot['_ladder_no_bid'] = bot.get('live_no_bid', 0)
             bot['status'] = 'market_making_active'
             bot['posted_at'] = now
             bot_log('APEX_MM_REPOST', bot_id, {'midpoint': midpoint, 'pull_count': bot.get('_pull_count', 0)})
@@ -12036,6 +12053,8 @@ def _apex_mm_cycle_reset(bot_id, bot):
     yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
     _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
     bot['midpoint'] = midpoint
+    bot['_ladder_yes_bid'] = bot.get('live_yes_bid', 0)
+    bot['_ladder_no_bid'] = bot.get('live_no_bid', 0)
     bot['_skew_active'] = False
     bot['_skew_direction'] = ''
     bot['_exit_price'] = 0
@@ -12164,6 +12183,8 @@ def _apex_mm_fresh_ladder(bot_id, bot):
     yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
     _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
     bot['midpoint'] = midpoint
+    bot['_ladder_yes_bid'] = bot.get('live_yes_bid', 0)
+    bot['_ladder_no_bid'] = bot.get('live_no_bid', 0)
     bot['_skew_active'] = False
     bot['_skew_direction'] = ''
     bot['_exit_price'] = 0
@@ -12333,10 +12354,25 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
             return
     stored_midpoint = bot.get('midpoint', 0)
     _drift = abs(live_midpoint - stored_midpoint) if stored_midpoint > 0 else 0
+    # Per-side drift catches symmetric BBO widening (mid stable but both sides moved away)
+    _yb_now = bot.get('live_yes_bid', 0)
+    _nb_now = bot.get('live_no_bid', 0)
+    _ladder_yb = bot.get('_ladder_yes_bid', 0)
+    _ladder_nb = bot.get('_ladder_no_bid', 0)
+    _yes_side_drift = abs(_yb_now - _ladder_yb) if (_ladder_yb > 0 and _yb_now > 0) else 0
+    _no_side_drift = abs(_nb_now - _ladder_nb) if (_ladder_nb > 0 and _nb_now > 0) else 0
+    _max_side_drift = max(_yes_side_drift, _no_side_drift)
+    _trigger_mid = _drift >= APEX_MM_DRIFT_THRESHOLD
+    _trigger_side = _max_side_drift >= APEX_MM_SIDE_DRIFT_THRESHOLD
 
-    # If midpoint drifted or pending edits → cancel all anchors, full repost
-    if _drift >= APEX_MM_DRIFT_THRESHOLD or _has_pending_edit:
-        _reason = f'drift ({stored_midpoint}→{live_midpoint})' if _drift >= APEX_MM_DRIFT_THRESHOLD else 'pending_edit'
+    # If midpoint drifted, side drifted, or pending edits → cancel all anchors, full repost
+    if _trigger_mid or _trigger_side or _has_pending_edit:
+        if _trigger_mid:
+            _reason = f'drift ({stored_midpoint}→{live_midpoint})'
+        elif _trigger_side:
+            _reason = f'side_drift (yes Δ{_yes_side_drift}c, no Δ{_no_side_drift}c)'
+        else:
+            _reason = 'pending_edit'
         print(f'📊 APEX MM REFILL → FULL REPOST: {bot_id} {_reason}')
         # Cancel all remaining orders with fill-check
         _late_fills = 0
@@ -23379,6 +23415,10 @@ def add_runs(bot_id):
         bot['_death_zone_stopped'] = False
         bot['_death_zone_reason'] = None
         bot['consecutive_losses'] = 0
+        # Apex MM: reset SL baseline so the new loss_limit counts fresh from current P&L.
+        # Without this, a bot stopped at -$2 lifetime would re-trip the limit immediately.
+        if bot.get('type') == 'apex_mm':
+            bot['_loss_limit_baseline'] = bot.get('realized_pnl_cents', 0)
         # Cancel any active smart exit trigger to prevent orphans
         if bot.get('_smart_exit_trigger'):
             print(f'🔄 SMART RESTART: {bot_id} clearing smart exit trigger (was: {bot["_smart_exit_trigger"]})')

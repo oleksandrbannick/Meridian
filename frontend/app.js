@@ -6892,7 +6892,7 @@ function _renderDogBotCard(bot, botId, container, gameScores) {
             }
             return html;
         })()}
-        <div style="text-align:right;font-size:9px;color:#444;margin-top:4px;">${bot.created_at ? new Date(bot.created_at * 1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''} · ${ageMin}m</div>
+        <div style="text-align:right;font-size:9px;color:${bot.created_at && new Date(bot.created_at * 1000).toDateString() !== new Date().toDateString() ? '#ff4444' : '#444'};margin-top:4px;${bot.created_at && new Date(bot.created_at * 1000).toDateString() !== new Date().toDateString() ? 'text-shadow:0 0 6px #ff4444cc;font-weight:700;' : ''}" title="${bot.created_at && new Date(bot.created_at * 1000).toDateString() !== new Date().toDateString() ? 'Created on a different day — consider cancelling manually' : ''}">${bot.created_at ? new Date(bot.created_at * 1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''} · ${ageMin}m</div>
         <div style="display:flex;align-items:center;gap:6px;margin-top:2px;">
             <span style="color:#2a3550;font-size:8px;font-family:monospace;">${botId.slice(-12)}</span>
             <button onclick="event.stopPropagation();navigator.clipboard.writeText('${botId}');this.textContent='✓';setTimeout(()=>this.textContent='📋',1000)" style="background:none;border:none;cursor:pointer;font-size:8px;padding:0;color:#2a3550;" title="Copy bot ID">📋</button>
@@ -7700,7 +7700,7 @@ function _renderMiddleBotCard(bot, botId, container, gameScores) {
         </div>
         ${legStatusHtml}
         ${rebalHtml}
-        <div style="text-align:right;font-size:9px;color:#444;margin-top:4px;">${bot.created_at ? new Date(bot.created_at * 1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''} · ${ageMin}m</div>
+        <div style="text-align:right;font-size:9px;color:${bot.created_at && new Date(bot.created_at * 1000).toDateString() !== new Date().toDateString() ? '#ff4444' : '#444'};margin-top:4px;${bot.created_at && new Date(bot.created_at * 1000).toDateString() !== new Date().toDateString() ? 'text-shadow:0 0 6px #ff4444cc;font-weight:700;' : ''}" title="${bot.created_at && new Date(bot.created_at * 1000).toDateString() !== new Date().toDateString() ? 'Created on a different day — consider cancelling manually' : ''}">${bot.created_at ? new Date(bot.created_at * 1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''} · ${ageMin}m</div>
     `;
     container.appendChild(el);
 }
@@ -9426,7 +9426,7 @@ async function loadBots() {
                 })()}
                 ${waitRepeatInfo}
                 ${driftInfo}
-                <div style="text-align:right;font-size:9px;color:#444;margin-top:4px;">${bot.created_at ? new Date(bot.created_at * 1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''} · ${createdMin}m</div>`;
+                <div style="text-align:right;font-size:9px;color:${bot.created_at && new Date(bot.created_at * 1000).toDateString() !== new Date().toDateString() ? '#ff4444' : '#444'};margin-top:4px;${bot.created_at && new Date(bot.created_at * 1000).toDateString() !== new Date().toDateString() ? 'text-shadow:0 0 6px #ff4444cc;font-weight:700;' : ''}" title="${bot.created_at && new Date(bot.created_at * 1000).toDateString() !== new Date().toDateString() ? 'Created on a different day — consider cancelling manually' : ''}">${bot.created_at ? new Date(bot.created_at * 1000).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : ''} · ${createdMin}m</div>`;
             botsList.appendChild(item);
             });  // end groupBots.forEach
         });  // end sortedGameKeys.forEach
@@ -10059,6 +10059,11 @@ async function restartSmart(botId) {
         phantomModify(botId, true);  // true = restart mode
         return;
     }
+    // Apex MM: same pattern — open edit modal with Save & Restart button
+    if (bot && (bot.bot_category === 'apex_mm' || bot.bot_category === 'ladder_arb' || bot.type === 'apex_mm')) {
+        apexMmModify(botId, true);  // true = restart mode
+        return;
+    }
     // Non-phantom: direct restart
     try {
         const resp = await fetch(`${API_BASE}/bot/add-runs/${botId}`, {
@@ -10463,7 +10468,7 @@ async function phantomModifySave(botId, doRestart = false) {
     }
 }
 
-async function apexMmModify(botId) {
+async function apexMmModify(botId, restartMode = false) {
     const bots = window._lastBotsData || {};
     const bot = bots[botId];
     if (!bot) return;
@@ -10479,7 +10484,7 @@ async function apexMmModify(botId) {
         ? '<div style="color:#00e5ff;font-size:10px;margin-bottom:8px;">Pulled — changes apply on next repost</div>'
         : '<div style="color:#ff8800;font-size:10px;margin-bottom:8px;">Holding inventory — changes queued for next cycle</div>';
     const _widths = [2, 4, 6, 8, 10, 15, 20, 30];
-    const _rungs = [3, 5, 7, 10];
+    const _rungs = [2, 3, 4, 5, 7, 10];
     const _autoWidth = !!bot._auto_width;
     const _wBtnStyle = (active) => `width:36px;height:36px;border-radius:50%;background:${active ? '#00d4ff18' : 'transparent'};border:1px solid ${active ? '#00d4ff' : '#1e2740'};color:${active ? '#00d4ff' : '#556'};cursor:pointer;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;`;
     const _rBtnStyle = (active) => `width:36px;height:36px;border-radius:50%;background:${active ? '#ff704318' : 'transparent'};border:1px solid ${active ? '#ff7043' : '#1e2740'};color:${active ? '#ff7043' : '#556'};cursor:pointer;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;`;
@@ -10489,17 +10494,17 @@ async function apexMmModify(botId) {
     const html = `
         <div style="background:#0f1419;border:1px solid #00d4ff30;border-radius:12px;padding:18px;max-width:320px;position:relative;overflow:hidden;">
             <div style="position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,#00d4ff,#ff7043);opacity:0.6;"></div>
-            <div style="color:#00d4ff;font-weight:800;font-size:13px;margin-bottom:4px;letter-spacing:.03em;">△ Edit Apex MM</div>
+            <div style="color:#00d4ff;font-weight:800;font-size:13px;margin-bottom:4px;letter-spacing:.03em;">${restartMode ? '↻ Restart Apex MM' : '△ Edit Apex MM'}</div>
             <div style="color:#8892a6;font-size:11px;margin-bottom:8px;">${formatBotDisplayName(bot.ticker || '', bot.spread_line || '', bot.market_title || '')}</div>
             ${statusNote}
             <div style="margin-bottom:12px;">
                 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
                     <label style="color:#00d4ff;font-size:10px;font-weight:700;letter-spacing:.05em;">WIDTH</label>
-                    <button id="apex-edit-auto-toggle" onclick="(function(b){var cur=b.dataset.on==='1';var next=!cur;b.dataset.on=next?'1':'0';b.style.background=next?'#00ff8822':'transparent';b.style.color=next?'#00ff88':'#556';b.style.borderColor=next?'#00ff88':'#1e2740';b.textContent=next?'AUTO ✓':'AUTO';document.getElementById('apex-edit-auto-width').value=next?'1':'0';})(this)" data-on="${_autoWidth ? '1' : '0'}" style="padding:3px 10px;border-radius:50px;background:${_autoWidth ? '#00ff8822' : 'transparent'};border:1px solid ${_autoWidth ? '#00ff88' : '#1e2740'};color:${_autoWidth ? '#00ff88' : '#556'};cursor:pointer;font-weight:700;font-size:10px;letter-spacing:.05em;">${_autoWidth ? 'AUTO ✓' : 'AUTO'}</button>
+                    <button id="apex-edit-auto-toggle" onclick="(function(b){var cur=b.dataset.on==='1';var next=!cur;b.dataset.on=next?'1':'0';b.style.background=next?'#00ff8822':'transparent';b.style.color=next?'#00ff88':'#556';b.style.borderColor=next?'#00ff88':'#1e2740';b.textContent=next?'AUTO ✓':'AUTO';document.getElementById('apex-edit-auto-width').value=next?'1':'0';if(next){document.querySelectorAll('.ae-w-btn').forEach(x=>x.style.cssText='${_wBtnStyle(false)}');}else{var cw=parseInt(document.getElementById('apex-edit-width').value)||0;document.querySelectorAll('.ae-w-btn').forEach(x=>{if(parseInt(x.textContent)===cw){x.style.cssText='${_wBtnStyle(true)}';}});}})(this)" data-on="${_autoWidth ? '1' : '0'}" style="padding:3px 10px;border-radius:50px;background:${_autoWidth ? '#00ff8822' : 'transparent'};border:1px solid ${_autoWidth ? '#00ff88' : '#1e2740'};color:${_autoWidth ? '#00ff88' : '#556'};cursor:pointer;font-weight:700;font-size:10px;letter-spacing:.05em;">${_autoWidth ? 'AUTO ✓' : 'AUTO'}</button>
                 </div>
                 <input id="apex-edit-auto-width" type="hidden" value="${_autoWidth ? '1' : '0'}">
                 <div style="display:flex;justify-content:space-between;gap:4px;">
-                    ${_widths.map(w => `<button onclick="document.getElementById('apex-edit-width').value=${w};document.getElementById('apex-edit-width-custom').value='';document.querySelectorAll('.ae-w-btn').forEach(b=>b.style.cssText='${_wBtnStyle(false)}');this.style.cssText='${_wBtnStyle(true)}'" class="ae-w-btn" style="${_wBtnStyle(w === curWidth)}">${w}</button>`).join('')}
+                    ${_widths.map(w => `<button onclick="document.getElementById('apex-edit-width').value=${w};document.getElementById('apex-edit-width-custom').value='';document.querySelectorAll('.ae-w-btn').forEach(b=>b.style.cssText='${_wBtnStyle(false)}');this.style.cssText='${_wBtnStyle(true)}';var ab=document.getElementById('apex-edit-auto-toggle');if(ab&&ab.dataset.on==='1'){ab.dataset.on='0';ab.style.background='transparent';ab.style.color='#556';ab.style.borderColor='#1e2740';ab.textContent='AUTO';document.getElementById('apex-edit-auto-width').value='0';}" class="ae-w-btn" style="${_wBtnStyle(w === curWidth && !_autoWidth)}">${w}</button>`).join('')}
                 </div>
                 <div style="display:flex;align-items:center;gap:6px;margin-top:6px;justify-content:center;">
                     <span style="color:#555;font-size:9px;">Custom:</span>
@@ -10547,7 +10552,7 @@ async function apexMmModify(botId) {
                 <input id="apex-edit-loss-limit" type="hidden" value="${curLossLimit}">
             </div>
             <div style="display:flex;gap:8px;">
-                <button onclick="apexMmModifySave('${botId}')" style="flex:1;background:linear-gradient(135deg,#00d4ff,#ff7043);color:#000;border:none;border-radius:50px;padding:10px;font-size:12px;font-weight:800;cursor:pointer;letter-spacing:.03em;box-shadow:0 4px 15px #ff704325;transition:all .2s;">Save</button>
+                <button onclick="apexMmModifySave('${botId}', ${restartMode})" style="flex:1;background:linear-gradient(135deg,#00d4ff,#ff7043);color:#000;border:none;border-radius:50px;padding:10px;font-size:12px;font-weight:800;cursor:pointer;letter-spacing:.03em;box-shadow:0 4px 15px #ff704325;transition:all .2s;">${restartMode ? 'Save & Restart' : 'Save'}</button>
                 <button onclick="document.getElementById('apex-mm-modify-modal').remove()" style="flex:1;background:#1a1f2a;color:#556;border:1px solid #1e2740;border-radius:50px;padding:10px;font-size:12px;cursor:pointer;transition:all .2s;">Cancel</button>
             </div>
         </div>`;
@@ -10565,7 +10570,7 @@ async function apexMmModify(botId) {
     });
 }
 
-async function apexMmModifySave(botId) {
+async function apexMmModifySave(botId, restartMode = false) {
     const width = Math.max(2, Math.min(80, parseInt(document.getElementById('apex-edit-width')?.value) || 8));
     const gap = Math.floor(width / 2);
     const levels = Math.max(1, Math.min(15, parseInt(document.getElementById('apex-edit-levels')?.value) || 7));
@@ -10581,7 +10586,22 @@ async function apexMmModifySave(botId) {
         const data = await resp.json();
         if (data.ok) {
             const applied = data.applied_now ? 'Applied now' : 'Queued for next cycle';
-            showNotification(`Apex MM updated: width ${width}¢ · ${levels} rungs · ${qty}x/rung — ${applied}`);
+            if (restartMode) {
+                // Fire restart after edit — resets SL baseline so new loss-limit counts fresh
+                const rResp = await fetch(`${API_BASE}/bot/add-runs/${botId}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ count: 0 }),
+                });
+                const rData = await rResp.json();
+                if (rData.success) {
+                    showNotification(`Restarted: width ${width}¢ · ${levels} rungs · ${qty}x — fresh SL baseline`, 'success');
+                } else {
+                    showNotification('Edit saved, restart failed: ' + (rData.error || 'unknown'));
+                }
+            } else {
+                showNotification(`Apex MM updated: width ${width}¢ · ${levels} rungs · ${qty}x/rung — ${applied}`);
+            }
             document.getElementById('apex-mm-modify-modal')?.remove();
         } else {
             showNotification('Failed: ' + (data.error || 'unknown'));

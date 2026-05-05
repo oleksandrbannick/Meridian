@@ -1479,6 +1479,8 @@
                 <button class="scan-sport-pill"        data-sport="tennis" onclick="setScanSport('tennis')">🎾 Tennis</button>
                 <button class="scan-sport-pill"        data-sport="kbo"    onclick="setScanSport('kbo')">⚾ KBO</button>
                 <button class="scan-sport-pill"        data-sport="npb"    onclick="setScanSport('npb')">⚾ NPB</button>
+                <span style="color:#333;font-size:11px;margin:0 4px;">|</span>
+                <button id="scan-star-filter" onclick="toggleScanStarFilter()" title="Toggle ★ filter — show only Apex MM sweet-spot markets (wide room, two-sided, active)" style="background:transparent;color:#8892a6;border:1px solid #2a3550;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:700;cursor:pointer;">★</button>
             </div>
             <div id="scan-results" style="flex:1;overflow-y:auto;"></div>
         </div>
@@ -3205,7 +3207,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260505_tennis_phase_fallback"></script>
+    <script src="app.js?v=20260505_apex_star_scanner"></script>
     <!-- Bottom status bar — always visible -->
     <div id="bottom-status-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#080c16;border-top:1px solid #1a2035;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;font-size:11px;">
         <span style="color:#3a4560;font-size:10px;letter-spacing:.03em;">hi irene</span>

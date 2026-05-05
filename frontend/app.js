@@ -11767,21 +11767,58 @@ async function autoScanMarkets() {
     }
 }
 
+// Side cache of last scan results — lets setupApexFromScan find tickers
+// that aren't in allMarkets (which is filtered/limited).
+window._lastScanResultsByTicker = {};
+// ★ filter toggle (intersects with sport filter, same as min-room).
+window._scanStarFilterOn = window._scanStarFilterOn || false;
+
+function toggleScanStarFilter() {
+    window._scanStarFilterOn = !window._scanStarFilterOn;
+    const btn = document.getElementById('scan-star-filter');
+    if (btn) {
+        btn.style.background = window._scanStarFilterOn ? '#ffd70033' : 'transparent';
+        btn.style.color = window._scanStarFilterOn ? '#ffd700' : '#8892a6';
+        btn.style.borderColor = window._scanStarFilterOn ? '#ffd700' : '#2a3550';
+    }
+    // Re-render with current cache (no new API call)
+    const cached = Object.values(window._lastScanResultsByTicker || {});
+    if (cached.length) {
+        const minWidth = parseInt(document.getElementById('scan-min-width')?.value) || 3;
+        showScanResults(cached, minWidth, window._lastScanTotal || cached.length);
+    }
+}
+
 function showScanResults(opportunities, minWidth, totalScanned) {
     const modal   = document.getElementById('scan-modal');
     const results = document.getElementById('scan-results');
     const countEl = document.getElementById('scan-count');
     if (!modal || !results) return;
 
-    if (countEl) countEl.textContent = `${opportunities.length} found / ${totalScanned} scanned (≥ ${minWidth}¢ room)`;
+    // Cache full results so setupApexFromScan can fall back when ticker
+    // isn't in allMarkets (allMarkets is paginated/filtered).
+    window._lastScanResultsByTicker = {};
+    for (const o of opportunities) {
+        if (o && o.ticker) window._lastScanResultsByTicker[o.ticker] = o;
+    }
+    window._lastScanTotal = totalScanned;
 
-    if (opportunities.length === 0) {
-        results.innerHTML = `<p style="color:#8892a6;text-align:center;padding:24px;">
-            No markets with ≥ ${minWidth}¢ room found across ${totalScanned} markets.<br>
-            <span style="font-size:12px;">Try lowering the min room, or check back when more games are active.</span>
-        </p>`;
+    // Apply ★ filter if toggled on
+    let filtered = opportunities;
+    if (window._scanStarFilterOn) {
+        filtered = opportunities.filter(o => o && o.apex_star);
+    }
+
+    const starSuffix = window._scanStarFilterOn ? ' · ★ only' : '';
+    if (countEl) countEl.textContent = `${filtered.length} found / ${totalScanned} scanned (≥ ${minWidth}¢ room${starSuffix})`;
+
+    if (filtered.length === 0) {
+        const reason = window._scanStarFilterOn
+            ? `No ★ Apex sweet-spot markets right now. Tap ★ again to disable filter.`
+            : `No markets with ≥ ${minWidth}¢ room found across ${totalScanned} markets.<br><span style="font-size:12px;">Try lowering the min room, or check back when more games are active.</span>`;
+        results.innerHTML = `<p style="color:#8892a6;text-align:center;padding:24px;">${reason}</p>`;
     } else {
-        results.innerHTML = opportunities.slice(0, 50).map(opp => {
+        results.innerHTML = filtered.slice(0, 50).map(opp => {
             const room = opp.room || opp.width;
             const recW = opp.recommended_width || Math.max(2, Math.round(room * 0.7));
             const roomColor = room >= 10 ? '#ffaa00' : room >= 5 ? '#00ff88' : '#00d4ff';
@@ -11795,10 +11832,13 @@ function showScanResults(opportunities, minWidth, totalScanned) {
             const speedColor = speedColors[opp.catch_speed] || '#555';
             const speedLabel = (opp.catch_speed || 'slow').toUpperCase();
             const midpoint = Math.round((opp.yes_bid + (100 - opp.no_bid)) / 2);
+            const starBadge = opp.apex_star
+                ? `<span style="color:#ffd700;font-size:13px;margin-right:4px;text-shadow:0 0 6px #ffd70088;" title="Apex MM sweet spot — wide room, two-sided, active">★</span>`
+                : '';
             return `<div style="background:#0a0e1a;border-radius:8px;padding:10px 14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:10px;border-left:3px solid ${roomColor};">
                 <div style="flex:1;min-width:0;">
                     <div style="color:#fff;font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                        ${opp.title || opp.ticker}${liveTag}${dateTimeLabel}
+                        ${starBadge}${opp.title || opp.ticker}${liveTag}${dateTimeLabel}
                         <span style="background:${speedColor}22;color:${speedColor};padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:6px;">${speedLabel}</span>
                     </div>
                     <div style="color:#8892a6;font-size:11px;margin-top:3px;">
@@ -11980,7 +12020,25 @@ async function quickBot(ticker, yesPrice, noPrice) {
 // with this market preloaded, switches to Apex mode, and prefills the suggested
 // width. User reviews qty/rungs/loss-limit in the familiar form before deploy.
 function setupApexFromScan(ticker, suggestedWidth) {
-    const market = (allMarkets || []).find(m => m && m.ticker === ticker);
+    // Try allMarkets first (the user's loaded list, filtered/paginated).
+    let market = (allMarkets || []).find(m => m && m.ticker === ticker);
+    // Fallback: scanner cache. allMarkets is filtered, so scanner-found tickers
+    // often aren't there. Scanner opportunity has all fields openBotModal needs.
+    if (!market) {
+        const cached = (window._lastScanResultsByTicker || {})[ticker];
+        if (cached) {
+            market = {
+                ticker: cached.ticker,
+                title: cached.title || cached.ticker,
+                event_ticker: cached.event_ticker || ticker.split('-').slice(0, 2).join('-'),
+                series_ticker: cached.series_ticker || ticker.split('-')[0],
+                yes_bid: cached.yes_bid,
+                yes_ask: cached.yes_ask,
+                no_bid: cached.no_bid,
+                no_ask: cached.no_ask,
+            };
+        }
+    }
     if (!market) {
         showNotification(`⚠ Market not loaded: ${ticker} — refresh markets and try again`);
         return;

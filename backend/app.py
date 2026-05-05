@@ -25840,6 +25840,20 @@ def scan_arb_opportunities():
             # Recommended Apex MM width: half the room (ceiling), clamped to valid range
             recommended_width = max(2, min(20, width // 2))
 
+            # ── APEX ★ STAR ────────────────────────────────────────
+            # Pure structural signal — no historical P&L (contaminated by
+            # pre-2026-05-05 bug fixes). Marks markets where Apex MM has
+            # high-confidence sweet-spot conditions RIGHT NOW.
+            #   - room >= 8c (real spread to capture)
+            #   - both bids >= 5c (two-sided market, not one-sided)
+            #   - catch_score >= 5 (not totally dead / extreme)
+            apex_star = (
+                width >= 8
+                and yes_bid >= 5
+                and no_bid >= 5
+                and catch_score >= 5
+            )
+
             opportunities.append({
                 'ticker':        ticker_str,
                 'title':         m.get('title', ''),
@@ -25865,6 +25879,7 @@ def scan_arb_opportunities():
                 'is_live':       is_live,
                 'game_date':     game_date,
                 'game_time':     game_time,
+                'apex_star':     apex_star,
             })
 
         opportunities.sort(key=lambda x: x['catch_score'], reverse=True)

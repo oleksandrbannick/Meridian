@@ -4942,11 +4942,13 @@ def _ws_phantom_retreat(ticker, yes_bid, no_bid):
             # Retreat when bid is within 1¢ of our order (about to fill at bad price)
             if 0 <= gap <= 1:
                 _proposed_new_price = dog_bid - depth
-                # Price floor (2026-04-29): if retreat would clamp to 1c (proposed < 2),
-                # PULL the order instead of posting at 1c. Posting at 1c is fair-value
-                # adverse selection — phantom only profits from below-fair-value fills.
-                # Lets monitor-loop's price_floor recovery system re-arm when bid recovers.
-                if _proposed_new_price < 2:
+                # Price floor (2026-05-05): allow 1c posting (relaxed from 2c).
+                # Trade history showed dog_price=1 fills profitable (16 trades,
+                # +85c mean, 62% WR, max loss bounded to -1c). The Apr 29
+                # "fair-value adverse selection" theory didn't match the data.
+                # Dead-market kill (dog_bid<2) at app.py:5267 still protects
+                # against posting into a cratered book.
+                if _proposed_new_price < 1:
                     qty = bot.get('quantity', 1)
                     def _retreat_floor_pull(oid, bot_id_ref=bot_id, _bid=dog_bid, _depth=depth):
                         _result = _safe_cancel(oid, f'ws_retreat_floor_{bot_id_ref}')
@@ -4959,13 +4961,13 @@ def _ws_phantom_retreat(ticker, yes_bid, no_bid):
                         _b['dog_order_id'] = None
                         _b['_price_floor_pulled'] = True
                         _b['_price_floor_since'] = time.time()
-                        _b['_pull_reason'] = f'retreat below floor (bid {_bid}¢ - depth {_depth}¢ = post < 2¢)'
+                        _b['_pull_reason'] = f'retreat below floor (bid {_bid}¢ - depth {_depth}¢ = post < 1¢)'
                         bot_log('PHANTOM_WS_RETREAT_FLOOR_PULL', bot_id_ref, {
                             'dog_bid': _bid, 'depth': _depth, 'proposed_price': _bid - _depth,
                         }, level='WARN')
                         save_state()
                     threading.Thread(target=_retreat_floor_pull, args=(dog_order_id,), daemon=True).start()
-                    print(f'⏸ WS RETREAT FLOOR PULL: {bot_id} bid={dog_bid}¢ - depth={depth}¢ → would post < 2¢, pulling')
+                    print(f'⏸ WS RETREAT FLOOR PULL: {bot_id} bid={dog_bid}¢ - depth={depth}¢ → would post < 1¢, pulling')
                     continue
                 new_price = max(1, _proposed_new_price)  # safety floor (shouldn't hit after guard above)
                 if new_price >= dog_price:
@@ -9834,6 +9836,7 @@ def create_bot():
 
 APEX_MM_DRIFT_THRESHOLD = 4        # Reprice ladder if midpoint moves 4+ cents (preserves queue priority on tick-level noise)
 APEX_MM_SIDE_DRIFT_THRESHOLD = 2   # Reprice if EITHER side's BBO drifted 2+ cents — catches symmetric BBO widening that leaves midpoint stable
+APEX_MM_THIN_GATE_ROOM_OVERRIDE = 30  # If BBO room >= this many cents, ignore thin/obi/vanish gates — wide spread is its own protection
 APEX_MM_INVENTORY_HYSTERESIS = 10  # Resume quoting side when inv drops this far below limit
 
 
@@ -9998,10 +10001,13 @@ def _apex_obi_snapshot(ticker):
     }
 
 
-def _apex_should_pull(ticker, depth_levels=3, obi_threshold=None, depth_min=None):
+def _apex_should_pull(ticker, depth_levels=3, obi_threshold=None, depth_min=None, room_override=0):
     """Check if book conditions are hostile for Apex. Returns (should_pull, reason) tuple.
     Uses LocalOrderbook — zero API calls. depth_levels: how many levels to check (3 for phantom, 5 for MM).
-    depth_min: override depth threshold (MM uses much lower since it supplies depth itself)."""
+    depth_min: override depth threshold (MM uses much lower since it supplies depth itself).
+    room_override: when > 0 and BBO room >= this many cents, skip thin/obi/vanish gates entirely.
+    The wide spread itself is enough protection (you're being paid 30c+ per pair to take the
+    inventory risk, which dominates any thin-book adverse selection). Apex MM only."""
     if obi_threshold is None:
         obi_threshold = APEX_DEPTH_PULL_OBI
     if depth_min is None:
@@ -10012,6 +10018,17 @@ def _apex_should_pull(ticker, depth_levels=3, obi_threshold=None, depth_min=None
     age_s = time.time() - lob.last_update_ts
     if age_s > 10:
         return False, ''  # stale data — don't act on old book
+
+    # Wide-room override: if BBO arb space is >= room_override, the spread itself
+    # is the protection. Skip all the thin/obi/vanish gates so the bot can quote
+    # in markets where it would otherwise be the only maker.
+    if room_override > 0:
+        _yb_check = lob.get_best_bid('yes') or 0
+        _nb_check = lob.get_best_bid('no') or 0
+        if _yb_check > 0 and _nb_check > 0:
+            _room_check = 100 - _yb_check - _nb_check
+            if _room_check >= room_override:
+                return False, ''
 
     yes_depth = lob.get_total_depth('yes', depth_levels)
     no_depth = lob.get_total_depth('no', depth_levels)
@@ -11810,7 +11827,7 @@ def _apex_mm_refill_entry(bot_id, bot, freed_qty):
         return
 
     # ── GATE 2: OBI — book not one-sided ──
-    should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH, obi_threshold=APEX_MM_PULL_OBI, depth_min=_apex_mm_pull_min(ticker))
+    should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH, obi_threshold=APEX_MM_PULL_OBI, depth_min=_apex_mm_pull_min(ticker), room_override=APEX_MM_THIN_GATE_ROOM_OVERRIDE)
     if should_pull:
         bot_log('APEX_MM_REFILL_BLOCKED', bot_id, {'gate': 'obi', 'reason': pull_reason})
         return
@@ -12459,7 +12476,7 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
         return
 
     # ── OBI gate ──
-    should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH, obi_threshold=APEX_MM_PULL_OBI, depth_min=_apex_mm_pull_min(ticker))
+    should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH, obi_threshold=APEX_MM_PULL_OBI, depth_min=_apex_mm_pull_min(ticker), room_override=APEX_MM_THIN_GATE_ROOM_OVERRIDE)
     if should_pull:
         # Cancel all remaining orders — check for fill-race on each cancel
         _obi_late_fills = 0
@@ -14109,11 +14126,11 @@ def create_anchor_bot():
             dog_price = 1  # placeholder, no order placed while pulled
         elif live_dog_bid > 0:
             smart_price = min(40, max(1, live_dog_bid - anchor_depth))
-            if smart_price < 2:
+            if smart_price < 1:
                 # Price too low — create bot in pulled mode, will repost when bid recovers
                 _start_pulled = True
                 dog_price = 1  # placeholder
-                print(f'⏸ SMART PRICE: bid={live_dog_bid}¢ depth={anchor_depth}¢ → {smart_price}¢ < 2¢ floor — starting pulled')
+                print(f'⏸ SMART PRICE: bid={live_dog_bid}¢ depth={anchor_depth}¢ → {smart_price}¢ < 1¢ floor — starting pulled')
             else:
                 print(f'🎯 SMART PRICE: bid={live_dog_bid} ask={live_dog_ask} '
                       f'depth={anchor_depth}¢ → {smart_price}¢ (frontend sent {dog_price}¢)')
@@ -16069,8 +16086,9 @@ def _handle_phantom(bot_id, bot, actions):
                 else:
                     bot['_parked_at_ceiling'] = False
 
-                # Price floor: don't repost at < 2¢ — pull order and wait for recovery
-                if new_dog_price < 2:
+                # Price floor: don't repost at < 1¢ — pull order and wait for recovery
+                # (relaxed from 2c on 2026-05-05; data showed 1c fills profitable)
+                if new_dog_price < 1:
                     # Cancel the order but keep bot alive — game might swing back
                     if dog_order_id:
                         _pf_rc = _safe_cancel(dog_order_id, f'phantom price floor {bot_id}')
@@ -17826,7 +17844,7 @@ def _handle_phantom(bot_id, bot, actions):
             if current_dog_bid <= 1:
                 _drift_stop = True
                 _drift_reason = 'dog_dead'
-            elif new_dog_price < 2:
+            elif new_dog_price < 1:
                 _drift_stop = True
                 _drift_reason = f'price_too_low_{new_dog_price}c'
             elif new_dog_price > 40:
@@ -18869,7 +18887,7 @@ def _handle_apex(bot_id, bot, actions):
     # Skip if refill is in progress — avoid racing with cycle_refill posting new orders
     if bot.get('_refill_in_progress'):
         return
-    should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH, obi_threshold=APEX_MM_PULL_OBI, depth_min=_apex_mm_pull_min(ticker))
+    should_pull, pull_reason = _apex_should_pull(ticker, depth_levels=APEX_MM_OBI_DEPTH, obi_threshold=APEX_MM_PULL_OBI, depth_min=_apex_mm_pull_min(ticker), room_override=APEX_MM_THIN_GATE_ROOM_OVERRIDE)
     if should_pull:
         net_yes = bot.get('net_yes', 0)
         net_no = bot.get('net_no', 0)

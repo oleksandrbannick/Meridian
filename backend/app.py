@@ -11751,7 +11751,13 @@ def _apex_mm_walk_up(bot_id, bot):
     current_price = bot.get('_exit_price', 0)
     net_held = abs(net_yes - net_no)
 
-    _market_best_bid = _apex_mm_market_best_bid(bot, exit_side)
+    # Read from ticker channel (bot.live_<side>_bid) — reliable per
+    # feedback_ws_ticker_not_delta.md. Fall back to delta orderbook only when
+    # ticker hasn't populated. The delta channel was returning 0/stale, leaving
+    # exits stranded for 14+ minutes (KRO bot: exit=85c, bid=92c, walk_age=849s).
+    _market_best_bid = bot.get(f'live_{exit_side}_bid', 0) or 0
+    if _market_best_bid <= 0:
+        _market_best_bid = _apex_mm_market_best_bid(bot, exit_side)
     # Walk cap = combined 95c. Voluntary creep stops at 5c profit floor (not 1c).
     # Per design memo project_apex_mm_maker_model_2026_05_02: "95c walk cap".
     # Prior 99-avg_held let the creep eat all the way to 1c profit, burning the

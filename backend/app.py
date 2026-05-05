@@ -6792,8 +6792,18 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
 
                 if close_qty > 0:
                     _apex_mm_record_round_trip(bot_id, bot, matched_side, exit_price, close_qty)
-                    bot['_exit_fill_qty'] = bot.get('_exit_fill_qty', 0) + close_qty
-                    print(f'💰 WS APEX MM EXIT FILL: {bot_id} {matched_side.upper()} +{count} @{exit_price}c → closed {close_qty}x (exit {bot["_exit_fill_qty"]}/{bot.get("_exit_total_qty",0)})')
+                    print(f'💰 WS APEX MM EXIT FILL: {bot_id} {matched_side.upper()} +{count} @{exit_price}c → closed {close_qty}x')
+                    # Rebase display counters: those close_qty contracts auto-netted
+                    # (Kalshi paired the YES exit fills with the held NO inventory →
+                    # both removed). Card should show progress against REMAINING held
+                    # qty, not original posting qty. Otherwise "4/6" persists when
+                    # the truth is "0/2 left to close".
+                    _net_remaining = abs(bot.get('net_yes', 0) - bot.get('net_no', 0))
+                    if _net_remaining > 0:
+                        bot['_exit_fill_qty'] = 0
+                        bot['_exit_total_qty'] = int(_net_remaining)
+                    else:
+                        bot['_exit_fill_qty'] = bot.get('_exit_total_qty', 0) or close_qty
 
                 # Log fill
                 bot.setdefault('_fill_log', []).append({

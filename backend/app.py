@@ -10215,7 +10215,12 @@ def _apex_mm_sync_auto_width(bot_id, bot):
     if room <= 0:
         return
     floor = _apex_mm_width_floor(bot.get('ticker', ''))
-    new_gap = max(floor, min(20, (room - 4) // 2))
+    # Match the BBO — top rungs land at market_yes_bid / market_no_bid, deeper
+    # rungs trail behind. Previous formula (room - 4) // 2 was 4c tighter than
+    # BBO, which on a pure-BBO maker meant top rungs at bid+1/+2 and got
+    # silently disabled, leaving only deeper rungs live and the bot
+    # self-cannibalizing its own bid.
+    new_gap = max(floor, min(20, room // 2))
     old_gap = bot.get('start_gap', 2)
     if new_gap != old_gap:
         bot['start_gap'] = new_gap

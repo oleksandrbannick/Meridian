@@ -6924,7 +6924,15 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                 bot[f'net_{matched_side}'] = bot.get(f'net_{matched_side}', 0) + count
                 bot[f'total_{matched_side}_cost'] = bot.get(f'total_{matched_side}_cost', 0) + (matched_price * count)
                 total_qty = bot[f'net_{matched_side}']
-                bot[f'avg_{matched_side}_cost'] = round(bot[f'total_{matched_side}_cost'] / total_qty) if total_qty > 0 else 0
+                if total_qty > 0:
+                    _avg = round(bot[f'total_{matched_side}_cost'] / total_qty)
+                    # Clamp to [0,99] — Kalshi prices are 1-99c. Higher = corruption.
+                    bot[f'avg_{matched_side}_cost'] = max(0, min(99, _avg))
+                    if _avg != bot[f'avg_{matched_side}_cost']:
+                        bot[f'total_{matched_side}_cost'] = bot[f'avg_{matched_side}_cost'] * total_qty
+                        print(f'🛡️ AVG CLAMP: {bot_id} {matched_side} avg {_avg}→{bot[f"avg_{matched_side}_cost"]} (net={total_qty})')
+                else:
+                    bot[f'avg_{matched_side}_cost'] = 0
                 # Track when inventory was first acquired (for round-trip timing)
                 if _was_flat:
                     bot[f'_{matched_side}_inv_since'] = time.time()
@@ -10207,6 +10215,27 @@ def _apex_mm_filter_close_side(bot, yes_levels, no_levels):
     return yes_levels, no_levels
 
 
+def _apex_mm_filter_dca_above_avg(bot, yes_levels, no_levels):
+    """Anti-drift-trap: when holding inventory, refuse DCA rungs priced at or
+    above current avg cost. Each new fill on the held side must pull avg DOWN,
+    never UP. Without this guard, a trending market lifts each chasing rung in
+    sequence and the bot accumulates inventory at progressively worse prices —
+    the DAVHAV pattern (avg_yes drifted to 60c while exit filled at 45c, locking
+    105c combined). Held side only; close side is already empty by here."""
+    held = _apex_mm_held_side(bot)
+    if not held:
+        return yes_levels, no_levels
+    if held == 'yes':
+        avg = bot.get('avg_yes_cost', 0) or 0
+        if avg > 0:
+            yes_levels = [(p, q) for p, q in yes_levels if p < avg]
+    elif held == 'no':
+        avg = bot.get('avg_no_cost', 0) or 0
+        if avg > 0:
+            no_levels = [(p, q) for p, q in no_levels if p < avg]
+    return yes_levels, no_levels
+
+
 def _apex_mm_cancel_close_side_orders(bot_id, bot):
     """Cancel any live orders on the close side when holding inventory.
     Leftover rungs from flat-state posting must be cleaned up — they can't
@@ -10983,6 +11012,7 @@ def _apex_mm_repost_ladder_inner(bot_id, bot):
         _eff_lvls, _qty_mult = _apex_mm_effective_levels(bot)
         yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0))
         yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
+        yes_levels, no_levels = _apex_mm_filter_dca_above_avg(bot, yes_levels, no_levels)
         if not yes_levels and not no_levels:
             return
         success = _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
@@ -11528,6 +11558,26 @@ def _apex_mm_pnl_sync(bot_id, bot):
                 'old_rt_count': old_rt_count, 'new_rt_count': len(new_rt_log),
                 'old_realized': old_realized, 'new_realized': new_realized,
             })
+        # Emit drift ADJ row so daily P&L bar tracks Kalshi truth instead of
+        # stale mm_round_trip rows. _pnl_emitted_total = sum of rows emitted
+        # for this bot so far (RT rows + prior sync rows). Default to the
+        # bot's already-emitted RT total stored at the start of the function:
+        # any difference between that and Kalshi truth is silent drift the
+        # daily P&L bar never saw → emit ADJ row to heal.
+        _emitted = bot.get('_pnl_emitted_total', old_realized)
+        _drift = round(new_realized - _emitted, 2)
+        if abs(_drift) > 0.5:
+            _record_trade({
+                'bot_id': bot_id, 'ticker': ticker, 'bot_category': 'ladder_arb',
+                'result': 'mm_pnl_sync',
+                'profit_cents': max(0, _drift),
+                'loss_cents': abs(min(0, _drift)),
+                'net_pnl': _drift, 'fee_cents': 0,
+                'timestamp': time.time(), 'fill_source': 'apex_mm_pnl_sync',
+                'note': f'Kalshi /fills drift: emitted {_emitted:.2f}c → truth {new_realized:.2f}c',
+            })
+            print(f'📒 APEX MM PNL SYNC ROW: {bot_id} drift {_drift:+.2f}c emitted (daily P&L now tracks Kalshi)')
+        bot['_pnl_emitted_total'] = round(new_realized, 2)
         return
 
     # Fallback: position-based realized sync (no RT rebuild).
@@ -11554,6 +11604,21 @@ def _apex_mm_pnl_sync(bot_id, bot):
                     'ticker_realized': _ksh_pnl_c, 'baseline': _baseline,
                     'drift_cents': _drift,
                 })
+                # Mirror the new-path ADJ row so daily P&L tracks Kalshi truth.
+                _emitted = bot.get('_pnl_emitted_total', _stored)
+                _row_drift = round(_bot_share_c - _emitted, 2)
+                if abs(_row_drift) > 0.5:
+                    _record_trade({
+                        'bot_id': bot_id, 'ticker': ticker, 'bot_category': 'ladder_arb',
+                        'result': 'mm_pnl_sync',
+                        'profit_cents': max(0, _row_drift),
+                        'loss_cents': abs(min(0, _row_drift)),
+                        'net_pnl': _row_drift, 'fee_cents': 0,
+                        'timestamp': time.time(), 'fill_source': 'apex_mm_pnl_sync',
+                        'note': f'Position-based drift adj: emitted {_emitted:.2f}c → bot_share {_bot_share_c:.2f}c',
+                    })
+                    print(f'📒 APEX MM PNL SYNC ROW (fallback): {bot_id} drift {_row_drift:+.2f}c emitted')
+                bot['_pnl_emitted_total'] = round(_bot_share_c, 2)
             break
     except Exception:
         pass
@@ -12117,6 +12182,7 @@ def _apex_mm_cycle_reset(bot_id, bot):
     _eff_lvls, _qty_mult = _apex_mm_effective_levels(bot)
     yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0))
     yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
+    yes_levels, no_levels = _apex_mm_filter_dca_above_avg(bot, yes_levels, no_levels)
     _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
     bot['midpoint'] = midpoint
     bot['_ladder_yes_bid'] = bot.get('live_yes_bid', 0)
@@ -12247,6 +12313,7 @@ def _apex_mm_fresh_ladder(bot_id, bot):
     _eff_lvls, _qty_mult = _apex_mm_effective_levels(bot)
     yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0))
     yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
+    yes_levels, no_levels = _apex_mm_filter_dca_above_avg(bot, yes_levels, no_levels)
     _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
     bot['midpoint'] = midpoint
     bot['_ladder_yes_bid'] = bot.get('live_yes_bid', 0)
@@ -12541,6 +12608,7 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
             inv_limit=bot.get('inventory_limit', 0)
         )
         yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
+        yes_levels, no_levels = _apex_mm_filter_dca_above_avg(bot, yes_levels, no_levels)
 
         _refilled = 0
         for side, expected_levels in [('yes', yes_levels), ('no', no_levels)]:
@@ -13563,6 +13631,9 @@ def _apex_mm_record_round_trip(bot_id, bot, fill_side, fill_price, close_qty):
     # Update bot
     bot['realized_pnl_cents'] = round(bot.get('realized_pnl_cents', 0) + net_pnl, 2)
     bot['round_trips_completed'] = bot.get('round_trips_completed', 0) + 1
+    # Tally what we've emitted to trades.jsonl so PNL_SYNC can compute drift
+    # and emit an ADJ row to keep daily P&L bar in sync with Kalshi truth.
+    bot['_pnl_emitted_total'] = round(bot.get('_pnl_emitted_total', 0) + net_pnl, 2)
 
     # Smart mode tracking — for non-MM bots, track consecutive losses per round trip.
     # Apex MM uses cumulative loss limit instead (tracked in _smart_mode_should_repeat).
@@ -13578,8 +13649,22 @@ def _apex_mm_record_round_trip(bot_id, bot, fill_side, fill_price, close_qty):
     opp_total_cost = bot.get(f'total_{opposite}_cost', 0)
     bot[f'net_{opposite}'] = max(0, opp_net - close_qty)
     bot[f'total_{opposite}_cost'] = max(0, opp_total_cost - (opp_avg * close_qty))
-    if bot[f'net_{opposite}'] > 0:
-        bot[f'avg_{opposite}_cost'] = round(bot[f'total_{opposite}_cost'] / bot[f'net_{opposite}'])
+    # Dust snap: sub-0.5 contract residuals are float artifacts, not real position.
+    # Kalshi only trades integer contracts; fractional residue here = accumulated
+    # rounding from partial closes (close_qty != exact inventory). Snap to flat
+    # before it can corrupt avg via near-zero divide.
+    if bot[f'net_{opposite}'] > 0 and bot[f'net_{opposite}'] < 0.5:
+        bot[f'net_{opposite}'] = 0
+        bot[f'total_{opposite}_cost'] = 0
+        bot[f'avg_{opposite}_cost'] = 0
+    elif bot[f'net_{opposite}'] > 0:
+        # Clamp avg to [0,99] — Kalshi prices are always 1-99c. Higher = corruption
+        # (the ZECGER avg=372 / DAVHAV avg=347 pattern). Mirror the reconcile clamp.
+        _avg = round(bot[f'total_{opposite}_cost'] / bot[f'net_{opposite}'])
+        bot[f'avg_{opposite}_cost'] = max(0, min(99, _avg))
+        if _avg != bot[f'avg_{opposite}_cost']:
+            bot[f'total_{opposite}_cost'] = bot[f'avg_{opposite}_cost'] * bot[f'net_{opposite}']
+            print(f'🛡️ AVG CLAMP: {bot_id} {opposite} avg {_avg}→{bot[f"avg_{opposite}_cost"]} (net={bot[f"net_{opposite}"]})')
     else:
         bot[f'avg_{opposite}_cost'] = 0
         bot[f'total_{opposite}_cost'] = 0
@@ -18955,6 +19040,7 @@ def _handle_apex(bot_id, bot, actions):
                     _eff_lvls, _qty_mult = _apex_mm_effective_levels(bot)
                     yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0))
                     yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
+                    yes_levels, no_levels = _apex_mm_filter_dca_above_avg(bot, yes_levels, no_levels)
                     _entry_levels = yes_levels if _entry_side == 'yes' else no_levels
                     _reposted = 0
                     for _ep, _eq in _entry_levels:
@@ -25186,6 +25272,7 @@ def apex_mm_edit(bot_id):
             _eff_lvls, _qty_mult = _apex_mm_effective_levels(bot)
             yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0))
             yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
+            yes_levels, no_levels = _apex_mm_filter_dca_above_avg(bot, yes_levels, no_levels)
             _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
             bot['midpoint'] = midpoint
             bot['status'] = 'market_making_active'

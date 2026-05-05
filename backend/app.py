@@ -5998,12 +5998,13 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
 
             net_held = abs(net_yes - net_no)
             # Snap rule: exit ALWAYS rides AT the live best bid, never below.
-            # Reads ticker channel (live_<side>_bid), not delta orderbook —
-            # delta channel lags/drops updates, leaving exits stranded below
-            # market. Per feedback_ws_ticker_not_delta.md and
-            # feedback_phantom_park_at_bid_alone.md: ticker is reliable, and
-            # exit should sit at-bid even when "alone" (queue priority > price).
-            _real_top = bot.get(f'live_{exit_side}_bid', 0) or 0
+            # Reads the FRESH yes_bid/no_bid passed in from this WS tick — NOT
+            # bot.live_<side>_bid (which is only updated by the 2s monitor
+            # cycle), and NOT _apex_mm_market_best_bid (which uses the delta
+            # orderbook channel — known unreliable per
+            # feedback_ws_ticker_not_delta.md). The WS ticker channel
+            # parameters are why this handler was given them.
+            _real_top = yes_bid if exit_side == 'yes' else no_bid
             if _real_top <= 0 or _real_top <= current_price:
                 continue
             # ASK CLAMP — post_only buy at price >= ask gets rejected by Kalshi.

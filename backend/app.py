@@ -4700,9 +4700,9 @@ class KalshiWSManager:
                         threading.Thread(target=_ws_maker_sell_follow, args=(ticker, ya, na), daemon=True).start()
                 except Exception:
                     pass
-                # ── Real-time Apex MM: stop-loss + snap-down on every tick ──
+                # ── Real-time Apex MM: snap_up via prewarmed worker (no per-tick spawn) ──
                 try:
-                    threading.Thread(target=_ws_apex_mm_tick, args=(ticker, yb, nb, ya, na), daemon=True).start()
+                    _apex_mm_tick_queue.put((_ws_apex_mm_tick, (ticker, yb, nb, ya, na)))
                 except Exception:
                     pass
             return
@@ -6147,6 +6147,32 @@ def _apex_mm_reactor_loop():
 
 for _i in range(_APEX_MM_REACTOR_COUNT):
     threading.Thread(target=_apex_mm_reactor_loop, daemon=True, name=f'apex-mm-reactor-{_i}').start()
+
+# ─── Apex MM tick queue: pre-warmed workers for WS ticker handler ───────────
+# Prior pattern: threading.Thread(target=_ws_apex_mm_tick, ...).start() per WS
+# event = ~1-2ms thread-spawn cost on every tick. Mirrors Phantom's _snap_worker
+# design — workers live forever blocked on queue.get(), wake instantly when WS
+# event arrives. This is what the colocation/speed advantage is for: shaving
+# the per-tick spawn cost so amend lands at the new price level before
+# competitors. Separate queue from _snap_worker_queue (Phantom) and
+# _apex_mm_reactor_queue (post-fill jobs) so Apex tick latency isn't gated by
+# Phantom snap or Apex post-fill work.
+_apex_mm_tick_queue = _queue_mod.Queue()
+_APEX_MM_TICK_WORKER_COUNT = 2
+
+def _apex_mm_tick_worker_loop():
+    while True:
+        try:
+            job = _apex_mm_tick_queue.get()
+            if job is None:
+                break
+            fn, args = job
+            fn(*args)
+        except Exception as e:
+            print(f'⚠ APEX MM TICK WORKER ERROR: {e}')
+
+for _i in range(_APEX_MM_TICK_WORKER_COUNT):
+    threading.Thread(target=_apex_mm_tick_worker_loop, daemon=True, name=f'apex-mm-tick-{_i}').start()
 
 # Kill switch for WS-driven full ladder reprice on midpoint drift. Default ON;
 # flip to False if drift-triggered reposts cause cancel-race orphan spike.
@@ -22924,6 +22950,17 @@ def list_bots():
                     score_info = _get_game_score_for_ticker(ticker)
                     if score_info:
                         game_scores[gk] = score_info
+                    elif ticker.startswith(('KXATP', 'KXWTA', 'KXITF')) and _is_game_live(ticker):
+                        # API Tennis cache miss but match IS live (milestones /
+                        # Kalshi expiration window). Synthesize minimal entry so
+                        # the group header and signal badge agree with reality
+                        # instead of showing PRE/PREGAME on an actively trading bot.
+                        game_scores[gk] = {
+                            'home_team': '', 'away_team': '',
+                            'home_score': 0, 'away_score': 0,
+                            'period': 0, 'clock': '',
+                            'status_detail': 'live', 'status': 'in',
+                        }
                 except Exception as _gs_err:
                     print(f'⚠ game_scores lookup failed for {ticker}: {_gs_err}')
     # ── Enrich stopped bots with pending maker sell data ──

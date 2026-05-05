@@ -5082,7 +5082,18 @@ def _ws_phantom_retreat(ticker, yes_bid, no_bid):
                                 }, level='WARN')
                                 save_state()
                                 return
-                            # Order gone with 0 fills — enter waiting_repeat for reanchor
+                            # Order gone — only flip to waiting_repeat if a parallel path
+                            # (sympathy pull, WS fill handler) hasn't already advanced the
+                            # bot post-hedge. Otherwise we clobber 'fav_hedge_posted' and
+                            # the next cycle reset wipes no_fill_qty/yes_fill_qty, orphaning
+                            # the dog leg from the cancel-race fill (MAGCOV-COV 2026-05-05).
+                            if bot_ref.get('_hedge_fired') or bot_ref.get('status') in ('dog_filled', 'fav_hedge_posted', 'waiting_repeat'):
+                                bot_log('WS_RETREAT_AMEND_404_SKIP', bot_id_ref, {
+                                    'order_id': oid[:12],
+                                    'status': bot_ref.get('status'),
+                                    'hedge_fired': bool(bot_ref.get('_hedge_fired')),
+                                }, level='WARN')
+                                return
                             bot_ref['dog_order_id'] = None
                             bot_ref['status'] = 'waiting_repeat'
                             bot_ref['waiting_repeat_since'] = time.time()

@@ -6957,7 +6957,14 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     // if the exit doesn't fill, so it should never be in the headline number.
     const totalPnl = realizedPnl;
     const roundTrips = bot.round_trips_completed || 0;
-    const midpoint = bot.midpoint || 0;
+    // Display the LIVE midpoint when both BBO bids are present (updates via WS
+    // even when bot is mm_depth_pulled). Fall back to bot.midpoint (snapshot
+    // stamped at last ladder post) only when live bids unavailable. This way
+    // the card stays accurate during pulled periods instead of showing a stale
+    // post-time mid for minutes at a time.
+    const _liveYB = bot.live_yes_bid || 0;
+    const _liveNB = bot.live_no_bid || 0;
+    const midpoint = (_liveYB > 0 && _liveNB > 0) ? Math.round((_liveYB + (100 - _liveNB)) / 2) : (bot.midpoint || 0);
     const pullCount = bot._pull_count || 0;
     const consLosses = bot.consecutive_losses || 0;
     const smartMode = bot.smart_mode ? (typeof bot.smart_mode === 'number' ? bot.smart_mode : 2) : 0;
@@ -8688,7 +8695,9 @@ async function loadBots() {
             // Mirror groupIsLive — single source of truth so the per-bot PRE/LIVE
             // button can't contradict the group header.
             const _botGsForPhase = gameScores[gameKey] || {};
-            const _isGameLiveNow = _botGsForPhase.status === 'in';
+            // Trust backend's bot.game_phase when score feed is missing (e.g., API Tennis gap):
+            // backend already fixes the 'frozen at creation' problem bidirectionally (app.py).
+            const _isGameLiveNow = _botGsForPhase.status === 'in' || bot.game_phase === 'live';
             const phase       = _isGameLiveNow ? 'live' : 'pregame';
             const phaseIcon   = _isGameLiveNow ? '🔴' : '⏳';
             const phaseLabel  = _isGameLiveNow ? 'LIVE' : 'PRE';

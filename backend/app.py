@@ -5947,6 +5947,7 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                                 'yes_drift': _yes_side_drift, 'no_drift': _no_side_drift, 'trigger': _trig,
                             })
                             print(f'⚡ APEX MM WS DRIFT [{_trig}]: {bot_id} mid {_stored_mid}→{_live_mid} (Δ{_drift_amt}c) yes Δ{_yes_side_drift}c no Δ{_no_side_drift}c → reactor reprice')
+                            _ws_notify_state_change('apex_mm_drift', bot_id)
 
             # ── WS-driven drift guard (max-bid spike) ──
             # Mirrors monitor-cycle drift guard at APEX_MM_DRIFT_GUARD_BID, but
@@ -5971,6 +5972,7 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                         'max_bid': _max_bid_ws, 'flat': (net_yes == 0 and net_no == 0),
                     })
                     print(f'⚡ APEX MM WS DRIFT GUARD: {bot_id} max_bid={_max_bid_ws}c (≥{APEX_MM_DRIFT_GUARD_BID}c) → reactor pull')
+                    _ws_notify_state_change('apex_mm_drift_guard', bot_id)
 
             if net_yes <= 0 and net_no <= 0:
                 continue
@@ -6034,6 +6036,7 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                     'old': current_price, 'new': snap_price, 'bid': exit_bid,
                     'combined': combined,
                 })
+                _ws_notify_state_change('apex_mm_snap_up', bot_id)
             except Exception as e:
                 _err_s = str(e)
                 if '404' in _err_s or 'not found' in _err_s.lower():
@@ -7106,6 +7109,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                         threading.Thread(target=_anchor_pause_cancel, args=(_anc_to_cancel,), daemon=True).start()
 
             save_state()
+            _ws_notify_state_change('apex_mm_fill', bot_id)
         break
 
 
@@ -11306,6 +11310,7 @@ def _apex_mm_amend_exit(bot_id, bot, fill_side):
             'exit_side': exit_side, 'exit_price': exit_price, 'net_held': net_held,
             'avg_held': avg_held, 'had_oid': bool(exit_oid),
         })
+        _ws_notify_state_change('apex_mm_exit_amend', bot_id)
     finally:
         _apex_mm_amend_exit_lock.release()
 

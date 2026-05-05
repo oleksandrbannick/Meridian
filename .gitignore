@@ -73,3 +73,14 @@ backend/activity_log.jsonl
 backend/bot_audit.jsonl
 backend/check_tennis.py
 backend/check_games.py
+backend/phantom_drift_log.jsonl
+backend/phantom_price_tape.jsonl
+backend/*.bak
+backend/*.pre_*
+backend/data.json.pre_*
+backend/trades.jsonl.pre_*
+backend/data.json.tmp
+backend/basketball_api_cache.json*
+CLAUDE.md.bak
+.last_deployed_commit
+.claude/scheduled_tasks.lock

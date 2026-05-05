@@ -3260,11 +3260,45 @@ def _smart_mode_should_repeat(bot, cycle_pnl, exit_type=None):
         # zero on restart (previously a bot stopped at -$2 would re-trip immediately).
         baseline = bot.get('_loss_limit_baseline', 0)
         cycle_pnl_since_baseline = total_pnl - baseline
-        # loss_limit_cents is stored as positive (e.g., 50 = stop after losing 50c)
+
+        # ── Safe-stop check: a bot must NEVER transition to stopped while it
+        # holds inventory or has live limit orders — that's the orphan factory.
+        # Loss-limit only sets the FINAL stop when flat + no orders.
+        _net_yes = bot.get('net_yes', 0)
+        _net_no = bot.get('net_no', 0)
+        _has_inv = _net_yes > 0 or _net_no > 0
+        _has_open = bool(bot.get('_yes_exit_oid') or bot.get('_no_exit_oid'))
+        if not _has_open:
+            for _sk in ('yes_orders', 'no_orders'):
+                for _lvl in (bot.get(_sk, {}) or {}).values():
+                    if isinstance(_lvl, dict) and _lvl.get('oid'):
+                        _has_open = True
+                        break
+                if _has_open:
+                    break
+
+        # Pending mode: loss limit hit, but bot still holding/open. Set pending
+        # flag, KEEP bot alive so exit/cleanup can finish. Bot's normal flow
+        # (mm_exiting / cancel close-side / settlement) will clear inventory.
         if loss_limit > 0 and cycle_pnl_since_baseline <= -loss_limit:
+            if _has_inv or _has_open:
+                if not bot.get('_smart_stop_pending'):
+                    bot['_smart_stop_pending'] = True
+                    bot['_smart_stop_reason'] = 'loss_limit (pending — clearing inventory)'
+                    print(f'⏸️ APEX MM SMART STOP PENDING: {bot_id} cycle_pnl={cycle_pnl_since_baseline}c — waiting on net_yes={_net_yes} net_no={_net_no} open_orders={_has_open}')
+                return False, f'loss_limit_pending (inv={_net_yes}Y/{_net_no}N, open={_has_open})'
+            # Flat AND no open orders — safe to fully stop
             bot['_smart_stopped'] = True
+            bot['_smart_stop_pending'] = False
             bot['_smart_stop_reason'] = 'loss_limit'
             return False, f'loss_limit (cycle_pnl={cycle_pnl_since_baseline}c <= -{loss_limit}c, lifetime={total_pnl}c)'
+
+        # Pending → final transition: bot was waiting, now flat + no open orders.
+        if bot.get('_smart_stop_pending') and not _has_inv and not _has_open:
+            bot['_smart_stopped'] = True
+            bot['_smart_stop_pending'] = False
+            print(f'✅ APEX MM SMART STOP FINALIZED: {bot_id} now flat, transitioning to stopped')
+            return False, f'loss_limit (finalized after clearing inventory, lifetime={total_pnl}c)'
         # Track wins/losses for stats display (but don't stop on consecutive losses)
         if cycle_pnl < 0:
             bot['consecutive_losses'] = bot.get('consecutive_losses', 0) + 1
@@ -11474,7 +11508,9 @@ def _apex_mm_pnl_sync(bot_id, bot):
             })
         return
 
-    # Fallback: position-based realized sync (no RT rebuild)
+    # Fallback: position-based realized sync (no RT rebuild).
+    # Uses ticker-level realized minus the at-creation baseline so prior bots'
+    # profits/losses on the same ticker don't leak into this bot's counter.
     try:
         if not api_read_limiter.try_wait():
             return
@@ -11484,13 +11520,16 @@ def _apex_mm_pnl_sync(bot_id, bot):
             if _pp.get('ticker') != ticker:
                 continue
             _ksh_pnl_c = float(_pp.get('realized_pnl_dollars', 0) or 0) * 100
+            _baseline = bot.get('_ticker_realized_baseline_cents', 0) or 0
+            _bot_share_c = _ksh_pnl_c - _baseline
             _stored = bot.get('realized_pnl_cents', 0) or 0
-            _drift = _ksh_pnl_c - _stored
+            _drift = _bot_share_c - _stored
             if abs(_drift) > 0.5:
-                print(f'📊 APEX MM PNL SYNC (fallback): {bot_id} stored={_stored:.2f}c → kalshi={_ksh_pnl_c:.2f}c (drift {_drift:+.2f}c)')
-                bot['realized_pnl_cents'] = round(_ksh_pnl_c, 2)
+                print(f'📊 APEX MM PNL SYNC (fallback): {bot_id} stored={_stored:.2f}c → bot_share={_bot_share_c:.2f}c (ticker={_ksh_pnl_c:.2f}c − baseline={_baseline:.2f}c, drift {_drift:+.2f}c)')
+                bot['realized_pnl_cents'] = round(_bot_share_c, 2)
                 bot_log('APEX_MM_PNL_SYNC_FALLBACK', bot_id, {
-                    'old_stored': _stored, 'new_stored': _ksh_pnl_c,
+                    'old_stored': _stored, 'new_stored': _bot_share_c,
+                    'ticker_realized': _ksh_pnl_c, 'baseline': _baseline,
                     'drift_cents': _drift,
                 })
             break
@@ -13746,6 +13785,22 @@ def create_ladder_arb_bot():
         except Exception:
             pass
 
+        # Snapshot ticker-level realized P&L at creation. Used by sync fallback
+        # to compute THIS bot's realized = ticker_realized_now - baseline. Without
+        # this, prior bots' (e.g. phantom's) profits on the same ticker get
+        # imported into the new Apex MM's realized counter.
+        _ticker_realized_baseline_cents = 0
+        try:
+            api_read_limiter.wait()
+            _pos_resp = kalshi_client.get_positions(ticker=ticker)
+            _pos_list = _pos_resp.get('market_positions', _pos_resp.get('positions', []))
+            for _pp in _pos_list:
+                if _pp.get('ticker') == ticker:
+                    _ticker_realized_baseline_cents = round(float(_pp.get('realized_pnl_dollars', 0) or 0) * 100, 2)
+                    break
+        except Exception as _ex:
+            print(f'⚠ APEX MM BASELINE FETCH FAILED: {ticker} {_ex} — defaulting to 0')
+
         # Initialize bot state first (needed by _apex_mm_post_ladder)
         active_bots[bot_id] = {
             'ticker': ticker,
@@ -13772,6 +13827,7 @@ def create_ladder_arb_bot():
             'total_yes_cost': 0,
             'total_no_cost': 0,
             'realized_pnl_cents': 0,
+            '_ticker_realized_baseline_cents': _ticker_realized_baseline_cents,
             'round_trips_completed': 0,
             'consecutive_losses': 0,
             '_pull_count': 0,
@@ -18434,15 +18490,17 @@ def _handle_apex(bot_id, bot, actions):
                 threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _held), daemon=True).start()
         _rec_min = _apex_mm_recover_min(ticker)
         if _apex_depth_recovered(ticker, bot, obi_threshold=APEX_MM_RECOVER_OBI, depth_min=_rec_min):
-            # Room guard: don't repost if MARKET room < width + 1 (need buffer above width).
-            # Use market_best_bid for consistency with the active room_guard — bot is pulled
-            # here so live = market in practice, but stay defensive against partial-cancel races.
+            # Room guard: don't repost if MARKET room < width (top rungs would land
+            # above BBO bid = bid+1, which we don't post). Allows room == width, which
+            # is the auto-width target (top rungs AT BBO) — previously this required
+            # room > width and locked bots in a permanent pulled state when auto-width
+            # picked width=room. Matches the active room_guard at line ~18679.
             _rc_yb = _apex_mm_market_best_bid(bot, 'yes')
             _rc_nb = _apex_mm_market_best_bid(bot, 'no')
             _rc_w = bot.get('start_gap', 4) * 2
             _rc_room = (100 - _rc_yb - _rc_nb) if (_rc_yb > 0 and _rc_nb > 0) else 99
-            if _rc_room < _rc_w + 1:
-                bot['_last_pull_reason'] = f'room_guard (room={_rc_room}c < W{_rc_w}+1)'
+            if _rc_room < _rc_w:
+                bot['_last_pull_reason'] = f'room_guard (room={_rc_room}c < W{_rc_w})'
                 return  # room too tight — stay pulled
             _apex_mm_repost_ladder(bot_id, bot)
         else:
@@ -25020,29 +25078,25 @@ def apex_mm_edit(bot_id):
             return jsonify({'error': 'Loss limit must be 0-10000'}), 400
     if new_gap is None and new_qty is None and new_levels is None and new_loss_limit is None and new_auto_width is None:
         return jsonify({'error': 'Nothing to change'}), 400
+    # Compute the diff WITHOUT mutating bot dict yet — needed so inventory-holding
+    # bots can defer cleanly (previously the bot's settings changed immediately,
+    # making the "deferred" flag a lie since base_qty / inventory_limit etc.
+    # already reflected the new values mid-cycle).
     changes = {}
     if new_gap is not None and new_gap != bot.get('start_gap'):
         changes['start_gap'] = {'old': bot.get('start_gap'), 'new': new_gap}
-        bot['start_gap'] = new_gap
     if new_qty is not None and new_qty != bot.get('qty_per_level'):
         changes['qty_per_level'] = {'old': bot.get('qty_per_level'), 'new': new_qty}
-        bot['qty_per_level'] = new_qty
-        bot['base_qty'] = new_qty
     if new_levels is not None and new_levels != bot.get('levels'):
         changes['levels'] = {'old': bot.get('levels'), 'new': new_levels}
-        bot['levels'] = new_levels
     if new_loss_limit is not None and new_loss_limit != bot.get('loss_limit_cents', 0):
         changes['loss_limit_cents'] = {'old': bot.get('loss_limit_cents', 0), 'new': new_loss_limit}
-        bot['loss_limit_cents'] = new_loss_limit
     if new_auto_width is not None and bool(new_auto_width) != bool(bot.get('_auto_width')):
-        changes['auto_width'] = {'old': bool(bot.get('_auto_width')), 'new': bool(new_auto_width)}
-        bot['_auto_width'] = bool(new_auto_width)
+        changes['_auto_width'] = {'old': bool(bot.get('_auto_width')), 'new': bool(new_auto_width)}
     if not changes:
         return jsonify({'ok': True, 'applied_now': False, 'changes': {}})
-    # Recalculate inventory limit BEFORE repost so the new limit is used
-    _levels = bot.get('levels', 4)
-    _qty = bot.get('qty_per_level', 1)
-    bot['inventory_limit'] = _levels * _qty * 2  # flat sizing: levels × qty × 2 sides
+
+    # Defer if not flat — keep bot running on OLD settings until current cycle completes.
     status = bot.get('status', '')
     net_yes = bot.get('net_yes', 0)
     net_no = bot.get('net_no', 0)
@@ -25050,13 +25104,22 @@ def apex_mm_edit(bot_id):
     has_exit = bot.get('_yes_exit_oid') or bot.get('_no_exit_oid')
     applied_now = False
     if has_inventory or has_exit or status == 'mm_exiting':
-        # Holding inventory or mid-hedge — defer changes until flat
         bot['_pending_edit'] = changes
         save_state()
         bot_log('APEX_MM_EDIT_DEFERRED', bot_id, {'changes': changes, 'status': status, 'net_yes': net_yes, 'net_no': net_no})
         print(f'🔧 APEX MM EDIT DEFERRED: {bot_id} — {changes} (holding inventory, will apply when flat)')
         return jsonify({'ok': True, 'applied_now': False, 'deferred': True, 'changes': changes,
                         'reason': f'Holding {net_yes} YES / {net_no} NO — changes will apply after current cycle completes'})
+
+    # Flat — apply mutations now
+    for _k, _v in changes.items():
+        bot[_k] = _v['new']
+        if _k == 'qty_per_level':
+            bot['base_qty'] = _v['new']
+    # Recalculate inventory limit with NEW values
+    _levels = bot.get('levels', 4)
+    _qty = bot.get('qty_per_level', 1)
+    bot['inventory_limit'] = _levels * _qty * 2  # flat sizing: levels × qty × 2 sides
     # Flat — apply immediately: pull all, check for fills during cancel, then repost
     if status in ('market_making_active', 'mm_depth_pulled'):
         # Save old values in case we need to revert

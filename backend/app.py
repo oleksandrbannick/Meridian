@@ -13849,10 +13849,13 @@ def create_ladder_arb_bot():
         if live_no_bid <= 0:
             return jsonify({'error': 'No NO bids in orderbook'}), 400
 
-        # Drift guard
+        # Creation-time drift guard removed 2026-05-05: lets you pre-position
+        # a bot mid-match expecting price to come back. The runtime drift guard
+        # at line ~18806 will immediately pull/dormant this bot if max_bid >= 80c
+        # at first monitor tick, and re-activate it once max_bid drops below
+        # APEX_MM_DRIFT_GUARD_BID. Bot starts in standby until then.
         drift_max = max(live_yes_bid, live_no_bid)
-        if drift_max >= 80:
-            return jsonify({'error': f'Drift guard: max side {drift_max}c — market too decided'}), 400
+        _will_standby = drift_max >= APEX_MM_DRIFT_GUARD_BID
 
         # Calculate midpoint and generate levels (flat sizing — scale param removed)
         midpoint = round((live_yes_bid + (100 - live_no_bid)) / 2)
@@ -13970,6 +13973,28 @@ def create_ladder_arb_bot():
             '_cycle_start_pnl': 0,
             '_last_reconcile': 0,
         }
+
+        if _will_standby:
+            # Skip initial post — runtime drift guard would immediately pull anyway.
+            # Bot starts in mm_depth_pulled with explicit standby reason; goes
+            # active when max_bid drops below APEX_MM_DRIFT_GUARD_BID.
+            active_bots[bot_id]['status'] = 'mm_depth_pulled'
+            active_bots[bot_id]['_last_pull_reason'] = f'standby (max_bid={drift_max}c >= {APEX_MM_DRIFT_GUARD_BID}c at create)'
+            active_bots[bot_id]['_last_pull_at'] = time.time()
+            if ws_manager and ws_manager.connected:
+                ws_manager.add_ticker(ticker)
+            save_state()
+            bot_log('APEX_MM_CREATED_STANDBY', bot_id, {
+                'midpoint': midpoint, 'max_bid': drift_max, 'threshold': APEX_MM_DRIFT_GUARD_BID,
+            })
+            print(f'📊 APEX MM CREATED IN STANDBY: {bot_id} | mid={midpoint} max_bid={drift_max}c (>= {APEX_MM_DRIFT_GUARD_BID}c) — waiting for market to come back')
+            return jsonify({
+                'success': True,
+                'bot_id': bot_id,
+                'midpoint': midpoint,
+                'standby': True,
+                'message': f'Apex MM created in STANDBY — max_bid={drift_max}c is past drift threshold ({APEX_MM_DRIFT_GUARD_BID}c). Bot will activate when bid drops below {APEX_MM_DRIFT_GUARD_BID}c.',
+            })
 
         success = _apex_mm_post_ladder(bot_id, active_bots[bot_id], yes_levels, no_levels)
         if not success:

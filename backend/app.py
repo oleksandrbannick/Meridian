@@ -5997,9 +5997,13 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 continue
 
             net_held = abs(net_yes - net_no)
-            # Outbidder match: snap UP to real top (excludes our own orders).
-            # No cap. As maker, matching is always cheaper than later crossing.
-            _real_top = _apex_mm_market_best_bid(bot, exit_side)
+            # Snap rule: exit ALWAYS rides AT the live best bid, never below.
+            # Reads ticker channel (live_<side>_bid), not delta orderbook —
+            # delta channel lags/drops updates, leaving exits stranded below
+            # market. Per feedback_ws_ticker_not_delta.md and
+            # feedback_phantom_park_at_bid_alone.md: ticker is reliable, and
+            # exit should sit at-bid even when "alone" (queue priority > price).
+            _real_top = bot.get(f'live_{exit_side}_bid', 0) or 0
             if _real_top <= 0 or _real_top <= current_price:
                 continue
             # ASK CLAMP — post_only buy at price >= ask gets rejected by Kalshi.
@@ -10171,10 +10175,12 @@ def _apex_mm_target_start_gap(bot):
     if room <= 0:
         return max(user_min, floor)
     if bot.get('_auto_width'):
-        # Goldilocks: sit just inside market (BBO by ~2c each side = 4c total margin).
-        # width = room - 4, start_gap = (room - 4) / 2. Bounds [floor, 20] = width [2*floor, 40].
-        # Sport floor gives the surrender curve runway to walk before hitting cap.
-        return max(floor, min(20, (room - 4) // 2))
+        # Match the BBO — top rungs land at market_yes_bid / market_no_bid.
+        # Unified with _apex_mm_sync_auto_width (line ~10307) so create-time
+        # and runtime use the SAME formula. Was (room-4)//2 here vs room//2
+        # in sync — caused width to differ by 4c between create and first
+        # sync cycle. Sport floor gives surrender-curve runway.
+        return max(floor, min(20, room // 2))
     target = max(user_min, int(room / 4))
     cap = bot.get('max_start_gap', user_min + 6)
     return max(floor, min(target, cap))
@@ -13865,8 +13871,9 @@ def create_ladder_arb_bot():
             _room = 100 - live_yes_bid - live_no_bid
             if _room < 2:
                 return jsonify({'error': f'Room {_room}c — need >= 2c (no spread to capture)'}), 400
-            # Below 6c → BBO-tight (width=2), still valid; user knows what they're doing
-            start_gap = max(1, min(20, (_room - 4) // 2)) if _room >= 6 else 1
+            # Unified with _apex_mm_target_start_gap and _apex_mm_sync_auto_width:
+            # all three paths use room // 2 (BBO match). Below 6c → BBO-tight.
+            start_gap = max(1, min(20, _room // 2)) if _room >= 6 else 1
         yes_levels, no_levels = _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=qty_per_level, inv_limit=0)
         # Auto-compute inventory limit from ladder total (max contracts per side)
         inventory_limit = max(sum(q for _, q in yes_levels), sum(q for _, q in no_levels)) if yes_levels or no_levels else 50
@@ -25837,8 +25844,14 @@ def scan_arb_opportunities():
             else:
                 catch_speed = 'slow'     # wide spread or unbalanced
 
-            # Recommended Apex MM width: half the room (ceiling), clamped to valid range
-            recommended_width = max(2, min(20, width // 2))
+            # Recommended Apex MM width: quarter of room, clamped to [4, 10].
+            # Apex MM thrives on high-frequency small captures (today's MON bot
+            # printed $62 doing 244 RTs at width 4-8c, not 12 at width 20c).
+            # Half-of-room was producing the same W20 for every wide market —
+            # ignored room scaling entirely once it hit the 20 cap. For very
+            # wide rooms (>25c), auto-width runtime adapts better than any
+            # fixed value as room compresses pre-game→live.
+            recommended_width = max(4, min(10, width // 4))
 
             # ── APEX ★ STAR ────────────────────────────────────────
             # Pure structural signal — no historical P&L (contaminated by

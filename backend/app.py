@@ -9953,16 +9953,15 @@ def create_bot():
 APEX_MM_DRIFT_THRESHOLD = 4        # Reprice ladder if midpoint moves 4+ cents (preserves queue priority on tick-level noise)
 APEX_MM_SIDE_DRIFT_THRESHOLD = 2   # Reprice if EITHER side's BBO drifted 2+ cents — catches symmetric BBO widening that leaves midpoint stable
 # ── Auto-Join (anti-pennying) ──
-# Default-mode bots ladder at bid+1 / mid-gap. In bot-saturated rooms, an
-# opponent posts at our_top+1 → we reprice → they jump again → undercut spiral
-# that incinerates the spread. Detect "verified jumped": bid strictly > our
-# last post price means someone bid HIGHER than where we posted (genuine market
-# moves usually overshoot AT our price first; sustained bid > last_post is the
-# undercut fingerprint). N events in window → flip to queue_join_mode for D
-# seconds, then revert and re-evaluate.
-APEX_MM_AUTO_JOIN_THRESHOLD = 3        # Confirmed undercut events
-APEX_MM_AUTO_JOIN_WINDOW_S = 60        # Rolling window for counting events
-APEX_MM_AUTO_JOIN_DURATION_S = 300     # Stay in join mode for this long
+# Default-mode bots post at bid+1. If outbidded (live_bid strictly > our last
+# post price), opponent jumped us. Per user 2026-05-06: instant snap to bid
+# on first verified jump — never chase by reposting at new_bid+1 (= 1c chase
+# spiral). Strict > (not >=) filters joiners-at-same-price from real
+# undercutters. No auto-revert: once flipped, stay in join until the user
+# manually flips back via the edit modal (else next bid drift triggers another
+# chase attempt — exactly what we're trying to avoid).
+APEX_MM_AUTO_JOIN_THRESHOLD = 1        # Single confirmed undercut → flip
+APEX_MM_AUTO_JOIN_WINDOW_S = 60        # Window kept for symmetry; threshold=1 means it's mostly inert
 APEX_MM_THIN_GATE_ROOM_OVERRIDE = 30  # If BBO room >= this many cents, ignore thin/obi/vanish gates — wide spread is its own protection
 APEX_MM_INVENTORY_HYSTERESIS = 10  # Resume quoting side when inv drops this far below limit
 
@@ -10826,51 +10825,33 @@ def _apex_mm_detect_undercut(bot):
 
 
 def _apex_mm_record_undercut_and_maybe_flip(bot_id, bot):
-    """Append undercut event timestamp, prune rolling window, flip to join
-    mode if event count >= threshold. Auto-revert handled separately in
-    _handle_apex by checking _auto_join_expires_at."""
+    """Verify undercut (live_bid strictly > our last post top) and flip to
+    join mode immediately. Threshold=1 means a single confirmed jump
+    triggers the snap. No auto-revert — once flipped, stay in join until
+    user manually flips back via edit modal. (Auto-reverting would put the
+    bot back into bid+1 chase mode, which is exactly what the user wants
+    to avoid.)"""
     if bot.get('queue_join_mode'):
-        return  # already in join — no point counting
+        return  # already in join — no action needed
     if not _apex_mm_detect_undercut(bot):
-        return  # not actually jumped — don't record
+        return  # not actually jumped — don't flip
     now = time.time()
     events = bot.setdefault('_undercut_events', [])
     events.append(now)
-    # Prune to window
     cutoff = now - APEX_MM_AUTO_JOIN_WINDOW_S
     events[:] = [t for t in events if t >= cutoff]
     if len(events) >= APEX_MM_AUTO_JOIN_THRESHOLD:
         bot['queue_join_mode'] = True
         bot['_auto_join_at'] = now
-        bot['_auto_join_expires_at'] = now + APEX_MM_AUTO_JOIN_DURATION_S
         bot_log('APEX_MM_AUTO_JOIN', bot_id, {
             'events': len(events),
-            'window_s': APEX_MM_AUTO_JOIN_WINDOW_S,
-            'duration_s': APEX_MM_AUTO_JOIN_DURATION_S,
             'yes_bid': bot.get('live_yes_bid', 0),
             'no_bid': bot.get('live_no_bid', 0),
             'last_post_yes': bot.get('_last_post_top_yes', 0),
             'last_post_no': bot.get('_last_post_top_no', 0),
         }, level='WARN')
-        print(f'⚡ APEX MM AUTO-JOIN: {bot_id} {len(events)} confirmed undercuts in {APEX_MM_AUTO_JOIN_WINDOW_S}s → join mode for {APEX_MM_AUTO_JOIN_DURATION_S}s')
+        print(f'⚡ APEX MM AUTO-JOIN: {bot_id} confirmed undercut → snap to bid (no chase)')
         events.clear()
-
-
-def _apex_mm_check_auto_join_expiry(bot_id, bot):
-    """Revert auto-join back to default mode when the duration elapses.
-    Per-tick check from _handle_apex. Manual user-set queue_join_mode is
-    distinguished by absence of _auto_join_expires_at marker — this only
-    flips back bots that auto-flipped."""
-    expires = bot.get('_auto_join_expires_at', 0) or 0
-    if expires <= 0:
-        return  # not auto-joined
-    if time.time() < expires:
-        return  # still in auto-join window
-    bot['queue_join_mode'] = False
-    bot['_auto_join_expires_at'] = 0
-    bot['_undercut_events'] = []
-    bot_log('APEX_MM_AUTO_JOIN_EXPIRED', bot_id, {})
-    print(f'⏰ APEX MM AUTO-JOIN EXPIRED: {bot_id} reverting to default mode')
 
 
 def _apex_mm_sweep_orphans(bot_id, bot):
@@ -19724,9 +19705,6 @@ def _handle_apex(bot_id, bot, actions):
             bot_log('APEX_MM_STALE_REPOST', bot_id, {})
             _apex_mm_repost_ladder(bot_id, bot)
             return
-
-    # 5.55. Auto-join expiry: revert auto-flipped bots after duration.
-    _apex_mm_check_auto_join_expiry(bot_id, bot)
 
     # 5.6. Bid-placement rule enforcement (every monitor tick, flat-only).
     # User rule: default mode top rung > bid (BBO); join mode top rung == bid.

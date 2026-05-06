@@ -10917,12 +10917,32 @@ def _apex_mm_pull_entry_rungs(bot_id, bot, reason):
     return cancelled
 
 
+def _apex_mm_prune_dead_rungs(bot):
+    """Remove price entries where oid is None — stale state from cancels.
+    Various paths set level['oid'] = None when an order is cancelled (room
+    guard, drift guard, OBI pull, side pause, etc.) but never delete the
+    price key. The accumulated entries make the UI render phantom rungs
+    that aren't actually on Kalshi. Call before posting to force the dict
+    to mirror real Kalshi state. Preserves entries with non-zero fill_qty
+    so accounting (PNL_SYNC, fill dedup) can still find them."""
+    for side_key in ('yes_orders', 'no_orders'):
+        d = bot.get(side_key) or {}
+        if not d:
+            continue
+        for p, lv in list(d.items()):
+            if not lv.get('oid') and not lv.get('fill_qty'):
+                del d[p]
+
+
 def _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels):
     """Post the full ladder. Accepts list of (price, qty) tuples.
     Returns True on success. Builds yes_orders and no_orders dicts keyed by price string."""
     ticker = bot['ticker']
     yes_paused = bot.get('_yes_side_paused', False)
     no_paused = bot.get('_no_side_paused', False)
+    # Clean stale rung entries (oid=None, no fills) before posting fresh
+    # ones. Otherwise the UI shows phantom rungs from prior cancels.
+    _apex_mm_prune_dead_rungs(bot)
 
     # Hard cap on entry price: never submit a rung at or above the drift-guard
     # threshold. The active drift guard would immediately cancel it anyway —

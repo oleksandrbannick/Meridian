@@ -6340,7 +6340,8 @@ async function deployMarketMaker() {
     showNotification(`Deploying Apex MM on ${ticker}...`);
 
     try {
-        const queueJoinMode = !!document.getElementById('mm-queue-join')?.checked;
+        // queue_join_mode now auto-flipped by backend on detected undercut spiral
+        // (see _apex_mm_record_undercut_and_maybe_flip). Always create as default.
         const resp = await fetch(`${API_BASE}/bot/ladder-arb`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -6351,7 +6352,7 @@ async function deployMarketMaker() {
                 loss_limit_cents: lossLimitCents,
                 smart_mode: lossLimitCents > 0 ? true : false,
                 auto_width: _mmAutoWidth,
-                queue_join_mode: queueJoinMode,
+                queue_join_mode: false,
             }),
         });
         const data = await resp.json();
@@ -7454,7 +7455,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         ${historyHtml}
 
         <div style="display:flex;gap:6px;flex-wrap:wrap;padding-top:4px;font-size:9px;color:#334;">
-            <span style="color:#00d4ff;">W:${bot._auto_width ? `<span style="color:#00ff88;">auto</span> ${width}` : width}${bot.queue_join_mode ? ` <span style="color:#00d4ff;background:#00d4ff22;padding:0 4px;border-radius:3px;font-weight:700;font-size:8px;letter-spacing:.04em;" title="Join Room Mode — posting AT live bid, not inside the spread">📌 JOIN</span>` : ''}</span>
+            <span style="color:#00d4ff;">W:${bot._auto_width ? `<span style="color:#00ff88;">auto</span> ${width}` : width}${bot.queue_join_mode ? ` <span style="color:${bot._auto_join_expires_at ? '#ff7043' : '#00d4ff'};background:${bot._auto_join_expires_at ? '#ff704322' : '#00d4ff22'};padding:0 4px;border-radius:3px;font-weight:700;font-size:8px;letter-spacing:.04em;" title="${bot._auto_join_expires_at ? 'Auto-flipped to Join after 3 confirmed undercuts in 60s. Reverts to default at expiry.' : 'Join Room Mode — posting AT live bid'}">📌 ${bot._auto_join_expires_at ? 'AUTO-JOIN' : 'JOIN'}</span>` : ''}</span>
             <span style="color:#e0e0e0;">Mid:${midpoint}</span>
             <span style="color:#ff7043;">${bot.base_qty || bot.qty_per_level || '?'}x${bot.levels || '?'}</span>
             ${room >= 0 ? `<span style="color:${roomCol};font-weight:${room < width ? 700 : 400};">Room:${room}${roomTag}</span>` : ''}

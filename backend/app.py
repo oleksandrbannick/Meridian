@@ -9952,6 +9952,17 @@ def create_bot():
 
 APEX_MM_DRIFT_THRESHOLD = 4        # Reprice ladder if midpoint moves 4+ cents (preserves queue priority on tick-level noise)
 APEX_MM_SIDE_DRIFT_THRESHOLD = 2   # Reprice if EITHER side's BBO drifted 2+ cents — catches symmetric BBO widening that leaves midpoint stable
+# ── Auto-Join (anti-pennying) ──
+# Default-mode bots ladder at bid+1 / mid-gap. In bot-saturated rooms, an
+# opponent posts at our_top+1 → we reprice → they jump again → undercut spiral
+# that incinerates the spread. Detect "verified jumped": bid strictly > our
+# last post price means someone bid HIGHER than where we posted (genuine market
+# moves usually overshoot AT our price first; sustained bid > last_post is the
+# undercut fingerprint). N events in window → flip to queue_join_mode for D
+# seconds, then revert and re-evaluate.
+APEX_MM_AUTO_JOIN_THRESHOLD = 3        # Confirmed undercut events
+APEX_MM_AUTO_JOIN_WINDOW_S = 60        # Rolling window for counting events
+APEX_MM_AUTO_JOIN_DURATION_S = 300     # Stay in join mode for this long
 APEX_MM_THIN_GATE_ROOM_OVERRIDE = 30  # If BBO room >= this many cents, ignore thin/obi/vanish gates — wide spread is its own protection
 APEX_MM_INVENTORY_HYSTERESIS = 10  # Resume quoting side when inv drops this far below limit
 
@@ -10797,6 +10808,71 @@ def _apex_mm_top_rung_below_bid(bot):
     return False
 
 
+def _apex_mm_detect_undercut(bot):
+    """Returns True iff the live bid on either side is strictly above our last
+    posted top rung — confirms an opponent jumped us at a higher price (NOT a
+    natural market move that just touched our level). False positives suppressed:
+    we require strict > (not >=) because joiners landing AT our price would
+    leave bid == our_post_top, only undercutters push it strictly above."""
+    yes_bid = bot.get('live_yes_bid', 0) or 0
+    no_bid  = bot.get('live_no_bid', 0) or 0
+    last_y = bot.get('_last_post_top_yes', 0) or 0
+    last_n = bot.get('_last_post_top_no', 0) or 0
+    if last_y > 0 and yes_bid > last_y:
+        return True
+    if last_n > 0 and no_bid > last_n:
+        return True
+    return False
+
+
+def _apex_mm_record_undercut_and_maybe_flip(bot_id, bot):
+    """Append undercut event timestamp, prune rolling window, flip to join
+    mode if event count >= threshold. Auto-revert handled separately in
+    _handle_apex by checking _auto_join_expires_at."""
+    if bot.get('queue_join_mode'):
+        return  # already in join — no point counting
+    if not _apex_mm_detect_undercut(bot):
+        return  # not actually jumped — don't record
+    now = time.time()
+    events = bot.setdefault('_undercut_events', [])
+    events.append(now)
+    # Prune to window
+    cutoff = now - APEX_MM_AUTO_JOIN_WINDOW_S
+    events[:] = [t for t in events if t >= cutoff]
+    if len(events) >= APEX_MM_AUTO_JOIN_THRESHOLD:
+        bot['queue_join_mode'] = True
+        bot['_auto_join_at'] = now
+        bot['_auto_join_expires_at'] = now + APEX_MM_AUTO_JOIN_DURATION_S
+        bot_log('APEX_MM_AUTO_JOIN', bot_id, {
+            'events': len(events),
+            'window_s': APEX_MM_AUTO_JOIN_WINDOW_S,
+            'duration_s': APEX_MM_AUTO_JOIN_DURATION_S,
+            'yes_bid': bot.get('live_yes_bid', 0),
+            'no_bid': bot.get('live_no_bid', 0),
+            'last_post_yes': bot.get('_last_post_top_yes', 0),
+            'last_post_no': bot.get('_last_post_top_no', 0),
+        }, level='WARN')
+        print(f'⚡ APEX MM AUTO-JOIN: {bot_id} {len(events)} confirmed undercuts in {APEX_MM_AUTO_JOIN_WINDOW_S}s → join mode for {APEX_MM_AUTO_JOIN_DURATION_S}s')
+        events.clear()
+
+
+def _apex_mm_check_auto_join_expiry(bot_id, bot):
+    """Revert auto-join back to default mode when the duration elapses.
+    Per-tick check from _handle_apex. Manual user-set queue_join_mode is
+    distinguished by absence of _auto_join_expires_at marker — this only
+    flips back bots that auto-flipped."""
+    expires = bot.get('_auto_join_expires_at', 0) or 0
+    if expires <= 0:
+        return  # not auto-joined
+    if time.time() < expires:
+        return  # still in auto-join window
+    bot['queue_join_mode'] = False
+    bot['_auto_join_expires_at'] = 0
+    bot['_undercut_events'] = []
+    bot_log('APEX_MM_AUTO_JOIN_EXPIRED', bot_id, {})
+    print(f'⏰ APEX MM AUTO-JOIN EXPIRED: {bot_id} reverting to default mode')
+
+
 def _apex_mm_sweep_orphans(bot_id, bot):
     """Cancel ALL resting orders on this ticker that aren't owned by other active bots.
     Catches stale orders from previous cycles that weren't properly cancelled."""
@@ -11066,6 +11142,16 @@ def _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels):
     if _order_group_id:
         bot['_order_group_id'] = _order_group_id
         bot.setdefault('_all_order_group_ids', []).append(_order_group_id)
+
+    # Track top rung price per side for auto-join undercut detection.
+    # Confirmed undercut signal = live_<side>_bid > _last_post_top_<side>.
+    _yes_keys = [int(p) for p in yes_orders.keys()] if yes_orders else []
+    _no_keys = [int(p) for p in no_orders.keys()] if no_orders else []
+    if _yes_keys:
+        bot['_last_post_top_yes'] = max(_yes_keys)
+    if _no_keys:
+        bot['_last_post_top_no'] = max(_no_keys)
+    bot['_last_post_at'] = time.time()
 
     total_posted = len(yes_orders) + len(no_orders)
     yes_qty = sum(l.get('qty', 0) for l in yes_orders.values())
@@ -19639,6 +19725,9 @@ def _handle_apex(bot_id, bot, actions):
             _apex_mm_repost_ladder(bot_id, bot)
             return
 
+    # 5.55. Auto-join expiry: revert auto-flipped bots after duration.
+    _apex_mm_check_auto_join_expiry(bot_id, bot)
+
     # 5.6. Bid-placement rule enforcement (every monitor tick, flat-only).
     # User rule: default mode top rung > bid (BBO); join mode top rung == bid.
     # WS-tick reprice catches the moment of bid change, but slow markets may
@@ -19654,11 +19743,15 @@ def _handle_apex(bot_id, bot, actions):
         _qj_bb = bool(bot.get('queue_join_mode', False))
         _cooldown_ok = _now_bb - bot.get('_last_ws_drift_at', 0) >= APEX_MM_WS_DRIFT_COOLDOWN_S
         if not _qj_bb or _cooldown_ok:
+            # Record undercut event BEFORE repricing — measures the violation
+            # against last_post (still the pre-repost values). Verifies it's a
+            # genuine undercut, not just market noise. Auto-flip if threshold.
+            _apex_mm_record_undercut_and_maybe_flip(bot_id, bot)
             bot['_last_ws_drift_at'] = _now_bb
             bot_log('APEX_MM_BELOW_BID_REPOST', bot_id, {
                 'yes_bid': bot.get('live_yes_bid', 0),
                 'no_bid': bot.get('live_no_bid', 0),
-                'qj': _qj_bb,
+                'qj': bool(bot.get('queue_join_mode', False)),
             }, level='WARN')
             print(f'⚡ APEX MM BELOW-BID MONITOR: {bot_id} top rung violates placement rule → repost')
             _apex_mm_repost_ladder(bot_id, bot)

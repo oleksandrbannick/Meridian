@@ -9962,7 +9962,7 @@ APEX_MM_SIDE_DRIFT_THRESHOLD = 2   # Reprice if EITHER side's BBO drifted 2+ cen
 # chase attempt — exactly what we're trying to avoid).
 APEX_MM_AUTO_JOIN_THRESHOLD = 1        # Single confirmed undercut → flip
 APEX_MM_AUTO_JOIN_WINDOW_S = 60        # Window kept for symmetry; threshold=1 means it's mostly inert
-APEX_MM_THIN_GATE_ROOM_OVERRIDE = 1  # Disable thin/obi/vanish gates whenever room >= 1c. Per user 2026-05-06: 'I'm literally a market provider why the fuck do I care if anyone else is there I'm providing the market'. Gates protected against adverse selection in lopsided books, but they were also stopping the bot from being the liquidity in those books — chicken-and-egg. drift_guard at 90 still catches truly toxic decided markets.
+APEX_MM_THIN_GATE_ROOM_OVERRIDE = 30  # If BBO room >= this many cents, ignore thin/obi/vanish gates — wide spread is its own protection
 APEX_MM_INVENTORY_HYSTERESIS = 10  # Resume quoting side when inv drops this far below limit
 
 

@@ -10187,27 +10187,25 @@ def _apex_should_pull(ticker, depth_levels=3, obi_threshold=None, depth_min=None
 
 def _apex_depth_recovered(ticker, bot=None, obi_threshold=None, depth_min=None):
     """Check if book conditions have recovered enough to re-post. Returns bool.
-    Falls back to bot's live bid data if LocalOrderbook is unavailable/stale."""
-    if obi_threshold is None:
-        obi_threshold = APEX_DEPTH_RECOVER_OBI
-    if depth_min is None:
-        depth_min = APEX_DEPTH_RECOVER_MIN
-    lob = _local_orderbooks.get(ticker)
-    if lob and lob.last_update_ts > 0 and (time.time() - lob.last_update_ts) < 10:
-        yes_depth = lob.get_total_depth('yes', 3)
-        no_depth = lob.get_total_depth('no', 3)
-        obi = lob.get_weighted_obi()
-        return (yes_depth >= depth_min and
-                no_depth >= depth_min and
-                abs(obi) <= obi_threshold)
-
-    # No fresh LOB — fallback: if both sides have bids, assume OK
+    Per user 2026-05-06: pure-MM mode — recovery only requires both bids to
+    exist. Depth and OBI gates removed (irrelevant for a liquidity provider:
+    you ARE the depth, OBI is reading your own posts in mirror). drift_guard
+    at max_bid >= 90 still catches truly toxic decided markets."""
     if bot:
         yes_bid = bot.get('live_yes_bid', 0)
         no_bid = bot.get('live_no_bid', 0)
-        if yes_bid > 0 and no_bid > 0 and max(yes_bid, no_bid) < 80:
-            return True
-    return False
+    else:
+        lob = _local_orderbooks.get(ticker)
+        if not lob or lob.last_update_ts <= 0:
+            return False
+        yes_bid = lob.get_best_bid('yes') or 0
+        no_bid = lob.get_best_bid('no') or 0
+    if yes_bid <= 0 or no_bid <= 0:
+        return False
+    # Drift guard — still gate on truly decided markets.
+    if max(yes_bid, no_bid) >= APEX_MM_DRIFT_GUARD_RECOVERY:
+        return False
+    return True
 
 
 # ─── Apex MM: Core Functions ──────────────────────────────────────────────────
@@ -18968,18 +18966,11 @@ def _handle_apex(bot_id, bot, actions):
                 threading.Thread(target=_apex_mm_amend_exit, args=(bot_id, bot, _held), daemon=True).start()
         _rec_min = _apex_mm_recover_min(ticker)
         if _apex_depth_recovered(ticker, bot, obi_threshold=APEX_MM_RECOVER_OBI, depth_min=_rec_min):
-            # Room guard: don't repost if MARKET room < width (top rungs would land
-            # above BBO bid = bid+1, which we don't post). Allows room == width, which
-            # is the auto-width target (top rungs AT BBO) — previously this required
-            # room > width and locked bots in a permanent pulled state when auto-width
-            # picked width=room. Matches the active room_guard at line ~18679.
-            _rc_yb = _apex_mm_market_best_bid(bot, 'yes')
-            _rc_nb = _apex_mm_market_best_bid(bot, 'no')
-            _rc_w = bot.get('start_gap', 4) * 2
-            _rc_room = (100 - _rc_yb - _rc_nb) if (_rc_yb > 0 and _rc_nb > 0) else 99
-            if _rc_room < _rc_w:
-                bot['_last_pull_reason'] = f'room_guard (room={_rc_room}c < W{_rc_w})'
-                return  # room too tight — stay pulled
+            # Room guard removed (2026-05-06 per user): with new bid+1 formula,
+            # `max(mid-gap, bid+1)` always anchors at bid+1 in narrow rooms, so
+            # top rung doesn't depend on start_gap fitting in market room. The
+            # old room_guard was a safety for the mid-gap formula that could
+            # land top below opp_bid (crossing) when start_gap > room/2.
             _apex_mm_repost_ladder(bot_id, bot)
         else:
             # Update pull reason to show what's actually blocking recovery
@@ -19204,15 +19195,18 @@ def _handle_apex(bot_id, bot, actions):
         if bot.get('_drift_dormant_strikes'):
             bot['_drift_dormant_strikes'] = 0
 
-    # 0.7. Room guard — pull if MARKET room < width (no profit space, behind the book).
-    # Must use market_best_bid (excludes our own ladder), otherwise our just-posted
-    # rungs become top-of-book and shrink live_room to ≈width every cycle, triggering
-    # a pull→repost→pull loop in tight markets at Goldilocks width.
+    # 0.7. Room guard — pull only when there's no profit possible at all.
+    # With bid+1 formula, profit = room - 2 (each side bids 1c above market).
+    # So room < 3 means breakeven or worse if both fill. Anything 3c+ is
+    # profitable territory.
+    # Per user 2026-05-06: pure-MM mode — width vs room comparison removed
+    # (irrelevant under max(mid-gap, bid+1) formula since top always >= bid+1
+    # regardless of start_gap). Drift_guard at 90 still catches toxic books.
     _yb = _apex_mm_market_best_bid(bot, 'yes')
     _nb = _apex_mm_market_best_bid(bot, 'no')
     _width = bot.get('start_gap', 4) * 2
     _room = (100 - _yb - _nb) if (_yb > 0 and _nb > 0) else 99
-    if _room < _width:
+    if _room < 3:
         net_yes = bot.get('net_yes', 0)
         net_no = bot.get('net_no', 0)
         if net_yes <= 0 and net_no <= 0:

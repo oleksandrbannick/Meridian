@@ -19195,13 +19195,36 @@ def _handle_apex(bot_id, bot, actions):
         if bot.get('_drift_dormant_strikes'):
             bot['_drift_dormant_strikes'] = 0
 
-    # 0.7. Room guard REMOVED (2026-05-06).
-    # Per user: 'I create the fucking room with my width'. With the
-    # max(mid-gap, bid+1) formula, the bot anchors at bid+1 in narrow rooms
-    # (creating room = market_room - 2c) and at mid-gap in wide rooms
-    # (creating room = start_gap*2). Either way, the bot defines its own
-    # room — width-vs-market-room comparison is meaningless. drift_guard at
-    # max_bid >= 90 still pulls in genuinely toxic decided markets.
+    # 0.7. Room guard — pull only when there's no profit possible at all.
+    # With bid+1 formula, profit = room - 2 (each side bids 1c above market).
+    # So room < 3 means breakeven or worse if both fill. Anything 3c+ is
+    # profitable territory.
+    # Per user 2026-05-06: pure-MM mode — width vs room comparison removed
+    # (irrelevant under max(mid-gap, bid+1) formula since top always >= bid+1
+    # regardless of start_gap). Drift_guard at 90 still catches toxic books.
+    _yb = _apex_mm_market_best_bid(bot, 'yes')
+    _nb = _apex_mm_market_best_bid(bot, 'no')
+    _width = bot.get('start_gap', 4) * 2
+    _room = (100 - _yb - _nb) if (_yb > 0 and _nb > 0) else 99
+    if _room < 3:
+        net_yes = bot.get('net_yes', 0)
+        net_no = bot.get('net_no', 0)
+        if net_yes <= 0 and net_no <= 0:
+            # Flat — pull everything
+            _apex_mm_pull_all(bot_id, bot, f'room_guard (room={_room}c < W{_width})')
+            print(f'🛡️ APEX MM ROOM GUARD: {bot_id} room={_room}c < width={_width}c — pulling (flat)')
+            return
+        else:
+            # Holding inventory — pull ALL entry rungs on BOTH sides, keep exit alive.
+            # Helper handles late-fill capture (cancel-race fills land in inventory)
+            # and increments _pull_count + _last_pull_at + _last_pull_reason internally.
+            cancelled = _apex_mm_pull_entry_rungs(
+                bot_id, bot,
+                f'apex_mm_room_guard (room={_room}c < W{_width}, entry only)',
+            )
+            bot_log('APEX_MM_ROOM_GUARD_PULL', bot_id, {'room': _room, 'width': _width, 'cancelled': cancelled})
+            print(f'🛡️ APEX MM ROOM GUARD: {bot_id} room={_room}c < W{_width} — pulled {cancelled} entry rungs (both sides, exit kept)')
+            save_state()
             # Fall through to walk_up so exit order follows market
 
     # 0.9. State-agnostic reconciliation heartbeat — sync bot tracking with Kalshi reality

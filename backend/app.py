@@ -10051,11 +10051,14 @@ APEX_MM_DRIFT_DORMANT_RECOVER_BID = 70
 APEX_MM_DRIFT_DORMANT_RECOVER_S = 30
 
 # ── Drift Guard Thresholds ──
-# Active: max(yes_bid, no_bid) >= this triggers entry-rung pull (kept at 80).
+# Active: max(yes_bid, no_bid) >= this triggers entry-rung pull.
 # Recovery: while mm_depth_pulled, stay pulled until max_bid drops below this.
 # WS cooldown: per-bot suppress on WS-tick fires so one bid spike doesn't enqueue
 # many cancel jobs in quick succession.
-APEX_MM_DRIFT_GUARD_BID = 80
+# 2026-05-06: bumped 80→90 per user — VISDEN bots were profitable in 80-89c
+# range (4 RTs +17c, 2 RTs +4c) but kept getting pulled. Last 10c (90-99) is
+# the truly toxic zone where hits lock in near-certain wins for the taker.
+APEX_MM_DRIFT_GUARD_BID = 90
 APEX_MM_DRIFT_GUARD_RECOVERY = 85
 APEX_MM_WS_DRIFT_GUARD_COOLDOWN_S = 1.0
 

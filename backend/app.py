@@ -6866,7 +6866,17 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
 
                 if close_qty > 0:
                     _apex_mm_record_round_trip(bot_id, bot, matched_side, exit_price, close_qty)
-                    bot['_exit_fill_qty'] = bot.get('_exit_fill_qty', 0) + close_qty
+                    # Rebase display counters against REMAINING held inventory.
+                    # close_qty just auto-netted (Kalshi paired exit fills with
+                    # held → both gone). Without rebase, card shows "3/6 filled"
+                    # while truth is "0/3 left to close". Per commit 2585d7a;
+                    # restored after 0534b60 inadvertently dropped it.
+                    _net_remaining = abs(bot.get('net_yes', 0) - bot.get('net_no', 0))
+                    if _net_remaining > 0:
+                        bot['_exit_fill_qty'] = 0
+                        bot['_exit_total_qty'] = int(_net_remaining)
+                    else:
+                        bot['_exit_fill_qty'] = bot.get('_exit_total_qty', 0) or close_qty
                     print(f'💰 WS APEX MM EXIT FILL: {bot_id} {matched_side.upper()} +{count} @{exit_price}c → closed {close_qty}x (exit {bot["_exit_fill_qty"]}/{bot.get("_exit_total_qty",0)})')
 
                 # Log fill
@@ -6943,7 +6953,13 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     close_qty = min(count, opp_held)
                     if close_qty > 0 and exit_price > 0:
                         _apex_mm_record_round_trip(bot_id, bot, matched_side, exit_price, close_qty)
-                        bot['_exit_fill_qty'] = bot.get('_exit_fill_qty', 0) + close_qty
+                        # Rebase display counters against remaining (mirror line 6868 path).
+                        _net_remaining = abs(bot.get('net_yes', 0) - bot.get('net_no', 0))
+                        if _net_remaining > 0:
+                            bot['_exit_fill_qty'] = 0
+                            bot['_exit_total_qty'] = int(_net_remaining)
+                        else:
+                            bot['_exit_fill_qty'] = bot.get('_exit_total_qty', 0) or close_qty
                         print(f'💰 WS APEX MM EXIT-BUY FILL: {bot_id} {matched_side.upper()} +{count} @{exit_price}c → closed {close_qty}x held {held_side.upper()} (exit {bot["_exit_fill_qty"]}/{bot.get("_exit_total_qty",0)})')
                         if sell_info['_ws_fill_qty'] >= sell_info.get('qty', 0):
                             sell_info['_trade_recorded'] = True

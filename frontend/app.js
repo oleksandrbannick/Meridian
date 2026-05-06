@@ -6985,7 +6985,15 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const pullCount = bot._pull_count || 0;
     const consLosses = bot.consecutive_losses || 0;
     const smartMode = bot.smart_mode ? (typeof bot.smart_mode === 'number' ? bot.smart_mode : 2) : 0;
-    const width = (bot.start_gap || 0) * 2;
+    // W = the bot's ACTUAL room (= 100 - top_YES - top_NO from live orders).
+    // Falls back to start_gap*2 when no live rungs (pregame/just-pulled).
+    const _topYesPrices = Object.keys(bot.yes_orders || {}).filter(p => (bot.yes_orders[p]||{}).oid).map(p => parseInt(p)).filter(p => !isNaN(p));
+    const _topNoPrices = Object.keys(bot.no_orders || {}).filter(p => (bot.no_orders[p]||{}).oid).map(p => parseInt(p)).filter(p => !isNaN(p));
+    const _topYesRung = _topYesPrices.length ? Math.max(..._topYesPrices) : 0;
+    const _topNoRung = _topNoPrices.length ? Math.max(..._topNoPrices) : 0;
+    const width = (_topYesRung > 0 && _topNoRung > 0)
+        ? (100 - _topYesRung - _topNoRung)
+        : ((bot.start_gap || 0) * 2);
     const liveYesBid = bot.live_yes_bid || 0;
     const liveNoBid = bot.live_no_bid || 0;
     const liveYesAsk = bot.live_yes_ask || 0;

@@ -6021,7 +6021,15 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
             # ASK CLAMP — post_only buy at price >= ask gets rejected by Kalshi.
             _live_ask_ws = bot.get(f'live_{exit_side}_ask', 0) or 0
             _ask_cap_ws = (_live_ask_ws - 1) if 1 < _live_ask_ws <= 99 else 99
-            snap_price = min(_real_top, _ask_cap_ws)
+            # PROFIT CAP — combined (avg_held + exit_price) > 95c is loss territory.
+            # Snap-to-bid is for queue priority on favorable moves, NOT to chase
+            # the bid into a guaranteed loss. Mirror walk_up's 95-avg cap so WS
+            # snap and monitor walk both stop at the same line.
+            # Per project_apex_mm_maker_model_2026_05_02: "95c walk cap".
+            # Without this, WS snap can push combined to 105c+ (KRO bot RT #5
+            # was -15c at combined 105c on a 10c-room market).
+            _profit_cap = max(1, 95 - held_avg)
+            snap_price = min(_real_top, _ask_cap_ws, _profit_cap)
             if snap_price <= current_price:
                 continue
             try:

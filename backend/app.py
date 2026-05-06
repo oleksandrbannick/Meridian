@@ -9977,11 +9977,18 @@ APEX_MM_RECOVER_MIN_BY_SPORT = {  # ~1.5x pull min for hysteresis
 # Wider floor on fee-bearing sports gives the creep ~3-4 steps to find a fill
 # before sitting at the cap.
 APEX_MM_WIDTH_FLOOR_BY_SPORT = {
-    'tennis':           1,   # gap=1 = width=2 = 1c profit. Free fees, fine.
+    # gap=2 = width=4c = 2c profit floor per RT. Bumped from gap=1 (tennis,
+    # default) per 2026-05-06 user directive: "minimum I wanna enforce auto
+    # go to is 4c". Side effect (intentional): when room < 4c, width > room
+    # → room_guard pulls → bot stops posting on cratered books. width=2c
+    # rungs were always losers — shaved-by-fee on free-fee tennis, net loss
+    # on fee-paying sports — and chasing thin rooms is where adverse
+    # selection eats the most.
+    'tennis':           2,
     'intl_basketball':  2,
     'mlb': 2, 'nba': 2, 'nhl': 2, 'ncaab': 2, 'ncaaw': 2,
     'epl': 2, 'ucl': 2, 'mls': 2,
-    'default':          1,
+    'default':          2,
 }
 
 # ── OBI-aware midpoint skew (defensive, since SL is gone) ──

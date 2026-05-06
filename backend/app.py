@@ -6046,13 +6046,16 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 continue
             try:
                 price_kwarg = {f'{exit_side}_price': snap_price}
-                # Kalshi amend count is the NEW TOTAL (must be >= already_filled).
-                # Use _exit_total_qty (original Kalshi posting) so already-filled
-                # fills don't break the amend. After auto-net, Kalshi's remaining
-                # = total - filled = net_held; we just need price update, not
-                # qty change. count=net_held was 400'ing because filled exceeded
-                # net_held when partial-net happened (KRO bot stranded 14+ min).
-                _amend_count = max(int(net_held), int(bot.get('_exit_total_qty', 0) or 0), int(bot.get('_exit_fill_qty', 0) or 0) + int(net_held))
+                # SAFE COUNT: just net_held. Prior fancy max() with
+                # _exit_total_qty / _exit_fill_qty caused runaway orphans —
+                # if either field went stale (e.g. Kalshi reassigned oid on a
+                # prior amend, leaving _exit_fill_qty pointing at the OLD
+                # order while net_held was for the NEW order), the max()
+                # inflated count, Kalshi expanded the order, market ate all
+                # of it. MIYYOS-MIY took 147x in one fill on 2026-05-06.
+                # 400 errors on partial-net amends are recoverable; runaway
+                # orphans are not. Trade the convenience for the safety.
+                _amend_count = int(net_held)
                 # Priority: outbidder match is the Apex MM equivalent of Phantom's
                 # snap-up. Reserved tokens guarantee we beat monitor-cycle reads.
                 api_rate_limiter.wait(priority=True)
@@ -11887,8 +11890,9 @@ def _apex_mm_walk_up(bot_id, bot):
 
     try:
         price_kwarg = {f'{exit_side}_price': _new_price}
-        # Same Kalshi amend count rule as snap_up — must be >= already_filled.
-        _amend_count = max(int(net_held), int(bot.get('_exit_total_qty', 0) or 0), int(bot.get('_exit_fill_qty', 0) or 0) + int(net_held))
+        # SAFE COUNT: just net_held (see WS snap_up comment above).
+        # Runaway orphan prevention > partial-net 400 convenience.
+        _amend_count = int(net_held)
         # Priority: walk_up of an active exit hedge — same urgency as primary amend.
         api_rate_limiter.wait(priority=True)
         _amend_resp = kalshi_client.amend_order(exit_oid, ticker=ticker, side=exit_side,

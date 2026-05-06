@@ -5957,11 +5957,18 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                     _yes_side_drift = abs(yes_bid - _ladder_yb) if _ladder_yb > 0 else 0
                     _no_side_drift = abs(no_bid - _ladder_nb) if _ladder_nb > 0 else 0
                     _max_side_drift = max(_yes_side_drift, _no_side_drift)
-                    _trigger_mid = _drift_amt >= APEX_MM_DRIFT_THRESHOLD
-                    _trigger_side = _max_side_drift >= APEX_MM_SIDE_DRIFT_THRESHOLD
+                    # Queue Join bots track BBO directly (top rung at live bid) so
+                    # ANY 1c bid move makes the ladder stale → reprice immediately.
+                    # No cooldown either — speed is the whole point of join mode.
+                    _is_qj = bool(bot.get('queue_join_mode'))
+                    _mid_thr = 1 if _is_qj else APEX_MM_DRIFT_THRESHOLD
+                    _side_thr = 1 if _is_qj else APEX_MM_SIDE_DRIFT_THRESHOLD
+                    _cooldown = 0.0 if _is_qj else APEX_MM_WS_DRIFT_COOLDOWN_S
+                    _trigger_mid = _drift_amt >= _mid_thr
+                    _trigger_side = _max_side_drift >= _side_thr
                     if _trigger_mid or _trigger_side:
                         _now_ts = time.time()
-                        if _now_ts - bot.get('_last_ws_drift_at', 0) >= APEX_MM_WS_DRIFT_COOLDOWN_S:
+                        if _now_ts - bot.get('_last_ws_drift_at', 0) >= _cooldown:
                             bot['_last_ws_drift_at'] = _now_ts
                             bot['_ws_drift_event_ts'] = _now_ts
                             _apex_mm_reactor_queue.put((_apex_mm_repost_ladder, (bot_id, bot)))
@@ -19081,9 +19088,13 @@ def _handle_apex(bot_id, bot, actions):
     # Must use market_best_bid (excludes our own ladder), otherwise our just-posted
     # rungs become top-of-book and shrink live_room to ≈width every cycle, triggering
     # a pull→repost→pull loop in tight markets at Goldilocks width.
+    # Queue Join mode posts AT bid regardless of start_gap, so "room < start_gap*2"
+    # is a meaningless threshold — bot still has profit room as long as room >= 1
+    # (yes_bid + no_bid < 100 = some spread to capture).
     _yb = _apex_mm_market_best_bid(bot, 'yes')
     _nb = _apex_mm_market_best_bid(bot, 'no')
-    _width = bot.get('start_gap', 4) * 2
+    _is_qj_rg = bool(bot.get('queue_join_mode'))
+    _width = 1 if _is_qj_rg else (bot.get('start_gap', 4) * 2)
     _room = (100 - _yb - _nb) if (_yb > 0 and _nb > 0) else 99
     if _room < _width:
         net_yes = bot.get('net_yes', 0)

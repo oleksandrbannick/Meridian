@@ -7235,13 +7235,26 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const _cfgGap = bot.start_gap || 4;
     const _cfgSpacing = bot.spacing || 1;
     const _cfgMid = bot.midpoint || 50;
-    // Expected ladder prices (DESC, like backend): YES = mid - (gap + i*spacing), NO = (100-mid) - (gap + i*spacing)
+    // Expected ladder prices — backend uses TWO formulas:
+    //   queue_join_mode: YES top = live_yes_bid, NO top = live_no_bid (anchor at BBO)
+    //   default:         YES top = mid - gap, NO top = (100-mid) - gap (inside spread)
+    // Frontend must mirror to look up the right dict keys; otherwise it shows
+    // stale entries from prior posts at wrong prices.
     const _expectedYes = [];
     const _expectedNo = [];
+    const _qj = !!bot.queue_join_mode;
+    const _qjYesTop = bot.live_yes_bid || 0;
+    const _qjNoTop = bot.live_no_bid || 0;
     for (let i = 0; i < _cfgLevels; i++) {
-        const off = _cfgGap + i * _cfgSpacing;
-        const yp = _cfgMid - off;
-        const np = (100 - _cfgMid) - off;
+        let yp, np;
+        if (_qj && _qjYesTop > 0 && _qjNoTop > 0) {
+            yp = _qjYesTop - (i * _cfgSpacing);
+            np = _qjNoTop - (i * _cfgSpacing);
+        } else {
+            const off = _cfgGap + i * _cfgSpacing;
+            yp = _cfgMid - off;
+            np = (100 - _cfgMid) - off;
+        }
         if (yp >= 1) _expectedYes.push(yp);
         if (np >= 1) _expectedNo.push(np);
     }

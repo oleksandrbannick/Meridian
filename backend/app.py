@@ -5941,47 +5941,30 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
             net_yes = bot.get('net_yes', 0)
             net_no = bot.get('net_no', 0)
 
-            # ── WS-driven midpoint drift reprice (flat-only) ──
-            # When holding inventory, monitor-cycle skew_reprice handles drift —
-            # touching anchors mid-fill is the cancel-race orphan factory we avoid.
-            # Flat ladder + drift ≥ threshold = full reprice via reactor pool.
+            # ── WS-driven reprice trigger (flat-only) ──
+            # Per user 2026-05-06: 'once it posts at bid+1 it stays there, only
+            # moves if bid moves up'. Mid-drift and side-drift triggers REMOVED
+            # — they caused constant churn on every market wiggle. Only the
+            # below-bid detector fires reprice now: that's the "outbidded"
+            # signal that genuinely requires action. Below-bid uses
+            # market_best_bid (excludes our own depth), so we don't chase
+            # ourselves up forever.
             if (APEX_MM_WS_DRIFT_REPRICE and net_yes == 0 and net_no == 0
                     and yes_bid > 0 and no_bid > 0):
-                _stored_mid = bot.get('midpoint', 0)
-                if _stored_mid > 0:
-                    _live_mid = round((yes_bid + (100 - no_bid)) / 2)
-                    _drift_amt = abs(_live_mid - _stored_mid)
-                    # Per-side BBO drift catches symmetric widening (mid stable but both sides moved)
-                    _ladder_yb = bot.get('_ladder_yes_bid', 0)
-                    _ladder_nb = bot.get('_ladder_no_bid', 0)
-                    _yes_side_drift = abs(yes_bid - _ladder_yb) if _ladder_yb > 0 else 0
-                    _no_side_drift = abs(no_bid - _ladder_nb) if _ladder_nb > 0 else 0
-                    _max_side_drift = max(_yes_side_drift, _no_side_drift)
-                    _trigger_mid = _drift_amt >= APEX_MM_DRIFT_THRESHOLD
-                    _trigger_side = _max_side_drift >= APEX_MM_SIDE_DRIFT_THRESHOLD
-                    # User rule: top rung must be > bid (default) or AT bid (join).
-                    # Fires when bid drifts up 1c after post — below-threshold for
-                    # mid/side drift but visible as top_rung <= bid violation.
-                    _trigger_below_bid = _apex_mm_top_rung_below_bid(bot)
-                    if _trigger_mid or _trigger_side or _trigger_below_bid:
-                        _now_ts = time.time()
-                        # Cooldown applies to mid/side drift and to join-mode
-                        # below-bid (queue priority matters). Default-mode
-                        # below-bid bypasses cooldown — user doesn't care about
-                        # queue priority when BBO, only about not being at-bid.
-                        _qj_bot = bool(bot.get('queue_join_mode', False))
-                        _bypass_cooldown = _trigger_below_bid and not _qj_bot and not (_trigger_mid or _trigger_side)
-                        if _bypass_cooldown or _now_ts - bot.get('_last_ws_drift_at', 0) >= APEX_MM_WS_DRIFT_COOLDOWN_S:
-                            bot['_last_ws_drift_at'] = _now_ts
-                            bot['_ws_drift_event_ts'] = _now_ts
-                            _apex_mm_reactor_queue.put((_apex_mm_repost_ladder, (bot_id, bot)))
-                            _trig = 'mid' if _trigger_mid else ('side' if _trigger_side else 'below_bid')
-                            bot_log('APEX_MM_WS_DRIFT', bot_id, {
-                                'stored': _stored_mid, 'live': _live_mid, 'drift': _drift_amt,
-                                'yes_drift': _yes_side_drift, 'no_drift': _no_side_drift, 'trigger': _trig,
-                            })
-                            print(f'⚡ APEX MM WS DRIFT [{_trig}]: {bot_id} mid {_stored_mid}→{_live_mid} (Δ{_drift_amt}c) yes Δ{_yes_side_drift}c no Δ{_no_side_drift}c → reactor reprice')
-                            _ws_notify_state_change('apex_mm_drift', bot_id)
+                if _apex_mm_top_rung_below_bid(bot):
+                    _now_ts = time.time()
+                    _qj_bot = bool(bot.get('queue_join_mode', False))
+                    # Default mode bypasses cooldown (user doesn't care about
+                    # queue priority when BBO). Join mode keeps cooldown.
+                    if not _qj_bot or _now_ts - bot.get('_last_ws_drift_at', 0) >= APEX_MM_WS_DRIFT_COOLDOWN_S:
+                        bot['_last_ws_drift_at'] = _now_ts
+                        bot['_ws_drift_event_ts'] = _now_ts
+                        _apex_mm_reactor_queue.put((_apex_mm_repost_ladder, (bot_id, bot)))
+                        bot_log('APEX_MM_WS_DRIFT', bot_id, {
+                            'trigger': 'below_bid', 'qj': _qj_bot,
+                        })
+                        print(f'⚡ APEX MM WS BELOW-BID: {bot_id} top rung outbidded by market → reactor reprice')
+                        _ws_notify_state_change('apex_mm_drift', bot_id)
 
             # ── WS-driven drift guard (max-bid spike) ──
             # Mirrors monitor-cycle drift guard at APEX_MM_DRIFT_GUARD_BID, but
@@ -10738,16 +10721,13 @@ def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, inv_limit
             if np >= 1:
                 no_levels.append((int(np), level_qty))
         # NORMAL mode placement (per user 2026-05-06):
-        #   TOP rung = max(midpoint - start_gap, bid + 1)
-        #     - Wide market (room > 2*start_gap): mid-gap wins → top inside
-        #       the spread, bot top-room = start_gap*2 (matches auto_width).
-        #     - Narrow market (mid-gap drops to or below bid): bid+1 wins →
-        #       top BBO above bid by 1c, bot top-room = market_room - 2.
+        #   TOP rung = bid + 1 (always BBO by 1c, regardless of room size).
+        #     Width is whatever bid+1 creates: bot_room = market_room - 2.
+        #     User: 'my width is determined by the bid+1 on each side'.
+        #   Falls back to mid-gap when bid is unknown (pregame/no WS data).
         #   SUB rungs (level 1+): ladder DOWN from top by spacing.
-        yes_top_calc = midpoint - start_gap
-        no_top_calc  = (100 - midpoint) - start_gap
-        yes_top = max(yes_top_calc, yes_bid + 1) if yes_bid > 0 else yes_top_calc
-        no_top  = max(no_top_calc,  no_bid  + 1) if no_bid  > 0 else no_top_calc
+        yes_top = (yes_bid + 1) if yes_bid > 0 else (midpoint - start_gap)
+        no_top  = (no_bid + 1)  if no_bid  > 0 else ((100 - midpoint) - start_gap)
         for i in range(levels):
             yp = yes_top - (i * spacing)
             np = no_top - (i * spacing)
@@ -10777,16 +10757,17 @@ def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, inv_limit
 
 def _apex_mm_top_rung_below_bid(bot):
     """True if the highest live rung on either side violates the placement rule.
-    Default mode (queue_join=False): top rung must be > live bid (strict BBO).
-        → trigger when top_rung <= bid (at-bid is also a violation).
-    Join mode (queue_join=True): top rung must be == live bid.
-        → trigger only when top_rung < bid.
-    Top rung only; sub-rungs are depth and may sit at/below bid by design.
-    Closes dynamic-drift gap left by APEX_MM_SIDE_DRIFT_THRESHOLD = 2c."""
+    Default mode (queue_join=False): top rung must be > MARKET bid (BBO).
+    Join mode (queue_join=True): top rung must be == MARKET bid.
+    Uses MARKET best bid (excludes our own orders). Otherwise after we post
+    at bid+1, our own order BECOMES live_<side>_bid and the detector reads us
+    as our own competitor — fires repeatedly, bot chases itself up forever.
+    Top rung only; sub-rungs are depth and may sit at/below bid by design."""
     qj = bool(bot.get('queue_join_mode', False))
-    for side, bid_key in (('yes', 'live_yes_bid'), ('no', 'live_no_bid')):
-        bid = bot.get(bid_key, 0) or 0
-        if bid <= 0:
+    for side in ('yes', 'no'):
+        # market_best_bid walks the orderbook and excludes our own resting depth
+        market_bid = _apex_mm_market_best_bid(bot, side)
+        if market_bid <= 0:
             continue
         live_prices = []
         for p, lvl in bot.get(f'{side}_orders', {}).items():
@@ -10801,8 +10782,8 @@ def _apex_mm_top_rung_below_bid(bot):
         if not live_prices:
             continue
         top = max(live_prices)
-        # Default: must be strictly above bid. Join: AT bid is allowed.
-        min_acceptable = bid if qj else (bid + 1)
+        # Default: must be strictly above market bid. Join: AT market bid is allowed.
+        min_acceptable = market_bid if qj else (market_bid + 1)
         if top < min_acceptable:
             return True
     return False

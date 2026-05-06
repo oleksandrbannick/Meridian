@@ -10701,20 +10701,18 @@ def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, inv_limit
             if np >= 1:
                 no_levels.append((int(np), level_qty))
     else:
-        # DEFAULT mode: top rung at midpoint - start_gap (inside the spread).
-        # Floor: top rung must be AT or ABOVE the live bid — never below. When
-        # mid - gap would land below bid, jump top rung up to bid (effectively
-        # joins the queue at bid). Sub-rungs ladder down from the original
-        # (non-floored) calculated prices — preserves existing depth behavior.
-        # Per user 2026-05-06: 'never post first rung lower than current bid'.
-        no_anchor = 100 - midpoint
+        # NORMAL mode: top rung at bid+1 on each side (BBO by 1c, max profit
+        # per RT). Sub-rungs ladder DOWN by spacing as depth.
+        # Per user 2026-05-06: "do bid+1 on normal for room on both sides".
+        # Replaces prior midpoint-start_gap formula which jumped 12c+ above bid
+        # on wide rooms (room > 40c) — capturing only 40c of arb when room
+        # had 60c+ available. bid+1 captures (room-2)c per RT regardless of
+        # room width. Falls back to mid-gap when bids unknown (pregame, etc).
+        yes_top = (yes_bid + 1) if yes_bid > 0 else (midpoint - start_gap)
+        no_top  = (no_bid + 1)  if no_bid > 0 else ((100 - midpoint) - start_gap)
         for i in range(levels):
-            offset = start_gap + (i * spacing)
-            yp = midpoint - offset
-            np = no_anchor - offset
-            if i == 0:
-                if yes_bid > 0: yp = max(yp, yes_bid)
-                if no_bid > 0:  np = max(np, no_bid)
+            yp = yes_top - (i * spacing)
+            np = no_top - (i * spacing)
             level_qty = max(1, base_qty)
             if yp >= 1:
                 yes_levels.append((int(yp), level_qty))
@@ -10737,6 +10735,33 @@ def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, inv_limit
                 # Remove zero-qty levels
                 side_levels[:] = [(p, q) for p, q in side_levels if q > 0]
     return yes_levels, no_levels
+
+
+def _apex_mm_top_rung_below_bid(bot):
+    """True if the highest live rung on either side sits below own live bid.
+    Closes the dynamic-drift gap left by APEX_MM_SIDE_DRIFT_THRESHOLD: a 1c
+    bid improvement after post leaves top rung 1c below new bid (behind queue),
+    silently, until next 2c+ drift event. Top rung only — sub-rungs are depth
+    and may sit below bid by design."""
+    for side, bid_key in (('yes', 'live_yes_bid'), ('no', 'live_no_bid')):
+        bid = bot.get(bid_key, 0) or 0
+        if bid <= 0:
+            continue
+        live_prices = []
+        for p, lvl in bot.get(f'{side}_orders', {}).items():
+            if not lvl.get('oid'):
+                continue
+            remaining = (lvl.get('qty', 0) or 0) - (lvl.get('fill_qty', 0) or 0)
+            if remaining > 0:
+                try:
+                    live_prices.append(int(p))
+                except Exception:
+                    pass
+        if not live_prices:
+            continue
+        if max(live_prices) < bid:
+            return True
+    return False
 
 
 def _apex_mm_sweep_orphans(bot_id, bot):
@@ -12629,13 +12654,23 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
     _max_side_drift = max(_yes_side_drift, _no_side_drift)
     _trigger_mid = _drift >= APEX_MM_DRIFT_THRESHOLD
     _trigger_side = _max_side_drift >= APEX_MM_SIDE_DRIFT_THRESHOLD
+    # User rule: top rung must never sit below own live bid. Static post-time
+    # floor (in _apex_mm_levels) handles initial placement; this fires when
+    # bid improves under us by 1c (below side-drift threshold) and would
+    # otherwise leave us silently behind queue until next 2c+ drift.
+    _trigger_below_bid = _apex_mm_top_rung_below_bid(bot)
 
-    # If midpoint drifted, side drifted, or pending edits → cancel all anchors, full repost
-    if _trigger_mid or _trigger_side or _has_pending_edit:
+    # If midpoint drifted, side drifted, top rung below bid, or pending edits → full repost
+    if _trigger_mid or _trigger_side or _trigger_below_bid or _has_pending_edit:
         if _trigger_mid:
             _reason = f'drift ({stored_midpoint}→{live_midpoint})'
         elif _trigger_side:
             _reason = f'side_drift (yes Δ{_yes_side_drift}c, no Δ{_no_side_drift}c)'
+        elif _trigger_below_bid:
+            _reason = f'below_bid (top rung < live bid — forced reprice)'
+            bot_log('APEX_MM_BELOW_BID_REPOST', bot_id, {
+                'yes_bid': _yb_now, 'no_bid': _nb_now,
+            }, level='WARN')
         else:
             _reason = 'pending_edit'
         print(f'📊 APEX MM REFILL → FULL REPOST: {bot_id} {_reason}')

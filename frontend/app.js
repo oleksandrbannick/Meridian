@@ -7248,12 +7248,16 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     for (let i = 0; i < _cfgLevels; i++) {
         let yp, np;
         if (_qj && _qjYesTop > 0 && _qjNoTop > 0) {
+            // Join Room: top rung AT bid, ladder down.
             yp = _qjYesTop - (i * _cfgSpacing);
             np = _qjNoTop - (i * _cfgSpacing);
         } else {
-            const off = _cfgGap + i * _cfgSpacing;
-            yp = _cfgMid - off;
-            np = (100 - _cfgMid) - off;
+            // Normal: top rung at bid+1 (BBO), ladder down. Falls back to
+            // mid-gap when bids unknown (pregame).
+            const yesTop = _qjYesTop > 0 ? (_qjYesTop + 1) : (_cfgMid - _cfgGap);
+            const noTop  = _qjNoTop > 0 ? (_qjNoTop + 1)  : ((100 - _cfgMid) - _cfgGap);
+            yp = yesTop - (i * _cfgSpacing);
+            np = noTop - (i * _cfgSpacing);
         }
         if (yp >= 1) _expectedYes.push(yp);
         if (np >= 1) _expectedNo.push(np);

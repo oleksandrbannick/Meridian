@@ -11777,9 +11777,11 @@ function toggleScanStarFilter() {
     window._scanStarFilterOn = !window._scanStarFilterOn;
     const btn = document.getElementById('scan-star-filter');
     if (btn) {
-        btn.style.background = window._scanStarFilterOn ? '#ffd70033' : 'transparent';
-        btn.style.color = window._scanStarFilterOn ? '#ffd700' : '#8892a6';
-        btn.style.borderColor = window._scanStarFilterOn ? '#ffd700' : '#2a3550';
+        // Apex brand color (same as scanner △ header) — distinct from the gold ★
+        // pre-game favorite badge so the two meanings can't be confused.
+        btn.style.background = window._scanStarFilterOn ? '#00d4ff22' : 'transparent';
+        btn.style.color = window._scanStarFilterOn ? '#00d4ff' : '#8892a6';
+        btn.style.borderColor = window._scanStarFilterOn ? '#00d4ff' : '#2a3550';
     }
     // Re-render with current cache (no new API call)
     const cached = Object.values(window._lastScanResultsByTicker || {});
@@ -11809,12 +11811,12 @@ function showScanResults(opportunities, minWidth, totalScanned) {
         filtered = opportunities.filter(o => o && o.apex_star);
     }
 
-    const starSuffix = window._scanStarFilterOn ? ' · ★ only' : '';
+    const starSuffix = window._scanStarFilterOn ? ' · △ only' : '';
     if (countEl) countEl.textContent = `${filtered.length} found / ${totalScanned} scanned (≥ ${minWidth}¢ room${starSuffix})`;
 
     if (filtered.length === 0) {
         const reason = window._scanStarFilterOn
-            ? `No ★ Apex sweet-spot markets right now. Tap ★ again to disable filter.`
+            ? `No △ Apex sweet-spot markets right now. Tap △ again to disable filter.`
             : `No markets with ≥ ${minWidth}¢ room found across ${totalScanned} markets.<br><span style="font-size:12px;">Try lowering the min room, or check back when more games are active.</span>`;
         results.innerHTML = `<p style="color:#8892a6;text-align:center;padding:24px;">${reason}</p>`;
     } else {
@@ -11833,7 +11835,7 @@ function showScanResults(opportunities, minWidth, totalScanned) {
             const speedLabel = (opp.catch_speed || 'slow').toUpperCase();
             const midpoint = Math.round((opp.yes_bid + (100 - opp.no_bid)) / 2);
             const starBadge = opp.apex_star
-                ? `<span style="color:#ffd700;font-size:13px;margin-right:4px;text-shadow:0 0 6px #ffd70088;" title="Apex MM sweet spot — wide room, two-sided, active">★</span>`
+                ? `<span style="color:#00d4ff;font-size:13px;margin-right:4px;text-shadow:0 0 6px #00d4ff88;font-weight:700;" title="Apex MM sweet spot — wide room, two-sided, active">△</span>`
                 : '';
             return `<div style="background:#0a0e1a;border-radius:8px;padding:10px 14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:10px;border-left:3px solid ${roomColor};">
                 <div style="flex:1;min-width:0;">

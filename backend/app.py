@@ -25423,6 +25423,7 @@ def apex_mm_edit(bot_id):
     new_levels = payload.get('levels')
     new_loss_limit = payload.get('loss_limit_cents')
     new_auto_width = payload.get('auto_width')  # bool or None (no change)
+    new_queue_join = payload.get('queue_join_mode')  # bool or None
     if new_gap is not None:
         new_gap = int(new_gap)
         if new_gap < 1 or new_gap > 20:
@@ -25439,7 +25440,7 @@ def apex_mm_edit(bot_id):
         new_loss_limit = int(new_loss_limit)
         if new_loss_limit < 0 or new_loss_limit > 10000:
             return jsonify({'error': 'Loss limit must be 0-10000'}), 400
-    if new_gap is None and new_qty is None and new_levels is None and new_loss_limit is None and new_auto_width is None:
+    if new_gap is None and new_qty is None and new_levels is None and new_loss_limit is None and new_auto_width is None and new_queue_join is None:
         return jsonify({'error': 'Nothing to change'}), 400
     # Compute the diff WITHOUT mutating bot dict yet — needed so inventory-holding
     # bots can defer cleanly (previously the bot's settings changed immediately,
@@ -25456,6 +25457,8 @@ def apex_mm_edit(bot_id):
         changes['loss_limit_cents'] = {'old': bot.get('loss_limit_cents', 0), 'new': new_loss_limit}
     if new_auto_width is not None and bool(new_auto_width) != bool(bot.get('_auto_width')):
         changes['_auto_width'] = {'old': bool(bot.get('_auto_width')), 'new': bool(new_auto_width)}
+    if new_queue_join is not None and bool(new_queue_join) != bool(bot.get('queue_join_mode')):
+        changes['queue_join_mode'] = {'old': bool(bot.get('queue_join_mode')), 'new': bool(new_queue_join)}
     if not changes:
         return jsonify({'ok': True, 'applied_now': False, 'changes': {}})
 

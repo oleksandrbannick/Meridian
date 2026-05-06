@@ -10576,6 +10576,29 @@ async function apexMmModify(botId, restartMode = false) {
                 </div>
                 <input id="apex-edit-loss-limit" type="hidden" value="${curLossLimit}">
             </div>
+            <div style="margin-bottom:14px;padding:10px 12px;background:#060a14;border:1px solid #00d4ff22;border-radius:8px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
+                <div style="flex:1;min-width:0;">
+                    <div style="color:#00d4ff;font-weight:700;font-size:10px;letter-spacing:.05em;margin-bottom:2px;">📌 JOIN ROOM MODE</div>
+                    <div style="color:#8892a6;font-size:9px;line-height:1.3;">Sit AT live bid in queue. No undercut spiral.</div>
+                </div>
+                <label style="position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0;">
+                    <input type="checkbox" id="apex-edit-queue-join" style="opacity:0;width:0;height:0;" ${bot.queue_join_mode ? 'checked' : ''}>
+                    <span id="apex-edit-queue-join-track" style="position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:${bot.queue_join_mode ? '#00d4ff' : '#2a3550'};border-radius:24px;transition:.2s;"></span>
+                    <span id="apex-edit-queue-join-thumb" style="position:absolute;height:18px;width:18px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.2s;transform:${bot.queue_join_mode ? 'translateX(20px)' : 'translateX(0)'};"></span>
+                </label>
+            </div>
+            <script>
+                (function(){
+                    const cb = document.getElementById('apex-edit-queue-join');
+                    if (!cb) return;
+                    cb.addEventListener('change', function(){
+                        const t = document.getElementById('apex-edit-queue-join-track');
+                        const th = document.getElementById('apex-edit-queue-join-thumb');
+                        if (t) t.style.background = cb.checked ? '#00d4ff' : '#2a3550';
+                        if (th) th.style.transform = cb.checked ? 'translateX(20px)' : 'translateX(0)';
+                    });
+                })();
+            </script>
             <div style="display:flex;gap:8px;">
                 <button onclick="apexMmModifySave('${botId}', ${restartMode})" style="flex:1;background:linear-gradient(135deg,#00d4ff,#ff7043);color:#000;border:none;border-radius:50px;padding:10px;font-size:12px;font-weight:800;cursor:pointer;letter-spacing:.03em;box-shadow:0 4px 15px #ff704325;transition:all .2s;">${restartMode ? 'Save & Restart' : 'Save'}</button>
                 <button onclick="document.getElementById('apex-mm-modify-modal').remove()" style="flex:1;background:#1a1f2a;color:#556;border:1px solid #1e2740;border-radius:50px;padding:10px;font-size:12px;cursor:pointer;transition:all .2s;">Cancel</button>
@@ -10602,11 +10625,12 @@ async function apexMmModifySave(botId, restartMode = false) {
     const qty = Math.max(1, Math.min(100, parseInt(document.getElementById('apex-edit-qty')?.value) || 10));
     const lossLimit = Math.max(0, parseInt(document.getElementById('apex-edit-loss-limit')?.value) || 0);
     const autoWidth = document.getElementById('apex-edit-auto-width')?.value === '1';
+    const queueJoinMode = !!document.getElementById('apex-edit-queue-join')?.checked;
     try {
         const resp = await fetch(`${API_BASE}/bot/apex-mm/edit/${botId}`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ start_gap: gap, qty_per_level: qty, levels: levels, loss_limit_cents: lossLimit, auto_width: autoWidth })
+            body: JSON.stringify({ start_gap: gap, qty_per_level: qty, levels: levels, loss_limit_cents: lossLimit, auto_width: autoWidth, queue_join_mode: queueJoinMode })
         });
         const data = await resp.json();
         if (data.ok) {

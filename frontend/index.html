@@ -1481,6 +1481,7 @@
                 <button class="scan-sport-pill"        data-sport="npb"    onclick="setScanSport('npb')">⚾ NPB</button>
                 <span style="color:#333;font-size:11px;margin:0 4px;">|</span>
                 <button id="scan-star-filter" onclick="toggleScanStarFilter()" title="Toggle △ filter — show only Apex MM sweet-spot markets (wide room, two-sided, active). △ is the Apex brand symbol; the gold ★ on bot cards is a separate pre-game-favorite badge." style="background:transparent;color:#8892a6;border:1px solid #2a3550;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:700;cursor:pointer;">△</button>
+                <button id="scan-live-filter" onclick="toggleScanLiveFilter()" title="Toggle LIVE filter — show only games currently in progress. Combine with △ and sport filters." style="background:transparent;color:#8892a6;border:1px solid #2a3550;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:700;cursor:pointer;">🔴 LIVE</button>
             </div>
             <div id="scan-results" style="flex:1;overflow-y:auto;"></div>
         </div>
@@ -3207,7 +3208,7 @@
     })();
     </script>
     <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
-    <script src="app.js?v=20260506_phantom_depthrec_dogside_fix"></script>
+    <script src="app.js?v=20260506_apex_triangle_market_list_live_filter"></script>
     <!-- Bottom status bar — always visible -->
     <div id="bottom-status-bar" style="position:fixed;bottom:0;left:0;right:0;z-index:9999;background:#080c16;border-top:1px solid #1a2035;padding:6px 16px;display:flex;align-items:center;justify-content:space-between;font-size:11px;">
         <span style="color:#3a4560;font-size:10px;letter-spacing:.03em;">hi irene</span>

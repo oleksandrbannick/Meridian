@@ -1046,6 +1046,19 @@ def get_markets():
         if ws_overlaid:
             print(f'📡 Overlaid WS prices on {ws_overlaid}/{len(unique_markets)} markets')
 
+        # Annotate apex_star on every market so main Markets page can show △
+        # next to tickers that are good for Apex MM right now. Same structural
+        # criteria as the scanner's apex_star (no historical P&L).
+        for m in unique_markets:
+            try:
+                _yb = int(m.get('yes_bid', 0) or 0)
+                _nb = int(m.get('no_bid', 0) or 0)
+                _room_m = 100 - _yb - _nb if (_yb > 0 and _nb > 0) else 0
+                m['apex_star'] = (_room_m >= 8 and _yb >= 5 and _nb >= 5)
+                m['apex_room'] = _room_m
+            except Exception:
+                m['apex_star'] = False
+
         # Cache markets for search tool
         _markets_cache['markets'] = unique_markets
         _markets_cache['ts'] = time.time()
@@ -13763,7 +13776,7 @@ def _apex_mm_record_round_trip(bot_id, bot, fill_side, fill_price, close_qty):
         'combined_price': _combined,
         'rung_width': 100 - _combined,
         'target_width': bot.get('start_gap', 4) * 2,
-        'levels': bot.get('levels', 7),
+        'levels': bot.get('levels'),
         'snapped': _combined > (100 - bot.get('start_gap', 4)),
         'quantity': close_qty,
         'profit_cents': max(0, net_pnl), 'loss_cents': abs(min(0, net_pnl)),

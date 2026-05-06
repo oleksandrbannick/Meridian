@@ -2868,6 +2868,20 @@ function createMarketRow(market, label) {
         labelDiv.textContent = label || extractSubtitle(market.title) || market.title;
     }
 
+    // ── Apex MM sweet-spot indicator: cyan △ before the title ──
+    // Backend annotates apex_star on each market in /api/markets when:
+    //   room >= 8c AND yes_bid >= 5c AND no_bid >= 5c.
+    // Lets you spot Apex-friendly tickers while browsing the regular market
+    // list, not just inside the Apex Scanner. Distinct from the gold ★
+    // pre-game-favorite badge below.
+    if (market.apex_star) {
+        const apexBadge = document.createElement('span');
+        apexBadge.style.cssText = 'color:#00d4ff;font-size:11px;font-weight:700;margin-right:5px;text-shadow:0 0 4px #00d4ff66;';
+        apexBadge.textContent = '△';
+        apexBadge.title = `Apex MM sweet spot — ${market.apex_room || 0}c room, two-sided market`;
+        labelDiv.insertBefore(apexBadge, labelDiv.firstChild);
+    }
+
     // ── Opening line / favorite star (GAME markets only) ──
     const isGameMarket = /GAME|MATCH/i.test(market.series_ticker || market.ticker || '');
     if (isGameMarket) {
@@ -11770,25 +11784,41 @@ async function autoScanMarkets() {
 // Side cache of last scan results — lets setupApexFromScan find tickers
 // that aren't in allMarkets (which is filtered/limited).
 window._lastScanResultsByTicker = {};
-// ★ filter toggle (intersects with sport filter, same as min-room).
+// △ filter (Apex sweet-spot) and LIVE filter — both intersect with sport
+// filter, same as min-room. Toggle each independently. Filtering is
+// client-side using the cached last-scan results — no new API call.
 window._scanStarFilterOn = window._scanStarFilterOn || false;
+window._scanLiveFilterOn = window._scanLiveFilterOn || false;
 
-function toggleScanStarFilter() {
-    window._scanStarFilterOn = !window._scanStarFilterOn;
-    const btn = document.getElementById('scan-star-filter');
-    if (btn) {
-        // Apex brand color (same as scanner △ header) — distinct from the gold ★
-        // pre-game favorite badge so the two meanings can't be confused.
-        btn.style.background = window._scanStarFilterOn ? '#00d4ff22' : 'transparent';
-        btn.style.color = window._scanStarFilterOn ? '#00d4ff' : '#8892a6';
-        btn.style.borderColor = window._scanStarFilterOn ? '#00d4ff' : '#2a3550';
-    }
-    // Re-render with current cache (no new API call)
+function _rerunScanFiltersFromCache() {
     const cached = Object.values(window._lastScanResultsByTicker || {});
     if (cached.length) {
         const minWidth = parseInt(document.getElementById('scan-min-width')?.value) || 3;
         showScanResults(cached, minWidth, window._lastScanTotal || cached.length);
     }
+}
+
+function toggleScanStarFilter() {
+    window._scanStarFilterOn = !window._scanStarFilterOn;
+    const btn = document.getElementById('scan-star-filter');
+    if (btn) {
+        btn.style.background = window._scanStarFilterOn ? '#00d4ff22' : 'transparent';
+        btn.style.color = window._scanStarFilterOn ? '#00d4ff' : '#8892a6';
+        btn.style.borderColor = window._scanStarFilterOn ? '#00d4ff' : '#2a3550';
+    }
+    _rerunScanFiltersFromCache();
+}
+
+function toggleScanLiveFilter() {
+    window._scanLiveFilterOn = !window._scanLiveFilterOn;
+    const btn = document.getElementById('scan-live-filter');
+    if (btn) {
+        // Red 🔴 LIVE matches the existing live tag color used elsewhere.
+        btn.style.background = window._scanLiveFilterOn ? '#ff333322' : 'transparent';
+        btn.style.color = window._scanLiveFilterOn ? '#ff3333' : '#8892a6';
+        btn.style.borderColor = window._scanLiveFilterOn ? '#ff3333' : '#2a3550';
+    }
+    _rerunScanFiltersFromCache();
 }
 
 function showScanResults(opportunities, minWidth, totalScanned) {
@@ -11805,18 +11835,24 @@ function showScanResults(opportunities, minWidth, totalScanned) {
     }
     window._lastScanTotal = totalScanned;
 
-    // Apply ★ filter if toggled on
+    // Apply △ + LIVE filters (intersect with each other and with sport)
     let filtered = opportunities;
     if (window._scanStarFilterOn) {
-        filtered = opportunities.filter(o => o && o.apex_star);
+        filtered = filtered.filter(o => o && o.apex_star);
+    }
+    if (window._scanLiveFilterOn) {
+        filtered = filtered.filter(o => o && o.is_live);
     }
 
-    const starSuffix = window._scanStarFilterOn ? ' · △ only' : '';
+    const _suffixParts = [];
+    if (window._scanStarFilterOn) _suffixParts.push('△');
+    if (window._scanLiveFilterOn) _suffixParts.push('🔴 LIVE');
+    const starSuffix = _suffixParts.length ? ' · ' + _suffixParts.join(' + ') + ' only' : '';
     if (countEl) countEl.textContent = `${filtered.length} found / ${totalScanned} scanned (≥ ${minWidth}¢ room${starSuffix})`;
 
     if (filtered.length === 0) {
-        const reason = window._scanStarFilterOn
-            ? `No △ Apex sweet-spot markets right now. Tap △ again to disable filter.`
+        const reason = (window._scanStarFilterOn || window._scanLiveFilterOn)
+            ? `No matches for current filters. Tap the active chip(s) to disable filter.`
             : `No markets with ≥ ${minWidth}¢ room found across ${totalScanned} markets.<br><span style="font-size:12px;">Try lowering the min room, or check back when more games are active.</span>`;
         results.innerHTML = `<p style="color:#8892a6;text-align:center;padding:24px;">${reason}</p>`;
     } else {
@@ -13427,10 +13463,12 @@ let _phantomActiveSport = 'all';   // Sport filter for Phantom history panels
 let _phantomActiveDepth = 'all';   // Depth floor filter for Phantom history panels
 let _phantomActivePeriod = 'all';  // Period filter within sport dropdown
 // _phantomActiveExit removed (ceiling exit system removed)
-let _apexMMActiveSport = 'all';   // Sport filter for Apex MM history
-let _apexMMActiveWidth = 'all';   // Width filter for Apex MM history
-let _apexMMActiveLadder = 'all';  // Ladder (levels) filter for Apex MM history
-let _apexMMActivePeriod = 'all';  // Period filter within Apex MM sport dropdown
+let _apexMMActiveSport  = 'all';   // Sport filter for Apex MM history
+let _apexMMActiveSpread = 'all';   // Captured spread bucket: 'tight' | 'mid' | 'wide' | number
+let _apexMMActiveHold   = 'all';   // Hold-time bucket: 'fast' | 'med' | 'slow' | 'long'
+let _apexMMActivePhase  = 'all';   // game_phase filter (e.g. 'live', 'pregame', 'early', 'late')
+let _apexMMActiveLadder = 'all';   // Rungs (levels) filter for Apex MM history
+let _apexMMActivePeriod = 'all';   // Period filter within Apex MM sport dropdown
 let historyViewMode = 'arb';  // 'arb' | 'bets' | 'middle' | 'dog'
 
 const HIST_MODES = {
@@ -14224,17 +14262,21 @@ async function loadApexMMHistory() {
         // Cache for filters
         window._apexMMAllTrades = trades;
         window._apexMMPnl = pnl;
-        _apexMMActiveSport = 'all';
-        _apexMMActiveWidth = 'all';
+        _apexMMActiveSport  = 'all';
+        _apexMMActiveSpread = 'all';
+        _apexMMActiveHold   = 'all';
+        _apexMMActivePhase  = 'all';
         _apexMMActiveLadder = 'all';
         _apexMMActivePeriod = 'all';
 
-        // Render panels
+        // Render panels (sport → period drilldown → phase → spread → hold → rungs)
         renderApexMMStats(trades, pnl);
-        renderApexMMWidthBreakdown(trades);
-        renderApexMMLadderBreakdown(trades);
         renderApexMMSportBreakdown(trades);
         renderApexMMSportDropdown(_apexMMActiveSport, trades);
+        renderApexMMPhaseBreakdown(trades);
+        renderApexMMSpreadBreakdown(trades);
+        renderApexMMHoldBreakdown(trades);
+        renderApexMMLadderBreakdown(trades);
 
         // Trade cards
         if (trades.length === 0) {
@@ -14254,24 +14296,26 @@ function renderApexMMStats(trades, pnl) {
     const statsPanel = document.getElementById('apex-mm-stats-panel');
     if (!statsPanel) return;
 
-    // Compute stats from filtered trades
-    const netPnl = trades.reduce((s, t) => s + (t.profit_cents || 0) - (t.loss_cents || 0), 0);
-    const wins = trades.filter(t => (t.profit_cents || 0) - (t.loss_cents || 0) > 0).length;
-    const losses = trades.filter(t => (t.profit_cents || 0) - (t.loss_cents || 0) < 0).length;
+    // Apply non-date filters to compute filtered-scope stats
+    const filtered = _applyApexMMFilters(trades);
+
+    const netPnl = filtered.reduce((s, t) => s + (t.profit_cents || 0) - (t.loss_cents || 0), 0);
+    const wins = filtered.filter(t => (t.profit_cents || 0) - (t.loss_cents || 0) > 0).length;
+    const losses = filtered.filter(t => (t.profit_cents || 0) - (t.loss_cents || 0) < 0).length;
     const totalTrades = wins + losses;
     const winRate = totalTrades > 0 ? Math.round(wins / totalTrades * 100) : 0;
     const avgProfit = totalTrades > 0 ? (netPnl / totalTrades).toFixed(1) : '—';
-    const filteredContracts = trades.reduce((s, t) => s + (t.quantity || 1), 0);
 
     // Hold time
-    const holdTrades = trades.filter(t => t.hold_time_s != null);
+    const holdTrades = filtered.filter(t => t.hold_time_s != null);
     const avgHoldS = holdTrades.length > 0 ? (holdTrades.reduce((s, t) => s + t.hold_time_s, 0) / holdTrades.length) : null;
     const fmtHold = (s) => { if (s === null) return '—'; if (s < 60) return `${Math.round(s)}s`; if (s < 3600) return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`; return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`; };
 
-    // Snap rate
-    const snappableTrades = trades.filter(t => t.result === 'mm_round_trip');
-    const snappedCount = snappableTrades.filter(t => t.snapped === true).length;
-    const snapRate = snappableTrades.length > 0 ? Math.round(snappedCount / snappableTrades.length * 100) : 0;
+    // Avg captured spread (rung_width = 100 - combined; realized edge)
+    const spreadTrades = filtered.filter(t => t.result === 'mm_round_trip' && (t.rung_width != null || t.combined_price != null));
+    const avgSpread = spreadTrades.length > 0
+        ? (spreadTrades.reduce((s, t) => s + (t.rung_width != null ? t.rung_width : (100 - (t.combined_price || 0))), 0) / spreadTrades.length).toFixed(1)
+        : '—';
 
     const pnlCol = netPnl >= 0 ? '#00d4ff' : '#ff4444';
     const avgCol = parseFloat(avgProfit) >= 0 ? '#00d4ff' : '#ff4444';
@@ -14283,29 +14327,50 @@ function renderApexMMStats(trades, pnl) {
     const lifetimeContracts = pnl.lifetime_apex_contracts || 0;
     const monthlyContracts = pnl.monthly_apex_contracts || 0;
     const monthlyLabel = pnl.monthly_label || 'This Month';
-    const monthlyGoal = 300000;
-    const monthlyPct = monthlyGoal > 0 ? Math.min(100, Math.round(monthlyContracts / monthlyGoal * 100)) : 0;
     const lifetimePnlCol = lifetimePnl >= 0 ? '#00d4ff' : '#ff4444';
 
-    // Smart label from active filters
+    // Day scope: default to TODAY when no calendar selection (so contracts card
+    // doesn't duplicate Lifetime). When calendar dates are selected, scope to those.
+    const _todayStr = new Date().toLocaleDateString('en-CA');
+    const _tradeDay = (t) => new Date((t.timestamp || 0) * 1000).toLocaleDateString('en-CA');
     const hasDateFilter = selectedHistoryDays.length > 0;
-    const hasSportFilter = _apexMMActiveSport !== 'all';
-    const hasWidthFilter = _apexMMActiveWidth !== 'all';
-    const hasAnyFilter = hasDateFilter || hasSportFilter || hasWidthFilter;
+    const dayScopeDates = hasDateFilter ? selectedHistoryDays : [_todayStr];
+    let dayLabel;
+    if (!hasDateFilter) {
+        dayLabel = 'Today';
+    } else if (selectedHistoryDays.length === 1) {
+        const d = new Date(selectedHistoryDays[0] + 'T12:00:00');
+        dayLabel = d.toLocaleDateString('en', { month: 'short', day: 'numeric' });
+    } else {
+        const uniqueMonths = [...new Set(selectedHistoryDays.map(d => d.substring(0, 7)))];
+        dayLabel = uniqueMonths.length === 1
+            ? new Date(uniqueMonths[0] + '-01').toLocaleDateString('en', { month: 'short', year: 'numeric' })
+            : `${selectedHistoryDays.length} days`;
+    }
+    // Day-scoped contracts (independent of sport/spread/etc filters — contracts card
+    // tracks raw daily volume).
+    const dayTrades = trades.filter(t => dayScopeDates.includes(_tradeDay(t)));
+    const dayContracts = dayTrades.reduce((s, t) => s + (t.quantity || 1), 0);
+    const dayTradeCount = dayTrades.length;
+    const dayPerTrade = dayTradeCount > 0 ? Math.round(dayContracts / dayTradeCount) : 0;
+
+    // Smart label for filter-scope cards
+    const hasSportFilter  = _apexMMActiveSport  !== 'all';
+    const hasSpreadFilter = _apexMMActiveSpread !== 'all';
+    const hasHoldFilter   = _apexMMActiveHold   !== 'all';
+    const hasPhaseFilter  = _apexMMActivePhase  !== 'all';
+    const hasLadderFilter = _apexMMActiveLadder !== 'all';
+    const hasNonDateFilter = hasSportFilter || hasSpreadFilter || hasHoldFilter || hasPhaseFilter || hasLadderFilter;
+    const hasAnyFilter = hasDateFilter || hasNonDateFilter;
     let filterLabel = '';
     if (hasAnyFilter) {
         const parts = [];
-        if (hasDateFilter) {
-            if (selectedHistoryDays.length === 1) {
-                const d = new Date(selectedHistoryDays[0] + 'T12:00:00');
-                parts.push(d.toLocaleDateString('en', { month: 'short', day: 'numeric' }));
-            } else {
-                const uniqueMonths = [...new Set(selectedHistoryDays.map(d => d.substring(0, 7)))];
-                parts.push(uniqueMonths.length === 1 ? new Date(uniqueMonths[0] + '-01').toLocaleDateString('en', { month: 'short', year: 'numeric' }) : `${selectedHistoryDays.length} days`);
-            }
-        }
-        if (hasSportFilter) parts.push(_apexMMActiveSport);
-        if (hasWidthFilter) parts.push(_apexMMActiveWidth + '¢ W');
+        if (hasDateFilter) parts.push(dayLabel);
+        if (hasSportFilter)  parts.push(_apexMMActiveSport);
+        if (hasPhaseFilter)  parts.push(_apexMMActivePhase);
+        if (hasSpreadFilter) parts.push(_apexMMActiveSpread + '¢');
+        if (hasHoldFilter)   parts.push(_apexMMActiveHold);
+        if (hasLadderFilter) parts.push(_apexMMActiveLadder + 'L');
         filterLabel = parts.join(' · ');
     }
 
@@ -14335,52 +14400,69 @@ function renderApexMMStats(trades, pnl) {
             ${hasAnyFilter
                 ? _bub('Trades', totalTrades, `${wins}W / ${losses}L`, '#00d4ff')
                 : _bub('Trades', lifetimeWins + lifetimeLosses, `${lifetimeWins}W / ${lifetimeLosses}L`, '#00d4ff')}
-            ${_bub(`${monthlyLabel}`, monthlyContracts.toLocaleString(), `${monthlyPct}% of 300k goal`, monthlyPct >= 100 ? '#00ff88' : '#ff8800')}
+            ${_bub(monthlyLabel, monthlyContracts.toLocaleString(), 'contracts this month', '#ff8800')}
             ${_bub('Lifetime', lifetimeContracts.toLocaleString(), 'contracts', '#ff8800')}
-            ${hasAnyFilter ? _bub(`${filterLabel}`, filteredContracts.toLocaleString(), 'contracts', '#ff8800') : _bub('Contracts', lifetimeContracts.toLocaleString(), `~${(lifetimeWins + lifetimeLosses) > 0 ? Math.round(lifetimeContracts / (lifetimeWins + lifetimeLosses)) : 0} per trade`, '#ff8800')}
+            ${_bub(dayLabel, dayContracts.toLocaleString(), dayTradeCount > 0 ? `${dayTradeCount} trades · ~${dayPerTrade}/trade` : 'no trades', '#ff8800')}
             ${_bub('Avg Hold', fmtHold(avgHoldS), `${holdTrades.length} round trips`, '#00d4ff')}
-            ${_bub('Snap Rate', `${snapRate}%`, `${snappedCount}/${snappableTrades.length} snapped`, snapRate > 50 ? '#ff4444' : snapRate > 25 ? '#ffaa00' : '#00ff88')}
+            ${_bub('Avg Spread', avgSpread === '—' ? '—' : `${avgSpread}¢`, `${spreadTrades.length} captures`, '#00d4ff')}
         </div>`;
 }
 
-// ── Apex MM Width Breakdown (filter cards) ────────────────────────────────
+// ── Apex MM Captured Spread Breakdown (rung_width = realized edge) ────────
+//
+// Replaces the old "by target width" view. target_width is just room/2 at post
+// time — bucketing by it tells you market state, not strategy. rung_width is
+// what we actually captured, which is what matters.
 
-function renderApexMMWidthBreakdown(allTrades) {
-    const widthPanel = document.getElementById('apex-mm-width-panel');
-    if (!widthPanel) return;
+const _APEX_MM_SPREAD_BUCKETS = [
+    { key: 1, label: '1¢',  min: 1, max: 1 },
+    { key: 2, label: '2¢',  min: 2, max: 2 },
+    { key: 3, label: '3¢',  min: 3, max: 3 },
+    { key: 4, label: '4¢',  min: 4, max: 4 },
+    { key: 5, label: '5¢+', min: 5, max: 999 },
+];
 
-    const widthMap = {};
-    allTrades.forEach(t => {
-        const w = t.target_width || t.rung_width || (t.combined_price ? 100 - t.combined_price : 0);
-        if (w <= 0) return;
-        if (!widthMap[w]) widthMap[w] = { width: w, wins: 0, losses: 0, net: 0, count: 0, holdTotal: 0, holdCount: 0 };
+function _apexMMSpreadBucket(t) {
+    if (t.result !== 'mm_round_trip') return null;
+    const w = t.rung_width != null ? t.rung_width : (t.combined_price != null ? 100 - t.combined_price : null);
+    if (w == null || w <= 0) return null;
+    const b = _APEX_MM_SPREAD_BUCKETS.find(b => w >= b.min && w <= b.max);
+    return b ? b.key : null;
+}
+
+function renderApexMMSpreadBreakdown(allTrades) {
+    const panel = document.getElementById('apex-mm-spread-panel');
+    if (!panel) return;
+    const scoped = _applyApexMMFilters(allTrades, 'spread');
+
+    const map = {};
+    scoped.forEach(t => {
+        const k = _apexMMSpreadBucket(t);
+        if (k == null) return;
+        if (!map[k]) map[k] = { key: k, wins: 0, losses: 0, net: 0, count: 0, holdTotal: 0, holdCount: 0 };
         const net = (t.profit_cents || 0) - (t.loss_cents || 0);
-        widthMap[w].net += net;
-        widthMap[w].count++;
-        if (net > 0) widthMap[w].wins++;
-        else if (net < 0) widthMap[w].losses++;
-        if (t.hold_time_s != null) { widthMap[w].holdTotal += t.hold_time_s; widthMap[w].holdCount++; }
+        map[k].net += net;
+        map[k].count++;
+        if (net > 0) map[k].wins++;
+        else if (net < 0) map[k].losses++;
+        if (t.hold_time_s != null) { map[k].holdTotal += t.hold_time_s; map[k].holdCount++; }
     });
-    const PRESET_WIDTHS = [4, 5, 6, 7, 8, 10, 12];
-    const widths = Object.values(widthMap).filter(d => PRESET_WIDTHS.includes(d.width)).sort((a, b) => a.width - b.width);
+    const buckets = _APEX_MM_SPREAD_BUCKETS.filter(b => map[b.key]).map(b => ({ ...map[b.key], label: b.label }));
 
-    widthPanel.innerHTML = widths.length === 0 ? '' : `
-        <h4 style="color:#00d4ff;font-size:12px;font-weight:700;margin:0 0 10px 0;text-transform:uppercase;letter-spacing:.05em;">Width Performance${_apexMMActiveWidth !== 'all' ? ` · <span style="color:#ff7043;cursor:pointer;" onclick="selectApexMMWidth('all')">Clear ✕</span>` : ''}</h4>
+    panel.innerHTML = buckets.length === 0 ? '' : `
+        <h4 style="color:#00d4ff;font-size:12px;font-weight:700;margin:0 0 10px 0;text-transform:uppercase;letter-spacing:.05em;">Captured Spread${_apexMMActiveSpread !== 'all' ? ` · <span style="color:#ff7043;cursor:pointer;" onclick="selectApexMMSpread('all')">Clear ✕</span>` : ''}</h4>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;">
-            ${widths.map(d => {
+            ${buckets.map(d => {
                 const dCol = d.net >= 0 ? '#00ff88' : '#ff4444';
                 const total = d.wins + d.losses;
                 const avg = d.count > 0 ? (d.net / d.count).toFixed(1) : '0';
-                const isActive = _apexMMActiveWidth === d.width;
+                const isActive = _apexMMActiveSpread === d.key;
                 const borderCol = isActive ? '#ff7043' : 'rgba(0,212,255,0.09)';
                 const bgCol = isActive ? 'rgba(255,112,67,0.08)' : '#0f1419';
                 const avgHold = d.holdCount > 0 ? Math.round(d.holdTotal / d.holdCount) : null;
                 const holdStr = avgHold !== null ? (avgHold < 60 ? `${avgHold}s` : `${Math.floor(avgHold / 60)}m`) : '';
-                const _tierLabel = d.width <= 2 ? 'TIGHT' : d.width <= 4 ? 'STANDARD' : d.width <= 6 ? 'WIDE' : 'MAX';
-                const _tierCol = d.width <= 2 ? '#00ff88' : d.width <= 4 ? '#00d4ff' : d.width <= 6 ? '#ffaa00' : '#ff7043';
-                return `<div data-width="${d.width}" onclick="selectApexMMWidth(${d.width})" style="background:${bgCol};border-radius:8px;padding:10px;text-align:center;border:1px solid ${borderCol};cursor:pointer;transition:border-color 0.15s,background 0.15s;">
-                    <div style="color:#00d4ff;font-size:14px;font-weight:800;">W${d.width}¢</div>
-                    <div style="color:${_tierCol};font-size:8px;font-weight:700;letter-spacing:.05em;margin-top:-2px;">${_tierLabel}</div>
+                return `<div onclick="selectApexMMSpread(${d.key})" style="background:${bgCol};border-radius:8px;padding:10px;text-align:center;border:1px solid ${borderCol};cursor:pointer;transition:border-color 0.15s,background 0.15s;">
+                    <div style="color:#00d4ff;font-size:14px;font-weight:800;">${d.label}</div>
                     <div style="color:${dCol};font-size:13px;font-weight:700;">${d.net >= 0 ? '+' : ''}$${(d.net / 100).toFixed(2)}</div>
                     <div style="color:#555;font-size:10px;">${d.wins}W/${d.losses}L${total > 0 ? ' · ' + Math.round(d.wins / total * 100) + '%' : ''}</div>
                     ${holdStr ? `<div style="color:#3a4560;font-size:9px;margin-top:2px;">avg hold ${holdStr}</div>` : ''}
@@ -14390,15 +14472,122 @@ function renderApexMMWidthBreakdown(allTrades) {
         </div>`;
 }
 
-// ── Apex MM Ladder Breakdown (by levels count) ──────────────────────────
+// ── Apex MM Hold Time Breakdown ──────────────────────────────────────────
+
+const _APEX_MM_HOLD_BUCKETS = [
+    { key: 'fast', label: '<30s',    min: 0,    max: 30 },
+    { key: 'med',  label: '30s–2m',  min: 30,   max: 120 },
+    { key: 'slow', label: '2–10m',   min: 120,  max: 600 },
+    { key: 'long', label: '10m+',    min: 600,  max: Infinity },
+];
+
+function _apexMMHoldBucket(t) {
+    if (t.hold_time_s == null) return null;
+    const s = t.hold_time_s;
+    const b = _APEX_MM_HOLD_BUCKETS.find(b => s >= b.min && s < b.max);
+    return b ? b.key : null;
+}
+
+function renderApexMMHoldBreakdown(allTrades) {
+    const panel = document.getElementById('apex-mm-hold-panel');
+    if (!panel) return;
+    const scoped = _applyApexMMFilters(allTrades, 'hold');
+
+    const map = {};
+    scoped.forEach(t => {
+        const k = _apexMMHoldBucket(t);
+        if (k == null) return;
+        if (!map[k]) map[k] = { key: k, wins: 0, losses: 0, net: 0, count: 0 };
+        const net = (t.profit_cents || 0) - (t.loss_cents || 0);
+        map[k].net += net;
+        map[k].count++;
+        if (net > 0) map[k].wins++;
+        else if (net < 0) map[k].losses++;
+    });
+    const buckets = _APEX_MM_HOLD_BUCKETS.filter(b => map[b.key]).map(b => ({ ...map[b.key], label: b.label }));
+
+    panel.innerHTML = buckets.length === 0 ? '' : `
+        <h4 style="color:#00d4ff;font-size:12px;font-weight:700;margin:0 0 10px 0;text-transform:uppercase;letter-spacing:.05em;">Hold Time${_apexMMActiveHold !== 'all' ? ` · <span style="color:#ff7043;cursor:pointer;" onclick="selectApexMMHold('all')">Clear ✕</span>` : ''}</h4>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;">
+            ${buckets.map(d => {
+                const dCol = d.net >= 0 ? '#00ff88' : '#ff4444';
+                const total = d.wins + d.losses;
+                const avg = d.count > 0 ? (d.net / d.count).toFixed(1) : '0';
+                const isActive = _apexMMActiveHold === d.key;
+                const borderCol = isActive ? '#ff7043' : 'rgba(0,212,255,0.09)';
+                const bgCol = isActive ? 'rgba(255,112,67,0.08)' : '#0f1419';
+                return `<div onclick="selectApexMMHold('${d.key}')" style="background:${bgCol};border-radius:8px;padding:10px;text-align:center;border:1px solid ${borderCol};cursor:pointer;transition:border-color 0.15s,background 0.15s;">
+                    <div style="color:#00d4ff;font-size:13px;font-weight:800;">${d.label}</div>
+                    <div style="color:${dCol};font-size:13px;font-weight:700;">${d.net >= 0 ? '+' : ''}$${(d.net / 100).toFixed(2)}</div>
+                    <div style="color:#555;font-size:10px;">${d.wins}W/${d.losses}L${total > 0 ? ' · ' + Math.round(d.wins / total * 100) + '%' : ''}</div>
+                    <div style="color:#3a4560;font-size:9px;">${d.count} trades · avg ${avg}¢</div>
+                </div>`;
+            }).join('')}
+        </div>`;
+}
+
+// ── Apex MM Game Phase Breakdown ─────────────────────────────────────────
+
+function renderApexMMPhaseBreakdown(allTrades) {
+    const panel = document.getElementById('apex-mm-phase-panel');
+    if (!panel) return;
+    const scoped = _applyApexMMFilters(allTrades, 'phase');
+
+    const map = {};
+    scoped.forEach(t => {
+        const p = (t.game_phase || '').trim();
+        if (!p) return;
+        if (!map[p]) map[p] = { key: p, wins: 0, losses: 0, net: 0, count: 0 };
+        const net = (t.profit_cents || 0) - (t.loss_cents || 0);
+        map[p].net += net;
+        map[p].count++;
+        if (net > 0) map[p].wins++;
+        else if (net < 0) map[p].losses++;
+    });
+    // Stable ordering: pregame, early, mid, late, OT, halftime, live, then alpha
+    const _ORDER = ['pregame', 'early', 'mid', 'late', 'ot', 'halftime', 'live'];
+    const phases = Object.values(map).sort((a, b) => {
+        const ai = _ORDER.indexOf(a.key.toLowerCase());
+        const bi = _ORDER.indexOf(b.key.toLowerCase());
+        if (ai !== -1 && bi !== -1) return ai - bi;
+        if (ai !== -1) return -1;
+        if (bi !== -1) return 1;
+        return a.key.localeCompare(b.key);
+    });
+
+    panel.innerHTML = phases.length === 0 ? '' : `
+        <h4 style="color:#00d4ff;font-size:12px;font-weight:700;margin:0 0 10px 0;text-transform:uppercase;letter-spacing:.05em;">Game Phase${_apexMMActivePhase !== 'all' ? ` · <span style="color:#ff7043;cursor:pointer;" onclick="selectApexMMPhase('all')">Clear ✕</span>` : ''}</h4>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;">
+            ${phases.map(d => {
+                const dCol = d.net >= 0 ? '#00ff88' : '#ff4444';
+                const total = d.wins + d.losses;
+                const avg = d.count > 0 ? (d.net / d.count).toFixed(1) : '0';
+                const isActive = _apexMMActivePhase === d.key;
+                const borderCol = isActive ? '#ff7043' : 'rgba(0,212,255,0.09)';
+                const bgCol = isActive ? 'rgba(255,112,67,0.08)' : '#0f1419';
+                return `<div onclick="selectApexMMPhase('${d.key}')" style="background:${bgCol};border-radius:8px;padding:10px;text-align:center;border:1px solid ${borderCol};cursor:pointer;transition:border-color 0.15s,background 0.15s;">
+                    <div style="color:#00d4ff;font-size:13px;font-weight:800;text-transform:uppercase;">${d.key}</div>
+                    <div style="color:${dCol};font-size:13px;font-weight:700;">${d.net >= 0 ? '+' : ''}$${(d.net / 100).toFixed(2)}</div>
+                    <div style="color:#555;font-size:10px;">${d.wins}W/${d.losses}L${total > 0 ? ' · ' + Math.round(d.wins / total * 100) + '%' : ''}</div>
+                    <div style="color:#3a4560;font-size:9px;">${d.count} trades · avg ${avg}¢</div>
+                </div>`;
+            }).join('')}
+        </div>`;
+}
+
+// ── Apex MM Rungs (levels) Breakdown ─────────────────────────────────────
+// Skip rows missing a `levels` field — old trades without it are not bucketed.
+// Backend writes `bot.get('levels')` (no default fallback) as of this redo.
 
 function renderApexMMLadderBreakdown(allTrades) {
     const ladderPanel = document.getElementById('apex-mm-ladder-panel');
     if (!ladderPanel) return;
+    const scoped = _applyApexMMFilters(allTrades, 'ladder');
 
     const ladderMap = {};
-    allTrades.forEach(t => {
-        const lvl = t.levels || 7;  // default 7 for old trades
+    scoped.forEach(t => {
+        if (t.levels == null) return;          // skip legacy rows missing the field
+        const lvl = t.levels;
         if (!ladderMap[lvl]) ladderMap[lvl] = { levels: lvl, wins: 0, losses: 0, net: 0, count: 0, holdTotal: 0, holdCount: 0 };
         const net = (t.profit_cents || 0) - (t.loss_cents || 0);
         ladderMap[lvl].net += net;
@@ -14407,11 +14596,10 @@ function renderApexMMLadderBreakdown(allTrades) {
         else if (net < 0) ladderMap[lvl].losses++;
         if (t.hold_time_s != null) { ladderMap[lvl].holdTotal += t.hold_time_s; ladderMap[lvl].holdCount++; }
     });
-    const PRESET_LEVELS = [3, 5, 7, 10];
-    const ladders = Object.values(ladderMap).filter(d => PRESET_LEVELS.includes(d.levels)).sort((a, b) => a.levels - b.levels);
+    const ladders = Object.values(ladderMap).sort((a, b) => a.levels - b.levels);
 
     ladderPanel.innerHTML = ladders.length === 0 ? '' : `
-        <h4 style="color:#ff7043;font-size:12px;font-weight:700;margin:0 0 10px 0;text-transform:uppercase;letter-spacing:.05em;">Ladder Performance${_apexMMActiveLadder !== 'all' ? ` · <span style="color:#00d4ff;cursor:pointer;" onclick="selectApexMMLadder('all')">Clear ✕</span>` : ''}</h4>
+        <h4 style="color:#ff7043;font-size:12px;font-weight:700;margin:0 0 10px 0;text-transform:uppercase;letter-spacing:.05em;">Rungs${_apexMMActiveLadder !== 'all' ? ` · <span style="color:#00d4ff;cursor:pointer;" onclick="selectApexMMLadder('all')">Clear ✕</span>` : ''}</h4>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;">
             ${ladders.map(d => {
                 const dCol = d.net >= 0 ? '#00ff88' : '#ff4444';
@@ -14438,10 +14626,11 @@ function renderApexMMLadderBreakdown(allTrades) {
 function renderApexMMSportBreakdown(allTrades) {
     const sportPanel = document.getElementById('apex-mm-sport-panel');
     if (!sportPanel) return;
+    const scoped = _applyApexMMFilters(allTrades, 'sport');
 
     const _si = { 'NBA': '🏀', 'NHL': '🏒', 'NFL': '🏈', 'MLB': '⚾', 'KBO': '⚾', 'NPB': '⚾', 'Tennis': '🎾', 'MLS': '⚽', 'EPL': '⚽', 'UCL': '⚽', 'NCAAB': '🏀', 'NCAAF': '🏈', 'NCAAW': '🏀' };
     const sportPnl = {};
-    allTrades.forEach(t => {
+    scoped.forEach(t => {
         const s = t.sport || 'Other';
         if (!sportPnl[s]) sportPnl[s] = { net: 0, wins: 0, losses: 0, count: 0 };
         const n = (t.profit_cents || 0) - (t.loss_cents || 0);
@@ -14520,23 +14709,25 @@ function renderApexMMSportDropdown(sport, allTrades) {
         else if (n < 0) diffBuckets[bucket].losses++;
     });
 
-    // Width breakdown within sport
-    const widthMap = {};
+    // Captured-spread breakdown within sport (rung_width = realized edge)
+    const spreadMap = {};
     const scopedTrades = _apexMMActivePeriod !== 'all' ? sportTrades.filter(t => {
         const gc = t.game_context || {};
         return (gc.period || 0) === _apexMMActivePeriod;
     }) : sportTrades;
     scopedTrades.forEach(t => {
-        const w = t.target_width || t.rung_width || (t.combined_price ? 100 - t.combined_price : 0);
-        if (w <= 0) return;
-        if (!widthMap[w]) widthMap[w] = { width: w, wins: 0, losses: 0, net: 0, count: 0 };
+        if (t.result !== 'mm_round_trip') return;
+        const w = t.rung_width != null ? t.rung_width : (t.combined_price != null ? 100 - t.combined_price : null);
+        if (w == null || w <= 0) return;
+        const k = w >= 5 ? 5 : w;  // bucket 5+ together
+        if (!spreadMap[k]) spreadMap[k] = { key: k, wins: 0, losses: 0, net: 0, count: 0 };
         const n = (t.profit_cents || 0) - (t.loss_cents || 0);
-        widthMap[w].net += n;
-        widthMap[w].count++;
-        if (n > 0) widthMap[w].wins++;
-        else if (n < 0) widthMap[w].losses++;
+        spreadMap[k].net += n;
+        spreadMap[k].count++;
+        if (n > 0) spreadMap[k].wins++;
+        else if (n < 0) spreadMap[k].losses++;
     });
-    const widthEntries = Object.values(widthMap).sort((a, b) => a.width - b.width);
+    const spreadEntries = Object.values(spreadMap).sort((a, b) => a.key - b.key);
 
     let html = '';
 
@@ -14559,16 +14750,17 @@ function renderApexMMSportDropdown(sport, allTrades) {
         </div>`;
     }
 
-    // Width by sport (scoped by period if selected)
-    if (widthEntries.length > 0) {
+    // Captured spread by sport (scoped by period if selected)
+    if (spreadEntries.length > 0) {
         const scopeLabel = _apexMMActivePeriod !== 'all' ? ` (${periodLabels[_apexMMActivePeriod] || 'P' + _apexMMActivePeriod})` : '';
-        html += `<h4 style="color:#00d4ff;font-size:11px;font-weight:700;margin:0 0 8px 0;text-transform:uppercase;letter-spacing:.05em;">Width in ${sport}${scopeLabel}</h4>
+        html += `<h4 style="color:#00d4ff;font-size:11px;font-weight:700;margin:0 0 8px 0;text-transform:uppercase;letter-spacing:.05em;">Captured Spread in ${sport}${scopeLabel}</h4>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:6px;margin-bottom:16px;">
-            ${widthEntries.map(d => {
+            ${spreadEntries.map(d => {
                 const col = d.net >= 0 ? '#00ff88' : '#ff4444';
                 const total = d.wins + d.losses;
+                const label = d.key >= 5 ? '5¢+' : `${d.key}¢`;
                 return `<div style="background:#0f1419;border-radius:6px;padding:8px;text-align:center;border:1px solid #00d4ff18;">
-                    <div style="color:#ff8800;font-size:12px;font-weight:800;">W${d.width}¢</div>
+                    <div style="color:#ff8800;font-size:12px;font-weight:800;">${label}</div>
                     <div style="color:${col};font-size:12px;font-weight:700;">${d.net >= 0 ? '+' : ''}$${(d.net / 100).toFixed(2)}</div>
                     <div style="color:#555;font-size:9px;">${d.wins}W/${d.losses}L${total > 0 ? ' · ' + Math.round(d.wins / total * 100) + '%' : ''}</div>
                     <div style="color:#3a4560;font-size:9px;">${d.count} trades</div>
@@ -14599,11 +14791,16 @@ function renderApexMMSportDropdown(sport, allTrades) {
 
 // ── Apex MM Filter Application ───────────────────────────────────────────
 
-function _applyApexMMFilters(trades) {
+// `skip` lets a breakdown render against trades filtered by every OTHER active
+// filter — e.g. the Sport panel passes skip='sport' so its pills reflect what
+// matches the currently-selected spread/hold/phase/ladder, not the sport itself.
+function _applyApexMMFilters(trades, skip) {
     let f = trades;
-    if (_apexMMActiveSport !== 'all') f = f.filter(t => (t.sport || 'Other') === _apexMMActiveSport);
-    if (_apexMMActiveWidth !== 'all') f = f.filter(t => (t.target_width || t.rung_width || (t.combined_price ? 100 - t.combined_price : 0)) === _apexMMActiveWidth);
-    if (_apexMMActiveLadder !== 'all') f = f.filter(t => (t.levels || 7) === _apexMMActiveLadder);
+    if (skip !== 'sport'  && _apexMMActiveSport  !== 'all') f = f.filter(t => (t.sport || 'Other') === _apexMMActiveSport);
+    if (skip !== 'spread' && _apexMMActiveSpread !== 'all') f = f.filter(t => _apexMMSpreadBucket(t) === _apexMMActiveSpread);
+    if (skip !== 'hold'   && _apexMMActiveHold   !== 'all') f = f.filter(t => _apexMMHoldBucket(t) === _apexMMActiveHold);
+    if (skip !== 'phase'  && _apexMMActivePhase  !== 'all') f = f.filter(t => (t.game_phase || '') === _apexMMActivePhase);
+    if (skip !== 'ladder' && _apexMMActiveLadder !== 'all') f = f.filter(t => t.levels === _apexMMActiveLadder);
     return f;
 }
 
@@ -14632,7 +14829,11 @@ function filterApexMMLog() {
         const qty = t.quantity || 1;
         const sport = t.sport || 'Other';
         const sportEmoji = _si[sport] || '';
-        const width = t.target_width || t.rung_width || (t.combined_price ? 100 - t.combined_price : 0);
+        // Captured spread (realized edge) — `target_width` was the bot's intent
+        // at post time, not what it kept.
+        const capturedSpread = t.rung_width != null
+            ? t.rung_width
+            : (t.combined_price != null ? 100 - t.combined_price : 0);
 
         // Hold time
         let holdStr = '';
@@ -14760,7 +14961,7 @@ function filterApexMMLog() {
                         <div style="display:flex;gap:5px;margin-top:3px;flex-wrap:wrap;">
                             <span style="background:#00d4ff22;color:#00d4ff;padding:2px 7px;border-radius:4px;font-size:9px;font-weight:700;">△ APEX MM</span>
                             <span style="background:${badgeBg};color:${badgeCol};padding:2px 7px;border-radius:4px;font-size:9px;font-weight:700;">${badge}</span>
-                            ${width > 0 ? `<span style="background:#ff880022;color:#ff8800;padding:2px 7px;border-radius:4px;font-size:9px;font-weight:700;">W${width}¢</span>` : ''}
+                            ${capturedSpread > 0 ? `<span style="background:#ff880022;color:#ff8800;padding:2px 7px;border-radius:4px;font-size:9px;font-weight:700;" title="Captured spread (realized edge)">${capturedSpread}¢</span>` : ''}
                             ${t.snapped ? `<span style="background:#ffaa0022;color:#ffaa00;padding:2px 7px;border-radius:4px;font-size:9px;font-weight:700;">SNAPPED</span>` : ''}
                             ${phaseBadge}
                         </div>
@@ -14793,67 +14994,51 @@ function filterApexMMLog() {
 
 // ── Apex MM Filter Toggle Functions ──────────────────────────────────────
 
-function selectApexMMSport(sport) {
-    if (sport === _apexMMActiveSport && sport !== 'all') sport = 'all';
-    _apexMMActiveSport = sport;
-    _apexMMActivePeriod = 'all';
-
+// Re-renders all Apex MM panels and the trade list. Used by every filter
+// change so all chained breakdowns recompute against the current filter set.
+function _refreshApexMMPanels() {
     const scrollY = window.scrollY;
     const allTrades = window._apexMMAllTrades || [];
-    const filtered = _applyApexMMFilters(allTrades);
-
-    renderApexMMStats(filtered, window._apexMMPnl || {});
-    // Sport pills scoped by width filter
-    const widthScoped = _apexMMActiveWidth !== 'all' ? allTrades.filter(t => (t.target_width || t.rung_width || (t.combined_price ? 100 - t.combined_price : 0)) === _apexMMActiveWidth) : allTrades;
-    renderApexMMSportBreakdown(widthScoped);
+    renderApexMMStats(allTrades, window._apexMMPnl || {});
+    renderApexMMSportBreakdown(allTrades);
     renderApexMMSportDropdown(_apexMMActiveSport, allTrades);
+    renderApexMMPhaseBreakdown(allTrades);
+    renderApexMMSpreadBreakdown(allTrades);
+    renderApexMMHoldBreakdown(allTrades);
+    renderApexMMLadderBreakdown(allTrades);
     filterApexMMLog();
     window.scrollTo({ top: scrollY, behavior: 'instant' });
 }
 
-function selectApexMMWidth(width) {
-    if (width === _apexMMActiveWidth && width !== 'all') width = 'all';
-    _apexMMActiveWidth = width;
+function selectApexMMSport(sport) {
+    if (sport === _apexMMActiveSport && sport !== 'all') sport = 'all';
+    _apexMMActiveSport  = sport;
+    _apexMMActivePeriod = 'all';
+    _refreshApexMMPanels();
+}
 
-    // In-place highlight update
-    document.querySelectorAll('#apex-mm-width-panel [data-width]').forEach(card => {
-        const w = Number(card.getAttribute('data-width'));
-        const isActive = w === _apexMMActiveWidth;
-        card.style.borderColor = isActive ? '#ff7043' : 'rgba(0,212,255,0.09)';
-        card.style.background = isActive ? 'rgba(255,112,67,0.08)' : '#0f1419';
-    });
+function selectApexMMSpread(key) {
+    if (key === _apexMMActiveSpread && key !== 'all') key = 'all';
+    _apexMMActiveSpread = key;
+    _refreshApexMMPanels();
+}
 
-    const scrollY = window.scrollY;
-    const allTrades = window._apexMMAllTrades || [];
-    const filtered = _applyApexMMFilters(allTrades);
+function selectApexMMHold(key) {
+    if (key === _apexMMActiveHold && key !== 'all') key = 'all';
+    _apexMMActiveHold = key;
+    _refreshApexMMPanels();
+}
 
-    renderApexMMStats(filtered, window._apexMMPnl || {});
-    // Sport pills scoped by width filter
-    const widthScoped = _apexMMActiveWidth !== 'all' ? allTrades.filter(t => (t.target_width || t.rung_width || (t.combined_price ? 100 - t.combined_price : 0)) === _apexMMActiveWidth) : allTrades;
-    renderApexMMSportBreakdown(widthScoped);
-    renderApexMMSportDropdown(_apexMMActiveSport, allTrades);
-    filterApexMMLog();
-    window.scrollTo({ top: scrollY, behavior: 'instant' });
+function selectApexMMPhase(phase) {
+    if (phase === _apexMMActivePhase && phase !== 'all') phase = 'all';
+    _apexMMActivePhase = phase;
+    _refreshApexMMPanels();
 }
 
 function selectApexMMLadder(levels) {
     if (levels === _apexMMActiveLadder && levels !== 'all') levels = 'all';
     _apexMMActiveLadder = levels;
-
-    // In-place highlight update
-    document.querySelectorAll('#apex-mm-ladder-panel [data-ladder]').forEach(card => {
-        const l = Number(card.getAttribute('data-ladder'));
-        const isActive = l === _apexMMActiveLadder;
-        card.style.borderColor = isActive ? '#00d4ff' : 'rgba(255,112,67,0.09)';
-        card.style.background = isActive ? 'rgba(0,212,255,0.08)' : '#0f1419';
-    });
-
-    const scrollY = window.scrollY;
-    const allTrades = window._apexMMAllTrades || [];
-    const filtered = _applyApexMMFilters(allTrades);
-    renderApexMMStats(filtered, window._apexMMPnl || {});
-    filterApexMMLog();
-    window.scrollTo({ top: scrollY, behavior: 'instant' });
+    _refreshApexMMPanels();
 }
 
 function selectApexMMPeriod(period) {
@@ -15410,27 +15595,40 @@ function renderDogStatsAndDepth(trades, pnl) {
         const lifetimeContracts = pnl.lifetime_dog_contracts || 0;
         const monthlyContracts = pnl.monthly_dog_contracts || 0;
         const monthlyLabel = pnl.monthly_label || 'This Month';
-        const monthlyGoal = 300000;
-        const monthlyPct = monthlyGoal > 0 ? Math.min(100, Math.round(monthlyContracts / monthlyGoal * 100)) : 0;
         const lifetimePnlCol = lifetimePnl >= 0 ? '#ffaa00' : '#ff4444';
 
-        // ── Build smart label from active filters ──
+        // ── Day scope: default to TODAY when no calendar selection (so the
+        // Contracts card doesn't duplicate the Lifetime card next to it). When
+        // calendar dates are selected, scope contracts to those days.
+        const _todayStr = new Date().toLocaleDateString('en-CA');
+        const _tradeDay = (t) => new Date((t.timestamp || 0) * 1000).toLocaleDateString('en-CA');
         const hasDateFilter = selectedHistoryDays.length > 0;
+        const dayScopeDates = hasDateFilter ? selectedHistoryDays : [_todayStr];
+        let dayLabel;
+        if (!hasDateFilter) {
+            dayLabel = 'Today';
+        } else if (selectedHistoryDays.length === 1) {
+            const d = new Date(selectedHistoryDays[0] + 'T12:00:00');
+            dayLabel = d.toLocaleDateString('en', { month: 'short', day: 'numeric' });
+        } else {
+            const uniqueMonths = [...new Set(selectedHistoryDays.map(d => d.substring(0, 7)))];
+            dayLabel = uniqueMonths.length === 1
+                ? new Date(uniqueMonths[0] + '-01').toLocaleDateString('en', { month: 'short', year: 'numeric' })
+                : `${selectedHistoryDays.length} days`;
+        }
+        const dayTrades = trades.filter(t => dayScopeDates.includes(_tradeDay(t)));
+        const dayContracts = dayTrades.reduce((s, t) => s + (t.quantity || 1), 0);
+        const dayTradeCount = dayTrades.length;
+        const dayPerTrade = dayTradeCount > 0 ? Math.round(dayContracts / dayTradeCount) : 0;
+
+        // ── Build smart label from active filters ──
         const hasSportFilter = _phantomActiveSport !== 'all';
         const hasDepthFilter = _phantomActiveDepth !== 'all';
         const hasAnyFilter = hasDateFilter || hasSportFilter || hasDepthFilter;
         let filterLabel = '';
         if (hasAnyFilter) {
             const parts = [];
-            if (hasDateFilter) {
-                if (selectedHistoryDays.length === 1) {
-                    const d = new Date(selectedHistoryDays[0] + 'T12:00:00');
-                    parts.push(d.toLocaleDateString('en', {month:'short', day:'numeric'}));
-                } else {
-                    const uniqueMonths = [...new Set(selectedHistoryDays.map(d => d.substring(0, 7)))];
-                    parts.push(uniqueMonths.length === 1 ? new Date(uniqueMonths[0] + '-01').toLocaleDateString('en', {month:'short',year:'numeric'}) : `${selectedHistoryDays.length} days`);
-                }
-            }
+            if (hasDateFilter) parts.push(dayLabel);
             if (hasSportFilter) parts.push(_phantomActiveSport);
             if (hasDepthFilter) parts.push(_phantomActiveDepth + '¢');
             filterLabel = parts.join(' · ');
@@ -15485,9 +15683,9 @@ function renderDogStatsAndDepth(trades, pnl) {
                 ${hasAnyFilter
                     ? _bub('Trades', totalTrades, `${wins}W / ${losses}L`, '#ffaa00')
                     : _bub('Trades', lifetimeWins + lifetimeLosses, `${lifetimeWins}W / ${lifetimeLosses}L`, '#ffaa00')}
-                ${_bub(`${monthlyLabel}`, monthlyContracts.toLocaleString(), `${monthlyPct}% of 300k goal`, monthlyPct >= 100 ? '#00ff88' : '#ff66aa')}
+                ${_bub(monthlyLabel, monthlyContracts.toLocaleString(), 'contracts this month', '#ff66aa')}
                 ${_bub('Lifetime', lifetimeContracts.toLocaleString(), 'contracts', '#ff66aa')}
-                ${hasAnyFilter ? _bub(`${filterLabel}`, filteredContracts.toLocaleString(), 'contracts', '#ff66aa') : _bub('Contracts', lifetimeContracts.toLocaleString(), `~${(lifetimeWins + lifetimeLosses) > 0 ? Math.round(lifetimeContracts / (lifetimeWins + lifetimeLosses)) : 0} per trade`, '#ff66aa')}
+                ${_bub(dayLabel, dayContracts.toLocaleString(), dayTradeCount > 0 ? `${dayTradeCount} trades · ~${dayPerTrade}/trade` : 'no trades', '#ff66aa')}
                 ${_bub('Hedge Speed', avgHedgeMs === '—' ? '—' : `${avgHedgeMs}ms`, `${hedgeTrades.length} samples`, '#ffaa00')}
                 ${_bub('Hedge Fill', fmtFillTime(avgHedgeFillS), `${hfTrades.length} samples`, '#ff66aa')}
             </div>`;

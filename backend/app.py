@@ -5965,7 +5965,13 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                     _trigger_below_bid = _apex_mm_top_rung_below_bid(bot)
                     if _trigger_mid or _trigger_side or _trigger_below_bid:
                         _now_ts = time.time()
-                        if _now_ts - bot.get('_last_ws_drift_at', 0) >= APEX_MM_WS_DRIFT_COOLDOWN_S:
+                        # Cooldown applies to mid/side drift and to join-mode
+                        # below-bid (queue priority matters). Default-mode
+                        # below-bid bypasses cooldown — user doesn't care about
+                        # queue priority when BBO, only about not being at-bid.
+                        _qj_bot = bool(bot.get('queue_join_mode', False))
+                        _bypass_cooldown = _trigger_below_bid and not _qj_bot and not (_trigger_mid or _trigger_side)
+                        if _bypass_cooldown or _now_ts - bot.get('_last_ws_drift_at', 0) >= APEX_MM_WS_DRIFT_COOLDOWN_S:
                             bot['_last_ws_drift_at'] = _now_ts
                             bot['_ws_drift_event_ts'] = _now_ts
                             _apex_mm_reactor_queue.put((_apex_mm_repost_ladder, (bot_id, bot)))
@@ -19638,16 +19644,20 @@ def _handle_apex(bot_id, bot, actions):
     # not generate frequent ticks. This monitor-tick check guarantees the
     # rule is enforced every 2s regardless of WS activity. Skip while holding
     # inventory — touching anchors mid-fill is the cancel-race orphan factory.
+    # Cooldown applies to join mode (queue priority loss). Default mode
+    # bypasses — user prioritizes BBO maintenance over queue position.
     if (net_yes == 0 and net_no == 0 and bot.get('live_yes_bid', 0) > 0
             and bot.get('live_no_bid', 0) > 0
             and _apex_mm_top_rung_below_bid(bot)):
         _now_bb = time.time()
-        if _now_bb - bot.get('_last_ws_drift_at', 0) >= APEX_MM_WS_DRIFT_COOLDOWN_S:
+        _qj_bb = bool(bot.get('queue_join_mode', False))
+        _cooldown_ok = _now_bb - bot.get('_last_ws_drift_at', 0) >= APEX_MM_WS_DRIFT_COOLDOWN_S
+        if not _qj_bb or _cooldown_ok:
             bot['_last_ws_drift_at'] = _now_bb
             bot_log('APEX_MM_BELOW_BID_REPOST', bot_id, {
                 'yes_bid': bot.get('live_yes_bid', 0),
                 'no_bid': bot.get('live_no_bid', 0),
-                'qj': bool(bot.get('queue_join_mode', False)),
+                'qj': _qj_bb,
             }, level='WARN')
             print(f'⚡ APEX MM BELOW-BID MONITOR: {bot_id} top rung violates placement rule → repost')
             _apex_mm_repost_ladder(bot_id, bot)

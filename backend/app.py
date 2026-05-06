@@ -10701,11 +10701,20 @@ def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, inv_limit
             if np >= 1:
                 no_levels.append((int(np), level_qty))
     else:
+        # DEFAULT mode: top rung at midpoint - start_gap (inside the spread).
+        # Floor: top rung must be AT or ABOVE the live bid — never below. When
+        # mid - gap would land below bid, jump top rung up to bid (effectively
+        # joins the queue at bid). Sub-rungs ladder down from the original
+        # (non-floored) calculated prices — preserves existing depth behavior.
+        # Per user 2026-05-06: 'never post first rung lower than current bid'.
         no_anchor = 100 - midpoint
         for i in range(levels):
             offset = start_gap + (i * spacing)
             yp = midpoint - offset
             np = no_anchor - offset
+            if i == 0:
+                if yes_bid > 0: yp = max(yp, yes_bid)
+                if no_bid > 0:  np = max(np, no_bid)
             level_qty = max(1, base_qty)
             if yp >= 1:
                 yes_levels.append((int(yp), level_qty))

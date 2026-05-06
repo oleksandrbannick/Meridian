@@ -6340,6 +6340,7 @@ async function deployMarketMaker() {
     showNotification(`Deploying Apex MM on ${ticker}...`);
 
     try {
+        const queueJoinMode = !!document.getElementById('mm-queue-join')?.checked;
         const resp = await fetch(`${API_BASE}/bot/ladder-arb`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -6350,6 +6351,7 @@ async function deployMarketMaker() {
                 loss_limit_cents: lossLimitCents,
                 smart_mode: lossLimitCents > 0 ? true : false,
                 auto_width: _mmAutoWidth,
+                queue_join_mode: queueJoinMode,
             }),
         });
         const data = await resp.json();

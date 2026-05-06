@@ -10672,23 +10672,45 @@ def _apex_mm_reconcile_inventory(bot_id, bot):
     return True
 
 
-def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, inv_limit=0):
+def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, inv_limit=0,
+                    queue_join=False, yes_bid=0, no_bid=0):
     """Generate YES and NO bid prices + quantities for the ladder.
     Flat sizing: every rung gets base_qty (per v2 blueprint — predictable sweep damage).
     If inv_limit > 0, total qty per side is capped at that limit.
+
+    Two posting modes:
+      - DEFAULT (queue_join=False): top rung at midpoint - start_gap (inside the
+        spread). Bot becomes the new best bid. Captures more spread per RT but
+        triggers undercut spiral in bot-saturated rooms.
+      - QUEUE JOIN (queue_join=True, yes_bid+no_bid > 0): top rung AT live bid.
+        Sit in FIFO queue with whoever else is there. Doesn't trigger spiral
+        because we're not improving — just queuing. Lower fill rate, but full
+        room kept when both legs fill.
+
     Returns (yes_levels: list[(price, qty)], no_levels: list[(price, qty)]) sorted descending by price."""
     yes_levels = []
     no_levels = []
-    no_anchor = 100 - midpoint
-    for i in range(levels):
-        offset = start_gap + (i * spacing)
-        yp = midpoint - offset
-        np = no_anchor - offset
-        level_qty = max(1, base_qty)
-        if yp >= 1:
-            yes_levels.append((int(yp), level_qty))
-        if np >= 1:
-            no_levels.append((int(np), level_qty))
+    if queue_join and yes_bid > 0 and no_bid > 0:
+        # Anchor top rung AT live bid; ladder DOWN from there.
+        for i in range(levels):
+            yp = yes_bid - (i * spacing)
+            np = no_bid - (i * spacing)
+            level_qty = max(1, base_qty)
+            if yp >= 1:
+                yes_levels.append((int(yp), level_qty))
+            if np >= 1:
+                no_levels.append((int(np), level_qty))
+    else:
+        no_anchor = 100 - midpoint
+        for i in range(levels):
+            offset = start_gap + (i * spacing)
+            yp = midpoint - offset
+            np = no_anchor - offset
+            level_qty = max(1, base_qty)
+            if yp >= 1:
+                yes_levels.append((int(yp), level_qty))
+            if np >= 1:
+                no_levels.append((int(np), level_qty))
     # Cap total qty per side at inventory limit
     if inv_limit > 0:
         for side_levels in (yes_levels, no_levels):
@@ -11097,7 +11119,7 @@ def _apex_mm_repost_ladder_inner(bot_id, bot):
         _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
         _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
         _eff_lvls, _qty_mult = _apex_mm_effective_levels(bot)
-        yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0))
+        yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0), queue_join=bot.get('queue_join_mode', False), yes_bid=bot.get('live_yes_bid', 0) or 0, no_bid=bot.get('live_no_bid', 0) or 0)
         yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
         yes_levels, no_levels = _apex_mm_filter_dca_above_avg(bot, yes_levels, no_levels)
         if not yes_levels and not no_levels:
@@ -12281,7 +12303,7 @@ def _apex_mm_cycle_reset(bot_id, bot):
     _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
     _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
     _eff_lvls, _qty_mult = _apex_mm_effective_levels(bot)
-    yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0))
+    yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0), queue_join=bot.get('queue_join_mode', False), yes_bid=bot.get('live_yes_bid', 0) or 0, no_bid=bot.get('live_no_bid', 0) or 0)
     yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
     yes_levels, no_levels = _apex_mm_filter_dca_above_avg(bot, yes_levels, no_levels)
     _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
@@ -12412,7 +12434,7 @@ def _apex_mm_fresh_ladder(bot_id, bot):
     _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
     _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
     _eff_lvls, _qty_mult = _apex_mm_effective_levels(bot)
-    yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0))
+    yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0), queue_join=bot.get('queue_join_mode', False), yes_bid=bot.get('live_yes_bid', 0) or 0, no_bid=bot.get('live_no_bid', 0) or 0)
     yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
     yes_levels, no_levels = _apex_mm_filter_dca_above_avg(bot, yes_levels, no_levels)
     _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
@@ -12706,7 +12728,10 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
         yes_levels, no_levels = _apex_mm_levels(
             _eff_mid, _eff_gap, bot['levels'], bot['spacing'],
             base_qty=_eff_qty,
-            inv_limit=bot.get('inventory_limit', 0)
+            inv_limit=bot.get('inventory_limit', 0),
+            queue_join=bot.get('queue_join_mode', False),
+            yes_bid=bot.get('live_yes_bid', 0) or 0,
+            no_bid=bot.get('live_no_bid', 0) or 0,
         )
         yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
         yes_levels, no_levels = _apex_mm_filter_dca_above_avg(bot, yes_levels, no_levels)
@@ -13875,6 +13900,7 @@ def create_ladder_arb_bot():
         qty_per_level = int(data.get('qty_per_level', 10))
         loss_limit_cents = int(data.get('loss_limit_cents', 500))
         smart_mode = bool(data.get('smart_mode', False))
+        queue_join_mode = bool(data.get('queue_join_mode', False))
 
         if not ticker:
             return jsonify({'error': 'Missing ticker'}), 400
@@ -13969,7 +13995,8 @@ def create_ladder_arb_bot():
             # Unified with _apex_mm_target_start_gap and _apex_mm_sync_auto_width:
             # all three paths use room // 2 (BBO match). Below 6c → BBO-tight.
             start_gap = max(1, min(20, _room // 2)) if _room >= 6 else 1
-        yes_levels, no_levels = _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=qty_per_level, inv_limit=0)
+        yes_levels, no_levels = _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=qty_per_level, inv_limit=0,
+                                                 queue_join=queue_join_mode, yes_bid=live_yes_bid, no_bid=live_no_bid)
         # Auto-compute inventory limit from ladder total (max contracts per side)
         inventory_limit = max(sum(q for _, q in yes_levels), sum(q for _, q in no_levels)) if yes_levels or no_levels else 50
 
@@ -14022,6 +14049,7 @@ def create_ladder_arb_bot():
             'status': 'market_making_active',
             'start_gap': start_gap,
             '_auto_width': auto_width,
+            'queue_join_mode': queue_join_mode,
             'levels': levels,
             'spacing': spacing,
             'qty_per_level': qty_per_level,
@@ -19233,7 +19261,7 @@ def _handle_apex(bot_id, bot, actions):
                     _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
                     _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
                     _eff_lvls, _qty_mult = _apex_mm_effective_levels(bot)
-                    yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0))
+                    yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0), queue_join=bot.get('queue_join_mode', False), yes_bid=bot.get('live_yes_bid', 0) or 0, no_bid=bot.get('live_no_bid', 0) or 0)
                     yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
                     yes_levels, no_levels = _apex_mm_filter_dca_above_avg(bot, yes_levels, no_levels)
                     _entry_levels = yes_levels if _entry_side == 'yes' else no_levels
@@ -25476,7 +25504,7 @@ def apex_mm_edit(bot_id):
             _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
             _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
             _eff_lvls, _qty_mult = _apex_mm_effective_levels(bot)
-            yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0))
+            yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0), queue_join=bot.get('queue_join_mode', False), yes_bid=bot.get('live_yes_bid', 0) or 0, no_bid=bot.get('live_no_bid', 0) or 0)
             yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
             yes_levels, no_levels = _apex_mm_filter_dca_above_avg(bot, yes_levels, no_levels)
             _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)

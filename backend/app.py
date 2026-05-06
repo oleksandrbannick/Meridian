@@ -17253,6 +17253,7 @@ def _handle_phantom(bot_id, bot, actions):
             bot['lifetime_pnl'] = bot.get('lifetime_pnl', 0) + net_pnl
 
             # Verify ACTUAL fills on Kalshi — check every order this bot placed
+            _verified_dog_fills_at_complete = None  # set inside try; consumed by completion-cancel block below
             try:
                 _ph_oids = [bot.get('dog_order_id'), bot.get('fav_order_id')]
                 _ph_oids += [bot.get('yes_order_id'), bot.get('no_order_id')]  # Fallback: trade-level order IDs
@@ -17368,8 +17369,75 @@ def _handle_phantom(bot_id, bot, actions):
                     'unhedged': _ph_unhedged, 'orders_checked': _ph_checked,
                     'local_dog_fill': bot.get('dog_fill_qty', 0), 'local_fav_fill': fav_filled,
                 })
+                # Capture Kalshi-verified dog fill count so the completion-cancel block
+                # below can detect new fills accumulating between verify and cancel.
+                _verified_dog_fills_at_complete = _ph_no if dog_side == 'no' else _ph_yes
             except Exception as _pv_err:
                 bot_log('PHANTOM_ORDER_VERIFY_FAIL', bot_id, {'error': str(_pv_err)[:200]}, level='ERROR')
+
+            # Cancel the dog order now that the cycle is closed. Without this, a
+            # partially-filled dog order keeps resting on Kalshi during waiting_repeat
+            # and accumulates new fills that fall outside the booked cycle. The
+            # repeat-cleanup cancel later (line ~18079) deliberately does NOT hedge
+            # cancel-race fills (assumes already-hedged cycle fills) — that assumption
+            # breaks when the waiting_repeat window is long. YOSKAT-YOS 2026-05-06:
+            # dog accumulated 15.47 → 40 fills during 60s of fav_dry_skip delays,
+            # leaving 24.53 NO untracked. Cancelling at completion shrinks that
+            # window from ~60s to <100ms; if the cancel itself races a fresh fill,
+            # we hedge the delta via the existing dog_filled re-entry path.
+            try:
+                _completion_dog_oid = bot.get('dog_order_id')
+                if _completion_dog_oid:
+                    _verified_at_complete = (_verified_dog_fills_at_complete
+                                              if _verified_dog_fills_at_complete is not None
+                                              else (bot.get('dog_fill_qty', 0) or 0))
+                    _ccr = _safe_cancel(_completion_dog_oid, f'phantom completion cleanup {bot_id}')
+                    if isinstance(_ccr, tuple) and _ccr[0] == 'filled':
+                        _final_dog_fills = _ccr[1] or 0
+                        _completion_delta = _final_dog_fills - _verified_at_complete
+                        if _completion_delta >= 1.0:
+                            print(f'🚨 PHANTOM COMPLETION CANCEL-RACE: {bot_id} dog {_completion_dog_oid[:12]} fills {_verified_at_complete} → {_final_dog_fills} (+{_completion_delta} new) — hedging delta')
+                            bot_log('PHANTOM_COMPLETION_CANCEL_RACE', bot_id, {
+                                'order_id': _completion_dog_oid[:12],
+                                'verified_fills': _verified_at_complete,
+                                'final_fills': _final_dog_fills,
+                                'unhedged_delta': _completion_delta,
+                            }, level='WARN')
+                            # Mirror verify-rehedge path: re-enter dog_filled with the
+                            # delta as the hedge target. Monitor's dog_filled handler
+                            # will post a fav for _partial_hedge_qty next tick.
+                            bot['_partial_hedge_qty'] = _completion_delta
+                            bot['quantity'] = _completion_delta
+                            bot['dog_fill_qty'] = _completion_delta
+                            bot['_dog_reconciled'] = True
+                            bot['_last_dog_reconcile'] = time.time()
+                            bot['_trade_recorded'] = False
+                            bot['_hedge_fired'] = False
+                            _old_fav_oid_cc = bot.get('fav_order_id')
+                            if _old_fav_oid_cc:
+                                bot.setdefault('_all_hedge_order_ids', []).append(_old_fav_oid_cc)
+                            bot['fav_order_id'] = None
+                            bot['fav_fill_qty'] = 0
+                            bot['status'] = 'dog_filled'
+                            bot['dog_filled_at'] = time.time()
+                            bot['dog_order_id'] = None
+                            save_state()
+                            return
+                        # cancel-race delta < 1.0: order is gone, sub-contract residue only
+                        bot['dog_order_id'] = None
+                    elif _ccr is True or _ccr == '404':
+                        # Clean cancel or order already gone — safe to clear reference
+                        bot['dog_order_id'] = None
+                    else:
+                        # _safe_cancel returned False (cancel actually failed) — leave
+                        # dog_order_id set so the existing repeat-cleanup at line ~18079
+                        # can retry. Clearing here would orphan a still-live order.
+                        bot_log('PHANTOM_COMPLETION_CANCEL_DEFER', bot_id, {
+                            'order_id': _completion_dog_oid[:12],
+                            'reason': 'cancel_failed_will_retry_in_repeat_cleanup',
+                        }, level='WARN')
+            except Exception as _cc_err:
+                bot_log('PHANTOM_COMPLETION_CANCEL_FAIL', bot_id, {'error': str(_cc_err)[:200]}, level='ERROR')
 
             # Repeat decision (run_history + lifetime_pnl already handled up top, before verify-rehedge)
             repeats_done_now = bot.get('repeats_done', 0)  # already incremented above

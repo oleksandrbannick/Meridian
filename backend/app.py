@@ -10754,11 +10754,14 @@ def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, inv_limit
 
 
 def _apex_mm_top_rung_below_bid(bot):
-    """True if the highest live rung on either side sits below own live bid.
-    Closes the dynamic-drift gap left by APEX_MM_SIDE_DRIFT_THRESHOLD: a 1c
-    bid improvement after post leaves top rung 1c below new bid (behind queue),
-    silently, until next 2c+ drift event. Top rung only — sub-rungs are depth
-    and may sit below bid by design."""
+    """True if the highest live rung on either side violates the placement rule.
+    Default mode (queue_join=False): top rung must be > live bid (strict BBO).
+        → trigger when top_rung <= bid (at-bid is also a violation).
+    Join mode (queue_join=True): top rung must be == live bid.
+        → trigger only when top_rung < bid.
+    Top rung only; sub-rungs are depth and may sit at/below bid by design.
+    Closes dynamic-drift gap left by APEX_MM_SIDE_DRIFT_THRESHOLD = 2c."""
+    qj = bool(bot.get('queue_join_mode', False))
     for side, bid_key in (('yes', 'live_yes_bid'), ('no', 'live_no_bid')):
         bid = bot.get(bid_key, 0) or 0
         if bid <= 0:
@@ -10775,7 +10778,10 @@ def _apex_mm_top_rung_below_bid(bot):
                     pass
         if not live_prices:
             continue
-        if max(live_prices) < bid:
+        top = max(live_prices)
+        # Default: must be strictly above bid. Join: AT bid is allowed.
+        min_acceptable = bid if qj else (bid + 1)
+        if top < min_acceptable:
             return True
     return False
 

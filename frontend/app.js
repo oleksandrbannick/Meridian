@@ -7093,6 +7093,16 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         } else if (effExitPrice > 0) {
             // Simple profit-zone badge. Internal state (alone/queue/bbo+1) lives
             // in bot._bbo_state for debugging — not surfaced in user-facing label.
+            // Walk countdown: when combined < 95 and bot is alone (BBO state),
+            // exit walker creeps +1c per cadence (default 8s live, varies by phase).
+            const _lastWalk = bot._last_walk_at || 0;
+            const _walkAge = _lastWalk > 0 ? (nowSec - _lastWalk) : null;
+            // Approximate walk cadence — backend uses phase-aware (pregame 30s,
+            // live 8s, end 3s, OT 2s). Frontend defaults to 8s as the common case.
+            const _walkIv = 8;
+            const _walkLeft = (_walkAge !== null) ? Math.max(0, Math.ceil(_walkIv - _walkAge)) : null;
+            const _showWalk = (bot._bbo_state === 'alone' || !bot._bbo_state) && _walkLeft !== null && combined < 95;
+            const _walkSuffix = _showWalk ? ` · ↑${_walkLeft}s` : '';
             if (combined > 100) {
                 walkBadge = `<span style="background:#ff444422;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">−${combined - 100}¢ LOSS</span>`;
             } else if (combined === 100) {
@@ -7100,7 +7110,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             } else if (combined >= 95) {
                 walkBadge = `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">+${100 - combined}¢ TIGHT</span>`;
             } else {
-                walkBadge = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">+${100 - combined}¢</span>`;
+                walkBadge = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;" title="Exit walker creeps +1c per phase-aware cadence (live ~8s) until fill or 95c cap.">+${100 - combined}¢${_walkSuffix}</span>`;
             }
         } else if (hasInv) {
             // Inventory held but no exit price yet — bot is mid-post
@@ -7209,9 +7219,9 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         const _marketBest = bot._bbo_market_best;
         if (effExitPrice > 0 && _bboState) {
             if (_bboState === 'alone') {
-                bboBadge = `<span style="background:#00ff8818;color:#00ff88;padding:1px 5px;border-radius:3px;font-size:8px;font-weight:700;" title="Bot is alone at top of book — setting BBO">ALONE</span>`;
+                bboBadge = `<span style="background:#00ff8818;color:#00ff88;padding:1px 5px;border-radius:3px;font-size:8px;font-weight:700;" title="Bot is alone at top of book — solo BBO, walking up">ALONE</span>`;
             } else if (_bboState === 'queue') {
-                bboBadge = `<span style="background:#ffaa0018;color:#ffaa00;padding:1px 5px;border-radius:3px;font-size:8px;font-weight:700;" title="Other bidder(s) at same price — queue-joined">QUEUE</span>`;
+                bboBadge = `<span style="background:#ffaa0018;color:#ffaa00;padding:1px 5px;border-radius:3px;font-size:8px;font-weight:700;" title="Tied with other bidder(s) at same price — sharing FIFO queue at the BBO${_marketBest ? ' (' + _marketBest + 'c)' : ''}">JOINED</span>`;
             } else if (_bboState === 'bbo_plus_one') {
                 bboBadge = `<span style="background:#00d4ff18;color:#00d4ff;padding:1px 5px;border-radius:3px;font-size:8px;font-weight:700;" title="Price-improved past real top at ${_marketBest}c">BBO+1</span>`;
             }

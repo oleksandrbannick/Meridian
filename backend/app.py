@@ -10726,16 +10726,17 @@ def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, inv_limit
                 yes_levels.append((int(yp), level_qty))
             if np >= 1:
                 no_levels.append((int(np), level_qty))
-    else:
-        # NORMAL mode: top rung at bid+1 on each side (BBO by 1c, max profit
-        # per RT). Sub-rungs ladder DOWN by spacing as depth.
-        # Per user 2026-05-06: "do bid+1 on normal for room on both sides".
-        # Replaces prior midpoint-start_gap formula which jumped 12c+ above bid
-        # on wide rooms (room > 40c) — capturing only 40c of arb when room
-        # had 60c+ available. bid+1 captures (room-2)c per RT regardless of
-        # room width. Falls back to mid-gap when bids unknown (pregame, etc).
-        yes_top = (yes_bid + 1) if yes_bid > 0 else (midpoint - start_gap)
-        no_top  = (no_bid + 1)  if no_bid > 0 else ((100 - midpoint) - start_gap)
+        # NORMAL mode placement (per user 2026-05-06):
+        #   TOP rung = max(midpoint - start_gap, bid + 1)
+        #     - Wide market (room > 2*start_gap): mid-gap wins → top inside
+        #       the spread, bot top-room = start_gap*2 (matches auto_width).
+        #     - Narrow market (mid-gap drops to or below bid): bid+1 wins →
+        #       top BBO above bid by 1c, bot top-room = market_room - 2.
+        #   SUB rungs (level 1+): ladder DOWN from top by spacing.
+        yes_top_calc = midpoint - start_gap
+        no_top_calc  = (100 - midpoint) - start_gap
+        yes_top = max(yes_top_calc, yes_bid + 1) if yes_bid > 0 else yes_top_calc
+        no_top  = max(no_top_calc,  no_bid  + 1) if no_bid  > 0 else no_top_calc
         for i in range(levels):
             yp = yes_top - (i * spacing)
             np = no_top - (i * spacing)

@@ -7248,16 +7248,17 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     for (let i = 0; i < _cfgLevels; i++) {
         let yp, np;
         if (_qj && _qjYesTop > 0 && _qjNoTop > 0) {
-            // Join Room: top rung AT bid, ladder down.
+            // Join Room: top rung AT bid, ladder down from top.
             yp = _qjYesTop - (i * _cfgSpacing);
             np = _qjNoTop - (i * _cfgSpacing);
         } else {
-            // Normal: top rung at bid+1 (BBO), ladder down. Falls back to
-            // mid-gap when bids unknown (pregame).
-            const yesTop = _qjYesTop > 0 ? (_qjYesTop + 1) : (_cfgMid - _cfgGap);
-            const noTop  = _qjNoTop > 0 ? (_qjNoTop + 1)  : ((100 - _cfgMid) - _cfgGap);
+            // Normal: top = max(mid-gap, bid+1). Sub-rungs ladder down from top.
+            const yesTopCalc = _cfgMid - _cfgGap;
+            const noTopCalc  = (100 - _cfgMid) - _cfgGap;
+            const yesTop = _qjYesTop > 0 ? Math.max(yesTopCalc, _qjYesTop + 1) : yesTopCalc;
+            const noTop  = _qjNoTop  > 0 ? Math.max(noTopCalc,  _qjNoTop  + 1) : noTopCalc;
             yp = yesTop - (i * _cfgSpacing);
-            np = noTop - (i * _cfgSpacing);
+            np = noTop  - (i * _cfgSpacing);
         }
         if (yp >= 1) _expectedYes.push(yp);
         if (np >= 1) _expectedNo.push(np);
@@ -8537,12 +8538,13 @@ async function loadBots() {
             });
         });
 
-        // Sort game groups: FIRST bot placed in the group determines group order
-        // (stable — adding more bots to a game doesn't reshuffle it)
+        // Sort game groups: MOST RECENT bot in the group determines group order.
+        // Adding a new bot to a game bubbles that group to the top — per user
+        // ask 2026-05-06 (most recently created Apex must show at the top).
         const sortedGameKeys = Object.keys(gameGroups).sort((a, b) => {
-            const firstA = Math.min(...gameGroups[a].map(id => bots[id].created_at || 0));
-            const firstB = Math.min(...gameGroups[b].map(id => bots[id].created_at || 0));
-            return firstB - firstA;  // newest game first, but stable within a game
+            const lastA = Math.max(...gameGroups[a].map(id => bots[id].created_at || 0));
+            const lastB = Math.max(...gameGroups[b].map(id => bots[id].created_at || 0));
+            return lastB - lastA;
         });
 
         // Render grouped bots (filtered by sport and state if active)

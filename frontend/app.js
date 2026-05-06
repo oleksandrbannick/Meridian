@@ -4777,7 +4777,7 @@ function updateAnchorPreview() {
             // Auto-fetch depth rec from backend (uses live LocalOrderbook, zero API calls)
             window._depthRecFetching = window._depthRecFetching || {};
             window._depthRecFetching[_obTicker] = true;
-            const _dogSide = _anchorIsBrokenSpread ? 'no' : (document.querySelector('.dog-side-pill.active')?.dataset?.side || 'yes');
+            const _dogSide = _anchorIsBrokenSpread ? 'no' : (_anchorDogSide || 'yes');
             fetch(`${API_BASE}/depth-rec/${_obTicker}?dog=${_dogSide}&_=${Date.now()}`)
                 .then(r => r.ok ? r.json() : null)
                 .then(data => {

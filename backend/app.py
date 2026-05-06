@@ -19632,6 +19632,27 @@ def _handle_apex(bot_id, bot, actions):
             _apex_mm_repost_ladder(bot_id, bot)
             return
 
+    # 5.6. Bid-placement rule enforcement (every monitor tick, flat-only).
+    # User rule: default mode top rung > bid (BBO); join mode top rung == bid.
+    # WS-tick reprice catches the moment of bid change, but slow markets may
+    # not generate frequent ticks. This monitor-tick check guarantees the
+    # rule is enforced every 2s regardless of WS activity. Skip while holding
+    # inventory — touching anchors mid-fill is the cancel-race orphan factory.
+    if (net_yes == 0 and net_no == 0 and bot.get('live_yes_bid', 0) > 0
+            and bot.get('live_no_bid', 0) > 0
+            and _apex_mm_top_rung_below_bid(bot)):
+        _now_bb = time.time()
+        if _now_bb - bot.get('_last_ws_drift_at', 0) >= APEX_MM_WS_DRIFT_COOLDOWN_S:
+            bot['_last_ws_drift_at'] = _now_bb
+            bot_log('APEX_MM_BELOW_BID_REPOST', bot_id, {
+                'yes_bid': bot.get('live_yes_bid', 0),
+                'no_bid': bot.get('live_no_bid', 0),
+                'qj': bool(bot.get('queue_join_mode', False)),
+            }, level='WARN')
+            print(f'⚡ APEX MM BELOW-BID MONITOR: {bot_id} top rung violates placement rule → repost')
+            _apex_mm_repost_ladder(bot_id, bot)
+            return
+
     # 6. Walk-up: if exit order stuck, gradually amend toward breakeven
     _apex_mm_walk_up(bot_id, bot)
 

@@ -5959,13 +5959,17 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                     _max_side_drift = max(_yes_side_drift, _no_side_drift)
                     _trigger_mid = _drift_amt >= APEX_MM_DRIFT_THRESHOLD
                     _trigger_side = _max_side_drift >= APEX_MM_SIDE_DRIFT_THRESHOLD
-                    if _trigger_mid or _trigger_side:
+                    # User rule: top rung must be > bid (default) or AT bid (join).
+                    # Fires when bid drifts up 1c after post — below-threshold for
+                    # mid/side drift but visible as top_rung <= bid violation.
+                    _trigger_below_bid = _apex_mm_top_rung_below_bid(bot)
+                    if _trigger_mid or _trigger_side or _trigger_below_bid:
                         _now_ts = time.time()
                         if _now_ts - bot.get('_last_ws_drift_at', 0) >= APEX_MM_WS_DRIFT_COOLDOWN_S:
                             bot['_last_ws_drift_at'] = _now_ts
                             bot['_ws_drift_event_ts'] = _now_ts
                             _apex_mm_reactor_queue.put((_apex_mm_repost_ladder, (bot_id, bot)))
-                            _trig = 'mid' if _trigger_mid else 'side'
+                            _trig = 'mid' if _trigger_mid else ('side' if _trigger_side else 'below_bid')
                             bot_log('APEX_MM_WS_DRIFT', bot_id, {
                                 'stored': _stored_mid, 'live': _live_mid, 'drift': _drift_amt,
                                 'yes_drift': _yes_side_drift, 'no_drift': _no_side_drift, 'trigger': _trig,

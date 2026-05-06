@@ -7436,7 +7436,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         ${historyHtml}
 
         <div style="display:flex;gap:6px;flex-wrap:wrap;padding-top:4px;font-size:9px;color:#334;">
-            <span style="color:#00d4ff;">W:${bot._auto_width ? `<span style="color:#00ff88;">auto</span> ${width}` : width}</span>
+            <span style="color:#00d4ff;">W:${bot._auto_width ? `<span style="color:#00ff88;">auto</span> ${width}` : width}${bot.queue_join_mode ? ` <span style="color:#00d4ff;background:#00d4ff22;padding:0 4px;border-radius:3px;font-weight:700;font-size:8px;letter-spacing:.04em;" title="Join Room Mode — posting AT live bid, not inside the spread">📌 JOIN</span>` : ''}</span>
             <span style="color:#e0e0e0;">Mid:${midpoint}</span>
             <span style="color:#ff7043;">${bot.base_qty || bot.qty_per_level || '?'}x${bot.levels || '?'}</span>
             ${room >= 0 ? `<span style="color:${roomCol};font-weight:${room < width ? 700 : 400};">Room:${room}${roomTag}</span>` : ''}

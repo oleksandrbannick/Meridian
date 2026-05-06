@@ -9962,7 +9962,7 @@ APEX_MM_SIDE_DRIFT_THRESHOLD = 2   # Reprice if EITHER side's BBO drifted 2+ cen
 # chase attempt — exactly what we're trying to avoid).
 APEX_MM_AUTO_JOIN_THRESHOLD = 1        # Single confirmed undercut → flip
 APEX_MM_AUTO_JOIN_WINDOW_S = 60        # Window kept for symmetry; threshold=1 means it's mostly inert
-APEX_MM_THIN_GATE_ROOM_OVERRIDE = 30  # If BBO room >= this many cents, ignore thin/obi/vanish gates — wide spread is its own protection
+APEX_MM_THIN_GATE_ROOM_OVERRIDE = 1  # Disable thin/obi/vanish gates whenever room >= 1c (any non-crossed market). Per user 2026-05-06: pure-MM mode — bot defines its own depth, OBI is mirror-reading our own posts.
 APEX_MM_INVENTORY_HYSTERESIS = 10  # Resume quoting side when inv drops this far below limit
 
 
@@ -10739,17 +10739,22 @@ def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, inv_limit
                 yes_levels.append((int(yp), level_qty))
             if np >= 1:
                 no_levels.append((int(np), level_qty))
+    else:
         # NORMAL mode placement (per user 2026-05-06):
-        #   TOP rung = max(midpoint - start_gap, bid + 1)
-        #     - Wide market (room > 2*start_gap): mid-gap wins → top inside
-        #       the spread, bot top-room = start_gap*2 (matches auto_width).
-        #     - Narrow market (mid-gap drops to or below bid): bid+1 wins →
-        #       top BBO above bid by 1c, bot top-room = market_room - 2.
-        #   SUB rungs (level 1+): ladder DOWN from top by spacing.
-        yes_top_calc = midpoint - start_gap
-        no_top_calc  = (100 - midpoint) - start_gap
-        yes_top = max(yes_top_calc, yes_bid + 1) if yes_bid > 0 else yes_top_calc
-        no_top  = max(no_top_calc,  no_bid  + 1) if no_bid  > 0 else no_top_calc
+        #   TOP rung = bid + levels (all rungs above bid as BBO).
+        #     With levels=4, top at bid+4 and sub-rungs at bid+3, bid+2, bid+1.
+        #     Falls back to mid-gap when bid is unknown (pregame/no WS data).
+        #   Capped so top can't exceed midpoint - 1 (would cross opp side).
+        if yes_bid > 0:
+            yes_top = min(yes_bid + levels, midpoint - 1)
+            yes_top = max(yes_top, yes_bid + 1)  # at least bid+1
+        else:
+            yes_top = midpoint - start_gap
+        if no_bid > 0:
+            no_top = min(no_bid + levels, (100 - midpoint) - 1)
+            no_top = max(no_top, no_bid + 1)
+        else:
+            no_top = (100 - midpoint) - start_gap
         for i in range(levels):
             yp = yes_top - (i * spacing)
             np = no_top - (i * spacing)
@@ -11154,8 +11159,6 @@ def _apex_mm_repost_ladder(bot_id, bot):
     """Recalculate midpoint and repost full ladder at fresh prices after OBI recovery
     or WS-driven midpoint drift. Per-bot lock + ws_fill_lock prevents inventory race
     against the WS fill handler that writes net_yes/net_no concurrently."""
-    # Per-bot non-blocking lock so WS reactor and monitor cycle can't double-fire on
-    # the same bot. Cross-bot fires stay parallel.
     _bot_lock = _apex_mm_repost_locks.setdefault(bot_id, threading.Lock())
     if not _bot_lock.acquire(blocking=False):
         return

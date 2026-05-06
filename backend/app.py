@@ -6072,6 +6072,12 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                 if _new_oid and _new_oid != exit_oid:
                     bot[f'_{exit_side}_exit_oid'] = _new_oid
                     bot.setdefault('_all_placed_order_ids', []).append(_new_oid)
+                    # Reset fill counters — they referenced the OLD oid.
+                    # Without this, a future amend_count formula that uses
+                    # _exit_fill_qty would inflate (0534b60 runaway-orphan
+                    # pattern). Keep counters in sync with the live oid.
+                    bot['_exit_fill_qty'] = 0
+                    bot['_exit_total_qty'] = int(net_held)
                 bot['_exit_price'] = snap_price
                 bot['_last_walk_at'] = time.time()
                 # Force a ghost re-verify within ~8s so any silent reassign gets caught fast.
@@ -11902,6 +11908,11 @@ def _apex_mm_walk_up(bot_id, bot):
         if _new_oid and _new_oid != exit_oid:
             bot[f'_{exit_side}_exit_oid'] = _new_oid
             bot.setdefault('_all_placed_order_ids', []).append(_new_oid)
+            # Reset fill counters — they referenced the OLD oid (Kalshi
+            # reassigned). Same hygiene as WS snap_up. Prevents stale
+            # _exit_fill_qty from inflating future amend counts.
+            bot['_exit_fill_qty'] = 0
+            bot['_exit_total_qty'] = int(net_held)
         old_price = current_price
         bot['_exit_price'] = _new_price
         bot['_exit_walk_count'] = bot.get('_exit_walk_count', 0) + (_new_price - old_price)

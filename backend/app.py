@@ -10187,27 +10187,23 @@ def _apex_should_pull(ticker, depth_levels=3, obi_threshold=None, depth_min=None
 
 def _apex_depth_recovered(ticker, bot=None, obi_threshold=None, depth_min=None):
     """Check if book conditions have recovered enough to re-post. Returns bool.
-    Falls back to bot's live bid data if LocalOrderbook is unavailable/stale."""
-    if obi_threshold is None:
-        obi_threshold = APEX_DEPTH_RECOVER_OBI
-    if depth_min is None:
-        depth_min = APEX_DEPTH_RECOVER_MIN
-    lob = _local_orderbooks.get(ticker)
-    if lob and lob.last_update_ts > 0 and (time.time() - lob.last_update_ts) < 10:
-        yes_depth = lob.get_total_depth('yes', 3)
-        no_depth = lob.get_total_depth('no', 3)
-        obi = lob.get_weighted_obi()
-        return (yes_depth >= depth_min and
-                no_depth >= depth_min and
-                abs(obi) <= obi_threshold)
-
-    # No fresh LOB — fallback: if both sides have bids, assume OK
+    Per user 2026-05-06 (pure-MM mode): only requires both sides have bids
+    and we're not in toxic decided territory (max_bid < drift_guard_recovery).
+    Depth and OBI gates removed — bot IS the depth, OBI is mirror reading."""
     if bot:
-        yes_bid = bot.get('live_yes_bid', 0)
-        no_bid = bot.get('live_no_bid', 0)
-        if yes_bid > 0 and no_bid > 0 and max(yes_bid, no_bid) < 80:
-            return True
-    return False
+        yes_bid = bot.get('live_yes_bid', 0) or 0
+        no_bid = bot.get('live_no_bid', 0) or 0
+    else:
+        lob = _local_orderbooks.get(ticker)
+        if not lob or lob.last_update_ts <= 0:
+            return False
+        yes_bid = lob.get_best_bid('yes') or 0
+        no_bid = lob.get_best_bid('no') or 0
+    if yes_bid <= 0 or no_bid <= 0:
+        return False
+    if max(yes_bid, no_bid) >= APEX_MM_DRIFT_GUARD_RECOVERY:
+        return False
+    return True
 
 
 # ─── Apex MM: Core Functions ──────────────────────────────────────────────────

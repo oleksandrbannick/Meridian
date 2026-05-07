@@ -18998,6 +18998,22 @@ def _handle_apex(bot_id, bot, actions):
 
     # ── STATUS: mm_depth_pulled — check recovery ──
     if status == 'mm_depth_pulled':
+        # Smart-stop short-circuit: stopped + flat → terminal state, don't
+        # bother with recovery / reconcile. Per user 2026-05-07.
+        _net_yes_pp = bot.get('net_yes', 0)
+        _net_no_pp = bot.get('net_no', 0)
+        if (bot.get('_smart_stopped') or bot.get('_smart_stop_pending') or bot.get('_stop_pending')) \
+                and _net_yes_pp == 0 and _net_no_pp == 0:
+            bot['_smart_stopped'] = True
+            bot['_smart_stop_pending'] = False
+            bot['_stop_pending'] = False
+            bot['status'] = 'awaiting_settlement'
+            bot['awaiting_since'] = time.time()
+            print(f'⏹ APEX MM STOPPED + FLAT (mm_depth_pulled): {bot_id} → awaiting_settlement')
+            bot_log('APEX_MM_SMART_STOP_FLAT_PULLED', bot_id, {})
+            save_state()
+            return
+
         # Extra reconcile while pulled (30s cadence + jitter) — orphan-prone state
         _jit_p = abs(hash(bot_id)) % 8
         if now - bot.get('_last_reconcile', 0) >= (30 + _jit_p):

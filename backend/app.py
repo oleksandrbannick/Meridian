@@ -10736,24 +10736,14 @@ def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, inv_limit
             if np >= 1:
                 no_levels.append((int(np), level_qty))
     else:
-        # NORMAL mode placement (per user 2026-05-06):
-        #   TOP rung = bid + levels (all rungs above bid as BBO).
-        #     With levels=4, top at bid+4 and sub-rungs at bid+3, bid+2, bid+1.
-        #     Falls back to mid-gap when bid is unknown (pregame/no WS data).
-        #   Capped so top can't exceed midpoint - 1 (would cross opp side).
-        # Tight-room override REMOVED (per user 2026-05-07): always honor
-        # the configured levels count. A 2-rung bot must post 2 rungs even
-        # in narrow rooms — the user explicitly configured the depth.
-        if yes_bid > 0:
-            yes_top = min(yes_bid + levels, midpoint - 1)
-            yes_top = max(yes_top, yes_bid + 1)  # at least bid+1
-        else:
-            yes_top = midpoint - start_gap
-        if no_bid > 0:
-            no_top = min(no_bid + levels, (100 - midpoint) - 1)
-            no_top = max(no_top, no_bid + 1)
-        else:
-            no_top = (100 - midpoint) - start_gap
+        # NORMAL mode placement (per user 2026-05-07):
+        #   TOP rung = bid + 1 (BBO by 1c, single anchor).
+        #   SUB rungs ladder DOWN by spacing through bid.
+        #   levels=4 → bid+1, bid, bid-1, bid-2 (one above as BBO, three depth)
+        #   levels=2 → bid+1, bid
+        #   Falls back to mid-gap when bid is unknown (pregame/no WS data).
+        yes_top = (yes_bid + 1) if yes_bid > 0 else (midpoint - start_gap)
+        no_top  = (no_bid + 1)  if no_bid > 0  else ((100 - midpoint) - start_gap)
         for i in range(levels):
             yp = yes_top - (i * spacing)
             np = no_top - (i * spacing)

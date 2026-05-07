@@ -7091,18 +7091,24 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         } else if (status === 'mm_exiting' && !_activeSell) {
             walkBadge = `<span style="background:#ff444422;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">EXIT PENDING</span>`;
         } else if (effExitPrice > 0) {
-            // Simple profit-zone badge. Internal state (alone/queue/bbo+1) lives
-            // in bot._bbo_state for debugging — not surfaced in user-facing label.
-            // Walk countdown: when combined < 95 and bot is alone (BBO state),
-            // exit walker creeps +1c per cadence (default 8s live, varies by phase).
+            // Walk countdown: backend walker fires every ~8s (live phase). When
+            // alone in profit zone (combined < 95), creeps +1c per cadence.
+            // When tied (queue), waits for someone to outbid before walking.
             const _lastWalk = bot._last_walk_at || 0;
             const _walkAge = _lastWalk > 0 ? (nowSec - _lastWalk) : null;
-            // Approximate walk cadence — backend uses phase-aware (pregame 30s,
-            // live 8s, end 3s, OT 2s). Frontend defaults to 8s as the common case.
-            const _walkIv = 8;
+            const _walkIv = 8;  // live-phase default cadence
             const _walkLeft = (_walkAge !== null) ? Math.max(0, Math.ceil(_walkIv - _walkAge)) : null;
-            const _showWalk = (bot._bbo_state === 'alone' || !bot._bbo_state) && _walkLeft !== null && combined < 95;
-            const _walkSuffix = _showWalk ? ` · ↑${_walkLeft}s` : '';
+            const _alone = bot._bbo_state === 'alone' || !bot._bbo_state;
+            // Show countdown when alone in profit zone (will creep up).
+            // Show "WAIT" when tied/queued (waiting for outbidder to walk).
+            let _walkSuffix = '';
+            if (combined < 95) {
+                if (_alone && _walkLeft !== null) {
+                    _walkSuffix = ` · ↑${_walkLeft}s`;
+                } else if (bot._bbo_state === 'queue') {
+                    _walkSuffix = ' · ⏸';  // joined, waiting for outbidder
+                }
+            }
             if (combined > 100) {
                 walkBadge = `<span style="background:#ff444422;color:#ff4444;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">−${combined - 100}¢ LOSS</span>`;
             } else if (combined === 100) {
@@ -7110,7 +7116,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
             } else if (combined >= 95) {
                 walkBadge = `<span style="background:#ffaa0022;color:#ffaa00;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;">+${100 - combined}¢ TIGHT</span>`;
             } else {
-                walkBadge = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;" title="Exit walker creeps +1c per phase-aware cadence (live ~8s) until fill or 95c cap.">+${100 - combined}¢${_walkSuffix}</span>`;
+                walkBadge = `<span style="background:#00ff8822;color:#00ff88;padding:1px 6px;border-radius:3px;font-size:8px;font-weight:700;" title="Walker: alone → +1c every ~8s. Tied → waits for outbidder. Cap at 95c.">+${100 - combined}¢${_walkSuffix}</span>`;
             }
         } else if (hasInv) {
             // Inventory held but no exit price yet — bot is mid-post
@@ -7267,23 +7273,15 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     // Tight-room override removed (2026-05-07): always honor configured levels.
     const _effLevels = _cfgLevels;
     // Top-rung calc (mirrors backend _apex_mm_levels).
+    // Normal: top = bid+1, sub-rungs ladder DOWN through bid.
+    // Join:   top = bid,   sub-rungs ladder DOWN from there.
     let _yesTop, _noTop;
     if (_qj && _qjYesTop > 0 && _qjNoTop > 0) {
         _yesTop = _qjYesTop;
         _noTop = _qjNoTop;
     } else {
-        if (_qjYesTop > 0) {
-            _yesTop = Math.min(_qjYesTop + _effLevels, _cfgMid - 1);
-            _yesTop = Math.max(_yesTop, _qjYesTop + 1);
-        } else {
-            _yesTop = _cfgMid - _cfgGap;
-        }
-        if (_qjNoTop > 0) {
-            _noTop = Math.min(_qjNoTop + _effLevels, (100 - _cfgMid) - 1);
-            _noTop = Math.max(_noTop, _qjNoTop + 1);
-        } else {
-            _noTop = (100 - _cfgMid) - _cfgGap;
-        }
+        _yesTop = _qjYesTop > 0 ? (_qjYesTop + 1) : (_cfgMid - _cfgGap);
+        _noTop  = _qjNoTop  > 0 ? (_qjNoTop  + 1) : ((100 - _cfgMid) - _cfgGap);
     }
     for (let i = 0; i < _effLevels; i++) {
         const yp = _yesTop - (i * _cfgSpacing);

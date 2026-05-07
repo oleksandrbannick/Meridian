@@ -5173,6 +5173,18 @@ def _ws_maker_sell_follow(ticker, yes_ask, no_ask):
 # Per-bot lock = each bot's amends serialize correctly with no cross-bot contention.
 _phantom_drop_locks = {}
 _phantom_drop_locks_meta = threading.Lock()  # protects the dict itself
+# Single-flight locks for the delta-hedge follower (catches dog fills that arrive
+# AFTER the initial hedge is fired, when WS handler's `_hedge_fired=True` gate
+# would otherwise silently drop them). Kept off the bot dict to stay JSON-safe.
+_phantom_delta_hedge_locks = {}
+_phantom_delta_hedge_locks_meta = threading.Lock()
+def _phantom_delta_lock_for(bot_id):
+    with _phantom_delta_hedge_locks_meta:
+        _l = _phantom_delta_hedge_locks.get(bot_id)
+        if _l is None:
+            _l = threading.Lock()
+            _phantom_delta_hedge_locks[bot_id] = _l
+        return _l
 def _phantom_lock_for(bot_id):
     """Return the per-bot phantom amend lock, creating it on first use."""
     lk = _phantom_drop_locks.get(bot_id)
@@ -6373,6 +6385,150 @@ _pending_ws_actions = []
 _pending_ws_actions_lock = threading.Lock()
 
 
+def _phantom_delta_hedge_path(bot_id):
+    """Delta-hedge follower. Runs OFF the WS hot path (background thread).
+
+    Triggered when the WS handler sees additional dog fills AFTER the initial
+    hedge was fired (`_hedge_fired=True`). Without this, those extra fills are
+    silently accumulated in `bot.dog_fill_qty` but no hedge action is taken
+    until ANCHOR_COMPLETE verify ~60-90s later — by which time the fav bid has
+    likely walked, locking in a forced rehedge at a bad price (PRAGAD-PRA
+    2026-05-06: dog 12 → 30 during fav-fill wait, rehedge at 82c instead of
+    66c, -108c loss).
+
+    Strategy (per user spec):
+      1. AMEND the live fav order's qty UP to match dog_fill_qty at original price.
+      2. ONLY if amend fails (404 / order already filled), fire a supplemental
+         hedge for the delta. Never two live hedges concurrently.
+
+    Coordination with other paths:
+      - Single-flight per bot via _phantom_delta_lock_for().
+      - `_hedged_dog_qty` is the canonical "qty already hedged" field. Updated
+        atomically here, in _execute_phantom_hedge, and in _cancel_and_reconcile.
+      - On entry, re-reads under lock and skips if delta already covered.
+    """
+    bot = active_bots.get(bot_id)
+    if not bot:
+        return
+    if bot.get('bot_category') != 'anchor_dog':
+        return
+    if not bot.get('_hedge_fired'):
+        return
+    if bot.get('status') not in ('fav_hedge_posted', 'dog_filled'):
+        return
+
+    _lock = _phantom_delta_lock_for(bot_id)
+    if not _lock.acquire(blocking=False):
+        return  # another delta-hedge in flight for this bot — it will re-check on completion
+
+    try:
+        # Re-read under lock (state may have changed since the WS handler spawned us)
+        bot = active_bots.get(bot_id)
+        if not bot:
+            return
+        if not bot.get('_hedge_fired'):
+            return
+        if bot.get('status') not in ('fav_hedge_posted', 'dog_filled'):
+            return
+
+        _dog_qty = bot.get('dog_fill_qty', 0) or 0
+        _hedged = bot.get('_hedged_dog_qty', 0) or 0
+        _delta = _dog_qty - _hedged
+        if _delta < 1.0:
+            return
+
+        _fav_oid = bot.get('fav_order_id')
+        _fav_side = bot.get('fav_side', 'no')
+        _fav_price = bot.get('fav_price') or 0
+        _hticker = bot.get('hedge_ticker') or bot.get('ticker')
+        if not _fav_oid or not _fav_price or not _hticker:
+            return
+
+        # ── Try amend first (preserves single live hedge) ──
+        _new_count = _dog_qty
+        try:
+            api_rate_limiter.wait(priority=True)
+            _amend_kw = {f'{_fav_side}_price': _fav_price}
+            _amend_resp = kalshi_client.amend_order(
+                _fav_oid, ticker=_hticker,
+                side=_fav_side, count=_new_count, **_amend_kw
+            )
+            _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
+            _new_oid = _amend_ord.get('order_id', '')
+            if _new_oid and _new_oid != _fav_oid:
+                bot.setdefault('_all_hedge_order_ids', []).append(_fav_oid)
+                bot['fav_order_id'] = _new_oid
+                if _fav_side == 'yes':
+                    bot['yes_order_id'] = _new_oid
+                else:
+                    bot['no_order_id'] = _new_oid
+            bot['_active_fav_qty'] = _new_count
+            bot['_hedged_dog_qty'] = _new_count  # source of truth — others gate on this
+            bot['_partial_hedge_qty'] = _new_count
+            print(f'⚡ DELTA AMEND: {bot_id} hedge qty {_hedged}→{_new_count} @{_fav_price}¢ (delta {_delta} caught off WS)')
+            bot_log('PHANTOM_DELTA_AMEND', bot_id, {
+                'old_qty': _hedged, 'new_qty': _new_count, 'delta': _delta,
+                'fav_price': _fav_price, 'fav_oid': (_new_oid or _fav_oid)[:12],
+            }, level='WARN')
+            return
+        except Exception as _amend_err:
+            _err_str = str(_amend_err)
+            _is_404 = '404' in _err_str or 'not found' in _err_str.lower() or 'order_filled' in _err_str.lower()
+            if not _is_404:
+                # Real error — log and bail. Verify-rehedge at ANCHOR_COMPLETE will catch it.
+                print(f'⚠ DELTA AMEND FAILED (non-404): {bot_id} {_amend_err}')
+                bot_log('PHANTOM_DELTA_AMEND_FAIL', bot_id, {
+                    'old_qty': _hedged, 'new_qty': _new_count, 'error': _err_str[:200],
+                }, level='ERROR')
+                return
+            # 404 means original hedge already filled — fall through to supplemental
+
+        # ── Supplemental fallback (amend failed because fav already filled) ──
+        _supp_qty_int = int(_delta)
+        if _supp_qty_int < 1:
+            return
+        try:
+            _live_bid = 0
+            if ws_manager:
+                _wsd = ws_manager.get_price(_hticker)
+                if _wsd:
+                    _live_bid = _wsd.get(f'{_fav_side}_bid', 0)
+            _supp_price = _fav_price
+            if _live_bid > 0 and _live_bid < _fav_price:
+                _supp_price = _live_bid
+            api_rate_limiter.wait(priority=True)
+            _supp_resp, _supp_actual_price = create_order_maker(
+                ticker=_hticker, side=_fav_side, action='buy',
+                count=_supp_qty_int, price=_supp_price, priority=True,
+            )
+            _supp_oid = _supp_resp['order']['order_id']
+            bot.setdefault('_all_hedge_order_ids', []).append(bot.get('fav_order_id'))
+            bot['fav_order_id'] = _supp_oid
+            if _fav_side == 'yes':
+                bot['yes_order_id'] = _supp_oid
+            else:
+                bot['no_order_id'] = _supp_oid
+            bot['_active_fav_qty'] = _supp_qty_int
+            bot['_hedged_dog_qty'] = _hedged + _supp_qty_int
+            bot['_partial_hedge_qty'] = bot['_hedged_dog_qty']
+            bot['fav_price'] = _supp_actual_price
+            bot['_last_supp_at'] = time.time()
+            bot['status'] = 'fav_hedge_posted'
+            bot['_trade_recorded'] = False
+            print(f'⚡ DELTA SUPP: {bot_id} +{_supp_qty_int} {_fav_side} @{_supp_actual_price}¢ (amend 404 → supplemental)')
+            bot_log('PHANTOM_DELTA_SUPP', bot_id, {
+                'extra_qty': _supp_qty_int, 'price': _supp_actual_price,
+                'order_id': _supp_oid[:12], 'hedged_was': _hedged, 'hedged_now': bot['_hedged_dog_qty'],
+            }, level='WARN')
+        except Exception as _supp_err:
+            print(f'⚠ DELTA SUPP FAILED: {bot_id} {_supp_err}')
+            bot_log('PHANTOM_DELTA_SUPP_FAIL', bot_id, {
+                'extra_qty': _supp_qty_int, 'error': str(_supp_err)[:200],
+            }, level='ERROR')
+    finally:
+        _lock.release()
+
+
 def _ws_realtime_fill_handler(ticker, order_id, side, count):
     """
     Real-time fill handler triggered directly from the WebSocket fill event.
@@ -6625,6 +6781,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                                         else: _b['no_order_id'] = _new_oid
                                     _b['_partial_hedge_qty'] = _actual
                                     _b['_active_fav_qty'] = _actual
+                                    _b['_hedged_dog_qty'] = _actual  # canonical hedged qty for delta-follower coordination
                                     print(f'✅ CANCEL-RACE AMEND: {bot_id_ref} hedge qty {partial_q}→{_actual} @{_fav_price}¢ (extra {_extra} absorbed)')
                                     bot_log('PHANTOM_CANCEL_RACE_AMEND', bot_id_ref, {
                                         'old_qty': partial_q, 'new_qty': _actual, 'extra': _extra, 'fav_price': _fav_price,
@@ -6662,6 +6819,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                                     else: _b['no_order_id'] = _supp_oid
                                     _b['_partial_hedge_qty'] = _actual
                                     _b['_active_fav_qty'] = _supp_qty_int
+                                    _b['_hedged_dog_qty'] = _actual  # canonical hedged qty for delta-follower coordination
                                     _b['_last_supp_at'] = time.time()
                                     _b['fav_price'] = _supp_actual_price
                                     _b['status'] = 'fav_hedge_posted'
@@ -6681,6 +6839,15 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     # Skip save_state — deferred to hedge fn (line 3508)
                     break
                 print(f'👻 WS PHANTOM FILL: {bot_id} +{count} → {bot["dog_fill_qty"]}/{qty_bot} (below 1-contract hedge threshold)' if bot['dog_fill_qty'] < 1.0 else f'👻 WS PHANTOM FILL: {bot_id} +{count} → {bot["dog_fill_qty"]}/{qty_bot}')
+                # Delta-hedge follower: when more dog fills arrive AFTER the
+                # initial hedge fired, spawn an off-path thread to amend the
+                # fav order's qty up to match. Pure thread spawn here — no API
+                # calls, no math beyond a delta check, so the WS hot path
+                # stays untouched.
+                if bot.get('_hedge_fired') and bot.get('status') in ('fav_hedge_posted', 'dog_filled'):
+                    _delta_check = bot['dog_fill_qty'] - (bot.get('_hedged_dog_qty', 0) or 0)
+                    if _delta_check >= 1.0:
+                        threading.Thread(target=_phantom_delta_hedge_path, args=(bot_id,), daemon=True).start()
             elif matched == 'fav':
                 bot['fav_fill_qty'] = bot.get('fav_fill_qty', 0) + count
                 if bot['fav_side'] == 'yes':
@@ -7347,6 +7514,7 @@ def _execute_phantom_hedge(bot_id):
         bot['fav_order_id'] = fav_order_id
         bot['fav_price'] = actual_fav_price
         bot['_active_fav_qty'] = qty
+        bot['_hedged_dog_qty'] = qty  # canonical "qty already hedged" — read by delta-hedge follower
         bot['status'] = 'fav_hedge_posted'
         bot['fav_posted_at'] = time.time()
         bot['fav_walk_count'] = 0
@@ -18454,6 +18622,7 @@ def _handle_phantom(bot_id, bot, actions):
             bot['yes_fill_qty'] = 0
             bot['no_fill_qty'] = 0
             bot['_hedge_fired'] = False  # clear so next fill can hedge
+            bot['_hedged_dog_qty'] = 0  # reset delta-follower tracking for fresh cycle
             bot['_trade_recorded'] = False
             bot.pop('_orphan_hedge', None)
             # Clear per-cycle fill-time snapshots so next cycle's first fill re-snaps

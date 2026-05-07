@@ -5173,6 +5173,18 @@ def _ws_maker_sell_follow(ticker, yes_ask, no_ask):
 # Per-bot lock = each bot's amends serialize correctly with no cross-bot contention.
 _phantom_drop_locks = {}
 _phantom_drop_locks_meta = threading.Lock()  # protects the dict itself
+# Single-flight locks for the delta-hedge follower (catches dog fills that arrive
+# AFTER the initial hedge is fired, when WS handler's `_hedge_fired=True` gate
+# would otherwise silently drop them). Kept off the bot dict to stay JSON-safe.
+_phantom_delta_hedge_locks = {}
+_phantom_delta_hedge_locks_meta = threading.Lock()
+def _phantom_delta_lock_for(bot_id):
+    with _phantom_delta_hedge_locks_meta:
+        _l = _phantom_delta_hedge_locks.get(bot_id)
+        if _l is None:
+            _l = threading.Lock()
+            _phantom_delta_hedge_locks[bot_id] = _l
+        return _l
 def _phantom_lock_for(bot_id):
     """Return the per-bot phantom amend lock, creating it on first use."""
     lk = _phantom_drop_locks.get(bot_id)
@@ -5959,23 +5971,13 @@ def _ws_apex_mm_tick(ticker, yes_bid, no_bid, yes_ask, no_ask):
                     _max_side_drift = max(_yes_side_drift, _no_side_drift)
                     _trigger_mid = _drift_amt >= APEX_MM_DRIFT_THRESHOLD
                     _trigger_side = _max_side_drift >= APEX_MM_SIDE_DRIFT_THRESHOLD
-                    # User rule: top rung must be > bid (default) or AT bid (join).
-                    # Fires when bid drifts up 1c after post — below-threshold for
-                    # mid/side drift but visible as top_rung <= bid violation.
-                    _trigger_below_bid = _apex_mm_top_rung_below_bid(bot)
-                    if _trigger_mid or _trigger_side or _trigger_below_bid:
+                    if _trigger_mid or _trigger_side:
                         _now_ts = time.time()
-                        # Cooldown applies to mid/side drift and to join-mode
-                        # below-bid (queue priority matters). Default-mode
-                        # below-bid bypasses cooldown — user doesn't care about
-                        # queue priority when BBO, only about not being at-bid.
-                        _qj_bot = bool(bot.get('queue_join_mode', False))
-                        _bypass_cooldown = _trigger_below_bid and not _qj_bot and not (_trigger_mid or _trigger_side)
-                        if _bypass_cooldown or _now_ts - bot.get('_last_ws_drift_at', 0) >= APEX_MM_WS_DRIFT_COOLDOWN_S:
+                        if _now_ts - bot.get('_last_ws_drift_at', 0) >= APEX_MM_WS_DRIFT_COOLDOWN_S:
                             bot['_last_ws_drift_at'] = _now_ts
                             bot['_ws_drift_event_ts'] = _now_ts
                             _apex_mm_reactor_queue.put((_apex_mm_repost_ladder, (bot_id, bot)))
-                            _trig = 'mid' if _trigger_mid else ('side' if _trigger_side else 'below_bid')
+                            _trig = 'mid' if _trigger_mid else 'side'
                             bot_log('APEX_MM_WS_DRIFT', bot_id, {
                                 'stored': _stored_mid, 'live': _live_mid, 'drift': _drift_amt,
                                 'yes_drift': _yes_side_drift, 'no_drift': _no_side_drift, 'trigger': _trig,
@@ -6373,6 +6375,150 @@ _pending_ws_actions = []
 _pending_ws_actions_lock = threading.Lock()
 
 
+def _phantom_delta_hedge_path(bot_id):
+    """Delta-hedge follower. Runs OFF the WS hot path (background thread).
+
+    Triggered when the WS handler sees additional dog fills AFTER the initial
+    hedge was fired (`_hedge_fired=True`). Without this, those extra fills are
+    silently accumulated in `bot.dog_fill_qty` but no hedge action is taken
+    until ANCHOR_COMPLETE verify ~60-90s later — by which time the fav bid has
+    likely walked, locking in a forced rehedge at a bad price (PRAGAD-PRA
+    2026-05-06: dog 12 → 30 during fav-fill wait, rehedge at 82c instead of
+    66c, -108c loss).
+
+    Strategy (per user spec):
+      1. AMEND the live fav order's qty UP to match dog_fill_qty at original price.
+      2. ONLY if amend fails (404 / order already filled), fire a supplemental
+         hedge for the delta. Never two live hedges concurrently.
+
+    Coordination with other paths:
+      - Single-flight per bot via _phantom_delta_lock_for().
+      - `_hedged_dog_qty` is the canonical "qty already hedged" field. Updated
+        atomically here, in _execute_phantom_hedge, and in _cancel_and_reconcile.
+      - On entry, re-reads under lock and skips if delta already covered.
+    """
+    bot = active_bots.get(bot_id)
+    if not bot:
+        return
+    if bot.get('bot_category') != 'anchor_dog':
+        return
+    if not bot.get('_hedge_fired'):
+        return
+    if bot.get('status') not in ('fav_hedge_posted', 'dog_filled'):
+        return
+
+    _lock = _phantom_delta_lock_for(bot_id)
+    if not _lock.acquire(blocking=False):
+        return  # another delta-hedge in flight for this bot — it will re-check on completion
+
+    try:
+        # Re-read under lock (state may have changed since the WS handler spawned us)
+        bot = active_bots.get(bot_id)
+        if not bot:
+            return
+        if not bot.get('_hedge_fired'):
+            return
+        if bot.get('status') not in ('fav_hedge_posted', 'dog_filled'):
+            return
+
+        _dog_qty = bot.get('dog_fill_qty', 0) or 0
+        _hedged = bot.get('_hedged_dog_qty', 0) or 0
+        _delta = _dog_qty - _hedged
+        if _delta < 1.0:
+            return
+
+        _fav_oid = bot.get('fav_order_id')
+        _fav_side = bot.get('fav_side', 'no')
+        _fav_price = bot.get('fav_price') or 0
+        _hticker = bot.get('hedge_ticker') or bot.get('ticker')
+        if not _fav_oid or not _fav_price or not _hticker:
+            return
+
+        # ── Try amend first (preserves single live hedge) ──
+        _new_count = _dog_qty
+        try:
+            api_rate_limiter.wait(priority=True)
+            _amend_kw = {f'{_fav_side}_price': _fav_price}
+            _amend_resp = kalshi_client.amend_order(
+                _fav_oid, ticker=_hticker,
+                side=_fav_side, count=_new_count, **_amend_kw
+            )
+            _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
+            _new_oid = _amend_ord.get('order_id', '')
+            if _new_oid and _new_oid != _fav_oid:
+                bot.setdefault('_all_hedge_order_ids', []).append(_fav_oid)
+                bot['fav_order_id'] = _new_oid
+                if _fav_side == 'yes':
+                    bot['yes_order_id'] = _new_oid
+                else:
+                    bot['no_order_id'] = _new_oid
+            bot['_active_fav_qty'] = _new_count
+            bot['_hedged_dog_qty'] = _new_count  # source of truth — others gate on this
+            bot['_partial_hedge_qty'] = _new_count
+            print(f'⚡ DELTA AMEND: {bot_id} hedge qty {_hedged}→{_new_count} @{_fav_price}¢ (delta {_delta} caught off WS)')
+            bot_log('PHANTOM_DELTA_AMEND', bot_id, {
+                'old_qty': _hedged, 'new_qty': _new_count, 'delta': _delta,
+                'fav_price': _fav_price, 'fav_oid': (_new_oid or _fav_oid)[:12],
+            }, level='WARN')
+            return
+        except Exception as _amend_err:
+            _err_str = str(_amend_err)
+            _is_404 = '404' in _err_str or 'not found' in _err_str.lower() or 'order_filled' in _err_str.lower()
+            if not _is_404:
+                # Real error — log and bail. Verify-rehedge at ANCHOR_COMPLETE will catch it.
+                print(f'⚠ DELTA AMEND FAILED (non-404): {bot_id} {_amend_err}')
+                bot_log('PHANTOM_DELTA_AMEND_FAIL', bot_id, {
+                    'old_qty': _hedged, 'new_qty': _new_count, 'error': _err_str[:200],
+                }, level='ERROR')
+                return
+            # 404 means original hedge already filled — fall through to supplemental
+
+        # ── Supplemental fallback (amend failed because fav already filled) ──
+        _supp_qty_int = int(_delta)
+        if _supp_qty_int < 1:
+            return
+        try:
+            _live_bid = 0
+            if ws_manager:
+                _wsd = ws_manager.get_price(_hticker)
+                if _wsd:
+                    _live_bid = _wsd.get(f'{_fav_side}_bid', 0)
+            _supp_price = _fav_price
+            if _live_bid > 0 and _live_bid < _fav_price:
+                _supp_price = _live_bid
+            api_rate_limiter.wait(priority=True)
+            _supp_resp, _supp_actual_price = create_order_maker(
+                ticker=_hticker, side=_fav_side, action='buy',
+                count=_supp_qty_int, price=_supp_price, priority=True,
+            )
+            _supp_oid = _supp_resp['order']['order_id']
+            bot.setdefault('_all_hedge_order_ids', []).append(bot.get('fav_order_id'))
+            bot['fav_order_id'] = _supp_oid
+            if _fav_side == 'yes':
+                bot['yes_order_id'] = _supp_oid
+            else:
+                bot['no_order_id'] = _supp_oid
+            bot['_active_fav_qty'] = _supp_qty_int
+            bot['_hedged_dog_qty'] = _hedged + _supp_qty_int
+            bot['_partial_hedge_qty'] = bot['_hedged_dog_qty']
+            bot['fav_price'] = _supp_actual_price
+            bot['_last_supp_at'] = time.time()
+            bot['status'] = 'fav_hedge_posted'
+            bot['_trade_recorded'] = False
+            print(f'⚡ DELTA SUPP: {bot_id} +{_supp_qty_int} {_fav_side} @{_supp_actual_price}¢ (amend 404 → supplemental)')
+            bot_log('PHANTOM_DELTA_SUPP', bot_id, {
+                'extra_qty': _supp_qty_int, 'price': _supp_actual_price,
+                'order_id': _supp_oid[:12], 'hedged_was': _hedged, 'hedged_now': bot['_hedged_dog_qty'],
+            }, level='WARN')
+        except Exception as _supp_err:
+            print(f'⚠ DELTA SUPP FAILED: {bot_id} {_supp_err}')
+            bot_log('PHANTOM_DELTA_SUPP_FAIL', bot_id, {
+                'extra_qty': _supp_qty_int, 'error': str(_supp_err)[:200],
+            }, level='ERROR')
+    finally:
+        _lock.release()
+
+
 def _ws_realtime_fill_handler(ticker, order_id, side, count):
     """
     Real-time fill handler triggered directly from the WebSocket fill event.
@@ -6625,6 +6771,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                                         else: _b['no_order_id'] = _new_oid
                                     _b['_partial_hedge_qty'] = _actual
                                     _b['_active_fav_qty'] = _actual
+                                    _b['_hedged_dog_qty'] = _actual  # canonical hedged qty for delta-follower coordination
                                     print(f'✅ CANCEL-RACE AMEND: {bot_id_ref} hedge qty {partial_q}→{_actual} @{_fav_price}¢ (extra {_extra} absorbed)')
                                     bot_log('PHANTOM_CANCEL_RACE_AMEND', bot_id_ref, {
                                         'old_qty': partial_q, 'new_qty': _actual, 'extra': _extra, 'fav_price': _fav_price,
@@ -6662,6 +6809,7 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                                     else: _b['no_order_id'] = _supp_oid
                                     _b['_partial_hedge_qty'] = _actual
                                     _b['_active_fav_qty'] = _supp_qty_int
+                                    _b['_hedged_dog_qty'] = _actual  # canonical hedged qty for delta-follower coordination
                                     _b['_last_supp_at'] = time.time()
                                     _b['fav_price'] = _supp_actual_price
                                     _b['status'] = 'fav_hedge_posted'
@@ -6681,6 +6829,15 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                     # Skip save_state — deferred to hedge fn (line 3508)
                     break
                 print(f'👻 WS PHANTOM FILL: {bot_id} +{count} → {bot["dog_fill_qty"]}/{qty_bot} (below 1-contract hedge threshold)' if bot['dog_fill_qty'] < 1.0 else f'👻 WS PHANTOM FILL: {bot_id} +{count} → {bot["dog_fill_qty"]}/{qty_bot}')
+                # Delta-hedge follower: when more dog fills arrive AFTER the
+                # initial hedge fired, spawn an off-path thread to amend the
+                # fav order's qty up to match. Pure thread spawn here — no API
+                # calls, no math beyond a delta check, so the WS hot path
+                # stays untouched.
+                if bot.get('_hedge_fired') and bot.get('status') in ('fav_hedge_posted', 'dog_filled'):
+                    _delta_check = bot['dog_fill_qty'] - (bot.get('_hedged_dog_qty', 0) or 0)
+                    if _delta_check >= 1.0:
+                        threading.Thread(target=_phantom_delta_hedge_path, args=(bot_id,), daemon=True).start()
             elif matched == 'fav':
                 bot['fav_fill_qty'] = bot.get('fav_fill_qty', 0) + count
                 if bot['fav_side'] == 'yes':
@@ -7347,6 +7504,7 @@ def _execute_phantom_hedge(bot_id):
         bot['fav_order_id'] = fav_order_id
         bot['fav_price'] = actual_fav_price
         bot['_active_fav_qty'] = qty
+        bot['_hedged_dog_qty'] = qty  # canonical "qty already hedged" — read by delta-hedge follower
         bot['status'] = 'fav_hedge_posted'
         bot['fav_posted_at'] = time.time()
         bot['fav_walk_count'] = 0
@@ -9952,16 +10110,6 @@ def create_bot():
 
 APEX_MM_DRIFT_THRESHOLD = 4        # Reprice ladder if midpoint moves 4+ cents (preserves queue priority on tick-level noise)
 APEX_MM_SIDE_DRIFT_THRESHOLD = 2   # Reprice if EITHER side's BBO drifted 2+ cents — catches symmetric BBO widening that leaves midpoint stable
-# ── Auto-Join (anti-pennying) ──
-# Default-mode bots post at bid+1. If outbidded (live_bid strictly > our last
-# post price), opponent jumped us. Per user 2026-05-06: instant snap to bid
-# on first verified jump — never chase by reposting at new_bid+1 (= 1c chase
-# spiral). Strict > (not >=) filters joiners-at-same-price from real
-# undercutters. No auto-revert: once flipped, stay in join until the user
-# manually flips back via the edit modal (else next bid drift triggers another
-# chase attempt — exactly what we're trying to avoid).
-APEX_MM_AUTO_JOIN_THRESHOLD = 1        # Single confirmed undercut → flip
-APEX_MM_AUTO_JOIN_WINDOW_S = 60        # Window kept for symmetry; threshold=1 means it's mostly inert
 APEX_MM_THIN_GATE_ROOM_OVERRIDE = 1  # Disable thin/obi/vanish gates whenever room >= 1c (any non-crossed market). Per user 2026-05-06: pure-MM mode — bot defines its own depth, OBI is mirror-reading our own posts.
 APEX_MM_INVENTORY_HYSTERESIS = 10  # Resume quoting side when inv drops this far below limit
 
@@ -10055,10 +10203,7 @@ APEX_MM_DRIFT_DORMANT_RECOVER_S = 30
 # Recovery: while mm_depth_pulled, stay pulled until max_bid drops below this.
 # WS cooldown: per-bot suppress on WS-tick fires so one bid spike doesn't enqueue
 # many cancel jobs in quick succession.
-# 2026-05-06: bumped 80→90 per user — VISDEN bots were profitable in 80-89c
-# range (4 RTs +17c, 2 RTs +4c) but kept getting pulled. Last 10c (90-99) is
-# the truly toxic zone where hits lock in near-certain wins for the taker.
-APEX_MM_DRIFT_GUARD_BID = 90
+APEX_MM_DRIFT_GUARD_BID = 80
 APEX_MM_DRIFT_GUARD_RECOVERY = 85
 APEX_MM_WS_DRIFT_GUARD_COOLDOWN_S = 1.0
 
@@ -10707,51 +10852,27 @@ def _apex_mm_reconcile_inventory(bot_id, bot):
     return True
 
 
-def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, inv_limit=0,
-                    queue_join=False, yes_bid=0, no_bid=0):
+def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, inv_limit=0):
     """Generate YES and NO bid prices + quantities for the ladder.
     Flat sizing: every rung gets base_qty (per v2 blueprint — predictable sweep damage).
     If inv_limit > 0, total qty per side is capped at that limit.
 
-    Two posting modes:
-      - DEFAULT (queue_join=False): top rung at midpoint - start_gap (inside the
-        spread). Bot becomes the new best bid. Captures more spread per RT but
-        triggers undercut spiral in bot-saturated rooms.
-      - QUEUE JOIN (queue_join=True, yes_bid+no_bid > 0): top rung AT live bid.
-        Sit in FIFO queue with whoever else is there. Doesn't trigger spiral
-        because we're not improving — just queuing. Lower fill rate, but full
-        room kept when both legs fill.
+    Top rung = midpoint - start_gap (inside the spread, captures full edge).
+    Sub-rungs ladder down by `spacing`. Mirror on NO side via no_anchor = 100 - midpoint.
 
     Returns (yes_levels: list[(price, qty)], no_levels: list[(price, qty)]) sorted descending by price."""
     yes_levels = []
     no_levels = []
-    if queue_join and yes_bid > 0 and no_bid > 0:
-        # Anchor top rung AT live bid; ladder DOWN from there.
-        for i in range(levels):
-            yp = yes_bid - (i * spacing)
-            np = no_bid - (i * spacing)
-            level_qty = max(1, base_qty)
-            if yp >= 1:
-                yes_levels.append((int(yp), level_qty))
-            if np >= 1:
-                no_levels.append((int(np), level_qty))
-    else:
-        # NORMAL mode placement (per user 2026-05-07):
-        #   TOP rung = bid + 1 (BBO by 1c, single anchor).
-        #   SUB rungs ladder DOWN by spacing through bid.
-        #   levels=4 → bid+1, bid, bid-1, bid-2 (one above as BBO, three depth)
-        #   levels=2 → bid+1, bid
-        #   Falls back to mid-gap when bid is unknown (pregame/no WS data).
-        yes_top = (yes_bid + 1) if yes_bid > 0 else (midpoint - start_gap)
-        no_top  = (no_bid + 1)  if no_bid > 0  else ((100 - midpoint) - start_gap)
-        for i in range(levels):
-            yp = yes_top - (i * spacing)
-            np = no_top - (i * spacing)
-            level_qty = max(1, base_qty)
-            if yp >= 1:
-                yes_levels.append((int(yp), level_qty))
-            if np >= 1:
-                no_levels.append((int(np), level_qty))
+    no_anchor = 100 - midpoint
+    for i in range(levels):
+        offset = start_gap + (i * spacing)
+        yp = midpoint - offset
+        np = no_anchor - offset
+        level_qty = max(1, base_qty)
+        if yp >= 1:
+            yes_levels.append((int(yp), level_qty))
+        if np >= 1:
+            no_levels.append((int(np), level_qty))
     # Cap total qty per side at inventory limit
     if inv_limit > 0:
         for side_levels in (yes_levels, no_levels):
@@ -10769,86 +10890,6 @@ def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, inv_limit
                 # Remove zero-qty levels
                 side_levels[:] = [(p, q) for p, q in side_levels if q > 0]
     return yes_levels, no_levels
-
-
-def _apex_mm_top_rung_below_bid(bot):
-    """True if the highest live rung on either side violates the placement rule.
-    Default mode (queue_join=False): top rung must be > live bid (strict BBO).
-        → trigger when top_rung <= bid (at-bid is also a violation).
-    Join mode (queue_join=True): top rung must be == live bid.
-        → trigger only when top_rung < bid.
-    Top rung only; sub-rungs are depth and may sit at/below bid by design.
-    Closes dynamic-drift gap left by APEX_MM_SIDE_DRIFT_THRESHOLD = 2c."""
-    qj = bool(bot.get('queue_join_mode', False))
-    for side, bid_key in (('yes', 'live_yes_bid'), ('no', 'live_no_bid')):
-        bid = bot.get(bid_key, 0) or 0
-        if bid <= 0:
-            continue
-        live_prices = []
-        for p, lvl in bot.get(f'{side}_orders', {}).items():
-            if not lvl.get('oid'):
-                continue
-            remaining = (lvl.get('qty', 0) or 0) - (lvl.get('fill_qty', 0) or 0)
-            if remaining > 0:
-                try:
-                    live_prices.append(int(p))
-                except Exception:
-                    pass
-        if not live_prices:
-            continue
-        top = max(live_prices)
-        # Default: must be strictly above bid. Join: AT bid is allowed.
-        min_acceptable = bid if qj else (bid + 1)
-        if top < min_acceptable:
-            return True
-    return False
-
-
-def _apex_mm_detect_undercut(bot):
-    """Returns True iff the live bid on either side is strictly above our last
-    posted top rung — confirms an opponent jumped us at a higher price (NOT a
-    natural market move that just touched our level). False positives suppressed:
-    we require strict > (not >=) because joiners landing AT our price would
-    leave bid == our_post_top, only undercutters push it strictly above."""
-    yes_bid = bot.get('live_yes_bid', 0) or 0
-    no_bid  = bot.get('live_no_bid', 0) or 0
-    last_y = bot.get('_last_post_top_yes', 0) or 0
-    last_n = bot.get('_last_post_top_no', 0) or 0
-    if last_y > 0 and yes_bid > last_y:
-        return True
-    if last_n > 0 and no_bid > last_n:
-        return True
-    return False
-
-
-def _apex_mm_record_undercut_and_maybe_flip(bot_id, bot):
-    """Verify undercut (live_bid strictly > our last post top) and flip to
-    join mode immediately. Threshold=1 means a single confirmed jump
-    triggers the snap. No auto-revert — once flipped, stay in join until
-    user manually flips back via edit modal. (Auto-reverting would put the
-    bot back into bid+1 chase mode, which is exactly what the user wants
-    to avoid.)"""
-    if bot.get('queue_join_mode'):
-        return  # already in join — no action needed
-    if not _apex_mm_detect_undercut(bot):
-        return  # not actually jumped — don't flip
-    now = time.time()
-    events = bot.setdefault('_undercut_events', [])
-    events.append(now)
-    cutoff = now - APEX_MM_AUTO_JOIN_WINDOW_S
-    events[:] = [t for t in events if t >= cutoff]
-    if len(events) >= APEX_MM_AUTO_JOIN_THRESHOLD:
-        bot['queue_join_mode'] = True
-        bot['_auto_join_at'] = now
-        bot_log('APEX_MM_AUTO_JOIN', bot_id, {
-            'events': len(events),
-            'yes_bid': bot.get('live_yes_bid', 0),
-            'no_bid': bot.get('live_no_bid', 0),
-            'last_post_yes': bot.get('_last_post_top_yes', 0),
-            'last_post_no': bot.get('_last_post_top_no', 0),
-        }, level='WARN')
-        print(f'⚡ APEX MM AUTO-JOIN: {bot_id} confirmed undercut → snap to bid (no chase)')
-        events.clear()
 
 
 def _apex_mm_sweep_orphans(bot_id, bot):
@@ -11146,14 +11187,6 @@ def _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels):
         bot['_order_group_id'] = _order_group_id
         bot.setdefault('_all_order_group_ids', []).append(_order_group_id)
 
-    # Track top rung price per side for auto-join undercut detection.
-    # Confirmed undercut signal = live_<side>_bid > _last_post_top_<side>.
-    _yes_keys = [int(p) for p in yes_orders.keys()] if yes_orders else []
-    _no_keys = [int(p) for p in no_orders.keys()] if no_orders else []
-    if _yes_keys:
-        bot['_last_post_top_yes'] = max(_yes_keys)
-    if _no_keys:
-        bot['_last_post_top_no'] = max(_no_keys)
     bot['_last_post_at'] = time.time()
 
     total_posted = len(yes_orders) + len(no_orders)
@@ -11279,7 +11312,7 @@ def _apex_mm_repost_ladder_inner(bot_id, bot):
         _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
         _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
         _eff_lvls, _qty_mult = _apex_mm_effective_levels(bot)
-        yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0), queue_join=bot.get('queue_join_mode', False), yes_bid=bot.get('live_yes_bid', 0) or 0, no_bid=bot.get('live_no_bid', 0) or 0)
+        yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0))
         yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
         yes_levels, no_levels = _apex_mm_filter_dca_above_avg(bot, yes_levels, no_levels)
         if not yes_levels and not no_levels:
@@ -12498,7 +12531,7 @@ def _apex_mm_cycle_reset(bot_id, bot):
     _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
     _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
     _eff_lvls, _qty_mult = _apex_mm_effective_levels(bot)
-    yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0), queue_join=bot.get('queue_join_mode', False), yes_bid=bot.get('live_yes_bid', 0) or 0, no_bid=bot.get('live_no_bid', 0) or 0)
+    yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0))
     yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
     yes_levels, no_levels = _apex_mm_filter_dca_above_avg(bot, yes_levels, no_levels)
     _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
@@ -12629,7 +12662,7 @@ def _apex_mm_fresh_ladder(bot_id, bot):
     _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
     _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
     _eff_lvls, _qty_mult = _apex_mm_effective_levels(bot)
-    yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0), queue_join=bot.get('queue_join_mode', False), yes_bid=bot.get('live_yes_bid', 0) or 0, no_bid=bot.get('live_no_bid', 0) or 0)
+    yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0))
     yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
     yes_levels, no_levels = _apex_mm_filter_dca_above_avg(bot, yes_levels, no_levels)
     _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)
@@ -12835,23 +12868,13 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
     _max_side_drift = max(_yes_side_drift, _no_side_drift)
     _trigger_mid = _drift >= APEX_MM_DRIFT_THRESHOLD
     _trigger_side = _max_side_drift >= APEX_MM_SIDE_DRIFT_THRESHOLD
-    # User rule: top rung must never sit below own live bid. Static post-time
-    # floor (in _apex_mm_levels) handles initial placement; this fires when
-    # bid improves under us by 1c (below side-drift threshold) and would
-    # otherwise leave us silently behind queue until next 2c+ drift.
-    _trigger_below_bid = _apex_mm_top_rung_below_bid(bot)
 
-    # If midpoint drifted, side drifted, top rung below bid, or pending edits → full repost
-    if _trigger_mid or _trigger_side or _trigger_below_bid or _has_pending_edit:
+    # If midpoint drifted, side drifted, or pending edits → full repost
+    if _trigger_mid or _trigger_side or _has_pending_edit:
         if _trigger_mid:
             _reason = f'drift ({stored_midpoint}→{live_midpoint})'
         elif _trigger_side:
             _reason = f'side_drift (yes Δ{_yes_side_drift}c, no Δ{_no_side_drift}c)'
-        elif _trigger_below_bid:
-            _reason = f'below_bid (top rung < live bid — forced reprice)'
-            bot_log('APEX_MM_BELOW_BID_REPOST', bot_id, {
-                'yes_bid': _yb_now, 'no_bid': _nb_now,
-            }, level='WARN')
         else:
             _reason = 'pending_edit'
         print(f'📊 APEX MM REFILL → FULL REPOST: {bot_id} {_reason}')
@@ -12954,9 +12977,6 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
             _eff_mid, _eff_gap, bot['levels'], bot['spacing'],
             base_qty=_eff_qty,
             inv_limit=bot.get('inventory_limit', 0),
-            queue_join=bot.get('queue_join_mode', False),
-            yes_bid=bot.get('live_yes_bid', 0) or 0,
-            no_bid=bot.get('live_no_bid', 0) or 0,
         )
         yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
         yes_levels, no_levels = _apex_mm_filter_dca_above_avg(bot, yes_levels, no_levels)
@@ -14125,7 +14145,6 @@ def create_ladder_arb_bot():
         qty_per_level = int(data.get('qty_per_level', 10))
         loss_limit_cents = int(data.get('loss_limit_cents', 500))
         smart_mode = bool(data.get('smart_mode', False))
-        queue_join_mode = bool(data.get('queue_join_mode', False))
 
         if not ticker:
             return jsonify({'error': 'Missing ticker'}), 400
@@ -14220,8 +14239,7 @@ def create_ladder_arb_bot():
             # Unified with _apex_mm_target_start_gap and _apex_mm_sync_auto_width:
             # all three paths use room // 2 (BBO match). Below 6c → BBO-tight.
             start_gap = max(1, min(20, _room // 2)) if _room >= 6 else 1
-        yes_levels, no_levels = _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=qty_per_level, inv_limit=0,
-                                                 queue_join=queue_join_mode, yes_bid=live_yes_bid, no_bid=live_no_bid)
+        yes_levels, no_levels = _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=qty_per_level, inv_limit=0)
         # Auto-compute inventory limit from ladder total (max contracts per side)
         inventory_limit = max(sum(q for _, q in yes_levels), sum(q for _, q in no_levels)) if yes_levels or no_levels else 50
 
@@ -14274,7 +14292,6 @@ def create_ladder_arb_bot():
             'status': 'market_making_active',
             'start_gap': start_gap,
             '_auto_width': auto_width,
-            'queue_join_mode': queue_join_mode,
             'levels': levels,
             'spacing': spacing,
             'qty_per_level': qty_per_level,
@@ -18454,6 +18471,7 @@ def _handle_phantom(bot_id, bot, actions):
             bot['yes_fill_qty'] = 0
             bot['no_fill_qty'] = 0
             bot['_hedge_fired'] = False  # clear so next fill can hedge
+            bot['_hedged_dog_qty'] = 0  # reset delta-follower tracking for fresh cycle
             bot['_trade_recorded'] = False
             bot.pop('_orphan_hedge', None)
             # Clear per-cycle fill-time snapshots so next cycle's first fill re-snaps
@@ -19502,7 +19520,7 @@ def _handle_apex(bot_id, bot, actions):
                     _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
                     _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
                     _eff_lvls, _qty_mult = _apex_mm_effective_levels(bot)
-                    yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0), queue_join=bot.get('queue_join_mode', False), yes_bid=bot.get('live_yes_bid', 0) or 0, no_bid=bot.get('live_no_bid', 0) or 0)
+                    yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0))
                     yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
                     yes_levels, no_levels = _apex_mm_filter_dca_above_avg(bot, yes_levels, no_levels)
                     _entry_levels = yes_levels if _entry_side == 'yes' else no_levels
@@ -19811,35 +19829,6 @@ def _handle_apex(bot_id, bot, actions):
                 return
             print(f'🔄 APEX MM STALE LADDER: {bot_id} — flat with no live orders, reposting')
             bot_log('APEX_MM_STALE_REPOST', bot_id, {})
-            _apex_mm_repost_ladder(bot_id, bot)
-            return
-
-    # 5.6. Bid-placement rule enforcement (every monitor tick, flat-only).
-    # User rule: default mode top rung > bid (BBO); join mode top rung == bid.
-    # WS-tick reprice catches the moment of bid change, but slow markets may
-    # not generate frequent ticks. This monitor-tick check guarantees the
-    # rule is enforced every 2s regardless of WS activity. Skip while holding
-    # inventory — touching anchors mid-fill is the cancel-race orphan factory.
-    # Cooldown applies to join mode (queue priority loss). Default mode
-    # bypasses — user prioritizes BBO maintenance over queue position.
-    if (net_yes == 0 and net_no == 0 and bot.get('live_yes_bid', 0) > 0
-            and bot.get('live_no_bid', 0) > 0
-            and _apex_mm_top_rung_below_bid(bot)):
-        _now_bb = time.time()
-        _qj_bb = bool(bot.get('queue_join_mode', False))
-        _cooldown_ok = _now_bb - bot.get('_last_ws_drift_at', 0) >= APEX_MM_WS_DRIFT_COOLDOWN_S
-        if not _qj_bb or _cooldown_ok:
-            # Record undercut event BEFORE repricing — measures the violation
-            # against last_post (still the pre-repost values). Verifies it's a
-            # genuine undercut, not just market noise. Auto-flip if threshold.
-            _apex_mm_record_undercut_and_maybe_flip(bot_id, bot)
-            bot['_last_ws_drift_at'] = _now_bb
-            bot_log('APEX_MM_BELOW_BID_REPOST', bot_id, {
-                'yes_bid': bot.get('live_yes_bid', 0),
-                'no_bid': bot.get('live_no_bid', 0),
-                'qj': bool(bot.get('queue_join_mode', False)),
-            }, level='WARN')
-            print(f'⚡ APEX MM BELOW-BID MONITOR: {bot_id} top rung violates placement rule → repost')
             _apex_mm_repost_ladder(bot_id, bot)
             return
 
@@ -25684,7 +25673,6 @@ def apex_mm_edit(bot_id):
     new_levels = payload.get('levels')
     new_loss_limit = payload.get('loss_limit_cents')
     new_auto_width = payload.get('auto_width')  # bool or None (no change)
-    new_queue_join = payload.get('queue_join_mode')  # bool or None
     if new_gap is not None:
         new_gap = int(new_gap)
         if new_gap < 1 or new_gap > 20:
@@ -25701,7 +25689,7 @@ def apex_mm_edit(bot_id):
         new_loss_limit = int(new_loss_limit)
         if new_loss_limit < 0 or new_loss_limit > 10000:
             return jsonify({'error': 'Loss limit must be 0-10000'}), 400
-    if new_gap is None and new_qty is None and new_levels is None and new_loss_limit is None and new_auto_width is None and new_queue_join is None:
+    if new_gap is None and new_qty is None and new_levels is None and new_loss_limit is None and new_auto_width is None:
         return jsonify({'error': 'Nothing to change'}), 400
     # Compute the diff WITHOUT mutating bot dict yet — needed so inventory-holding
     # bots can defer cleanly (previously the bot's settings changed immediately,
@@ -25718,8 +25706,6 @@ def apex_mm_edit(bot_id):
         changes['loss_limit_cents'] = {'old': bot.get('loss_limit_cents', 0), 'new': new_loss_limit}
     if new_auto_width is not None and bool(new_auto_width) != bool(bot.get('_auto_width')):
         changes['_auto_width'] = {'old': bool(bot.get('_auto_width')), 'new': bool(new_auto_width)}
-    if new_queue_join is not None and bool(new_queue_join) != bool(bot.get('queue_join_mode')):
-        changes['queue_join_mode'] = {'old': bool(bot.get('queue_join_mode')), 'new': bool(new_queue_join)}
     if not changes:
         return jsonify({'ok': True, 'applied_now': False, 'changes': {}})
 
@@ -25788,7 +25774,7 @@ def apex_mm_edit(bot_id):
             _eff_gap, _eff_qty = _apex_mm_effective_gap_qty(bot, base_qty)
             _eff_mid = _apex_mm_skewed_midpoint(bot, midpoint)
             _eff_lvls, _qty_mult = _apex_mm_effective_levels(bot)
-            yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0), queue_join=bot.get('queue_join_mode', False), yes_bid=bot.get('live_yes_bid', 0) or 0, no_bid=bot.get('live_no_bid', 0) or 0)
+            yes_levels, no_levels = _apex_mm_levels(_eff_mid, _eff_gap, _eff_lvls, bot['spacing'], base_qty=_eff_qty * _qty_mult, inv_limit=bot.get('inventory_limit', 0))
             yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
             yes_levels, no_levels = _apex_mm_filter_dca_above_avg(bot, yes_levels, no_levels)
             _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels)

@@ -7264,10 +7264,8 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const _qj = !!bot.queue_join_mode;
     const _qjYesTop = bot.live_yes_bid || 0;
     const _qjNoTop = bot.live_no_bid || 0;
-    // Tight room override (mirrors backend): rooms < 10c → only top rung.
-    const _marketRoom = (_qjYesTop > 0 && _qjNoTop > 0)
-        ? (100 - _qjYesTop - _qjNoTop) : 99;
-    const _effLevels = (!_qj && _marketRoom < 10) ? 1 : _cfgLevels;
+    // Tight-room override removed (2026-05-07): always honor configured levels.
+    const _effLevels = _cfgLevels;
     // Top-rung calc (mirrors backend _apex_mm_levels).
     let _yesTop, _noTop;
     if (_qj && _qjYesTop > 0 && _qjNoTop > 0) {

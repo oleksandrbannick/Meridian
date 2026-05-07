@@ -7264,21 +7264,32 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const _qj = !!bot.queue_join_mode;
     const _qjYesTop = bot.live_yes_bid || 0;
     const _qjNoTop = bot.live_no_bid || 0;
-    for (let i = 0; i < _cfgLevels; i++) {
-        let yp, np;
-        if (_qj && _qjYesTop > 0 && _qjNoTop > 0) {
-            // Join Room: top rung AT bid, ladder down from top.
-            yp = _qjYesTop - (i * _cfgSpacing);
-            np = _qjNoTop - (i * _cfgSpacing);
+    // Tight room override (mirrors backend): rooms < 10c → only top rung.
+    const _marketRoom = (_qjYesTop > 0 && _qjNoTop > 0)
+        ? (100 - _qjYesTop - _qjNoTop) : 99;
+    const _effLevels = (!_qj && _marketRoom < 10) ? 1 : _cfgLevels;
+    // Top-rung calc (mirrors backend _apex_mm_levels).
+    let _yesTop, _noTop;
+    if (_qj && _qjYesTop > 0 && _qjNoTop > 0) {
+        _yesTop = _qjYesTop;
+        _noTop = _qjNoTop;
+    } else {
+        if (_qjYesTop > 0) {
+            _yesTop = Math.min(_qjYesTop + _effLevels, _cfgMid - 1);
+            _yesTop = Math.max(_yesTop, _qjYesTop + 1);
         } else {
-            // Normal: top = max(mid-gap, bid+1). Sub-rungs ladder down from top.
-            const yesTopCalc = _cfgMid - _cfgGap;
-            const noTopCalc  = (100 - _cfgMid) - _cfgGap;
-            const yesTop = _qjYesTop > 0 ? Math.max(yesTopCalc, _qjYesTop + 1) : yesTopCalc;
-            const noTop  = _qjNoTop  > 0 ? Math.max(noTopCalc,  _qjNoTop  + 1) : noTopCalc;
-            yp = yesTop - (i * _cfgSpacing);
-            np = noTop  - (i * _cfgSpacing);
+            _yesTop = _cfgMid - _cfgGap;
         }
+        if (_qjNoTop > 0) {
+            _noTop = Math.min(_qjNoTop + _effLevels, (100 - _cfgMid) - 1);
+            _noTop = Math.max(_noTop, _qjNoTop + 1);
+        } else {
+            _noTop = (100 - _cfgMid) - _cfgGap;
+        }
+    }
+    for (let i = 0; i < _effLevels; i++) {
+        const yp = _yesTop - (i * _cfgSpacing);
+        const np = _noTop - (i * _cfgSpacing);
         if (yp >= 1) _expectedYes.push(yp);
         if (np >= 1) _expectedNo.push(np);
     }

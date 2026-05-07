@@ -11122,6 +11122,31 @@ def _apex_mm_post_ladder(bot_id, bot, yes_levels, no_levels):
                 no_orders[str(actual_price)] = {'oid': oid, 'qty': qty, 'fill_qty': 0}
                 bot.setdefault('_all_placed_order_ids', []).append(oid)
 
+    # Atomic posting per side (per user 2026-05-07): if any rung on a side
+    # failed to post, cancel the successful ones on that same side. Prevents
+    # the partial-ladder state where top is missing but subs are live —
+    # confusing display + breaks the BBO intent of the top rung.
+    _expected_yes = len(yes_specs)
+    _expected_no = len(no_specs)
+    if _expected_yes > 0 and len(yes_orders) < _expected_yes:
+        for _p, _l in list(yes_orders.items()):
+            _oid = _l.get('oid')
+            if _oid:
+                try: _safe_cancel(_oid, f'apex_mm_atomic_partial_{bot_id}')
+                except Exception: pass
+        print(f'⚠ APEX MM ATOMIC YES: {bot_id} {len(yes_orders)}/{_expected_yes} posted — cancelling partial side')
+        bot_log('APEX_MM_ATOMIC_PARTIAL', bot_id, {'side': 'yes', 'posted': len(yes_orders), 'expected': _expected_yes}, level='WARN')
+        yes_orders = {}
+    if _expected_no > 0 and len(no_orders) < _expected_no:
+        for _p, _l in list(no_orders.items()):
+            _oid = _l.get('oid')
+            if _oid:
+                try: _safe_cancel(_oid, f'apex_mm_atomic_partial_{bot_id}')
+                except Exception: pass
+        print(f'⚠ APEX MM ATOMIC NO: {bot_id} {len(no_orders)}/{_expected_no} posted — cancelling partial side')
+        bot_log('APEX_MM_ATOMIC_PARTIAL', bot_id, {'side': 'no', 'posted': len(no_orders), 'expected': _expected_no}, level='WARN')
+        no_orders = {}
+
     # Merge with existing paused-side orders
     if yes_paused and bot.get('yes_orders'):
         yes_orders = bot['yes_orders']

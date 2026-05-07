@@ -10741,17 +10741,23 @@ def _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=10, inv_limit
         #     With levels=4, top at bid+4 and sub-rungs at bid+3, bid+2, bid+1.
         #     Falls back to mid-gap when bid is unknown (pregame/no WS data).
         #   Capped so top can't exceed midpoint - 1 (would cross opp side).
+        # Tight-room override (per user 2026-05-07): when market_room < 10c
+        # (combined > 90c), force a single top rung at bid+1 only — no deep
+        # ladder depth, just claim the BBO. Stacking 4 rungs in a 4c room
+        # forces all of them into a 1c band that's mostly below bid anyway.
+        _market_room = 100 - (yes_bid or 0) - (no_bid or 0) if (yes_bid > 0 and no_bid > 0) else 99
+        _eff_levels = 1 if _market_room < 10 else levels
         if yes_bid > 0:
-            yes_top = min(yes_bid + levels, midpoint - 1)
+            yes_top = min(yes_bid + _eff_levels, midpoint - 1)
             yes_top = max(yes_top, yes_bid + 1)  # at least bid+1
         else:
             yes_top = midpoint - start_gap
         if no_bid > 0:
-            no_top = min(no_bid + levels, (100 - midpoint) - 1)
+            no_top = min(no_bid + _eff_levels, (100 - midpoint) - 1)
             no_top = max(no_top, no_bid + 1)
         else:
             no_top = (100 - midpoint) - start_gap
-        for i in range(levels):
+        for i in range(_eff_levels):
             yp = yes_top - (i * spacing)
             np = no_top - (i * spacing)
             level_qty = max(1, base_qty)

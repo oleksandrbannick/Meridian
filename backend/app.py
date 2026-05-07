@@ -11186,6 +11186,12 @@ def _apex_mm_repost_ladder(bot_id, bot):
     """Recalculate midpoint and repost full ladder at fresh prices after OBI recovery
     or WS-driven midpoint drift. Per-bot lock + ws_fill_lock prevents inventory race
     against the WS fill handler that writes net_yes/net_no concurrently."""
+    # Smart-stop guard: never post fresh entries on a stopped bot. Held
+    # inventory still gets walked via _apex_mm_walk_up; this just blocks
+    # new ladder creation. Per user 2026-05-07: 'stop fucking placing
+    # orders why doesn't it just hedge what it actually knows it has'.
+    if bot.get('_smart_stopped') or bot.get('_smart_stop_pending'):
+        return
     _bot_lock = _apex_mm_repost_locks.setdefault(bot_id, threading.Lock())
     if not _bot_lock.acquire(blocking=False):
         return
@@ -12189,6 +12195,9 @@ def _apex_mm_refill_entry(bot_id, bot, freed_qty):
         return
     if bot.get('status') != 'market_making_active':
         return
+    # Smart-stop guard: don't refill entry on a stopped bot.
+    if bot.get('_smart_stopped') or bot.get('_smart_stop_pending'):
+        return
 
     net_yes = bot.get('net_yes', 0)
     net_no = bot.get('net_no', 0)
@@ -12695,6 +12704,26 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
     ticker = bot.get('ticker', '')
     net_yes = bot.get('net_yes', 0)
     net_no = bot.get('net_no', 0)
+
+    # Smart-stop guard: a stopped bot must NOT post fresh entries. If holding
+    # inventory, transition to mm_exiting (walker handles the close). If flat,
+    # transition to awaiting_settlement and stop. Per user 2026-05-07.
+    if bot.get('_smart_stopped') or bot.get('_smart_stop_pending'):
+        if net_yes != 0 or net_no != 0:
+            _held = 'yes' if net_yes > net_no else 'no'
+            bot.setdefault('_smart_stop_reason', 'manual')
+            bot['_smart_stopped'] = True
+            bot['_smart_stop_pending'] = False
+            print(f'⏹ APEX MM SMART-STOP CYCLE: {bot_id} skipping refill — holding {_held.upper()}, posting exit')
+            _apex_mm_reactor_queue.put((_apex_mm_amend_exit, (bot_id, bot, _held)))
+        else:
+            bot['_smart_stopped'] = True
+            bot['_smart_stop_pending'] = False
+            bot['status'] = 'awaiting_settlement'
+            bot['awaiting_since'] = time.time()
+            print(f'⏹ APEX MM SMART-STOP CYCLE: {bot_id} flat — awaiting settlement')
+            save_state()
+        return
 
     # Guard: must be flat — if holding inventory, post exit order instead of refilling.
     # DON'T call cycle_reset (cancel-everything) — that creates involuntary fills from
@@ -19766,6 +19795,17 @@ def _handle_apex(bot_id, bot, actions):
             if _has_live_oids:
                 break
         if not _has_live_oids:
+            # Smart-stop guard: stopped + flat + no orders → terminal state.
+            # Don't keep firing stale-repost when the user told the bot to stop.
+            if bot.get('_smart_stopped') or bot.get('_smart_stop_pending'):
+                bot['_smart_stopped'] = True
+                bot['_smart_stop_pending'] = False
+                bot['status'] = 'awaiting_settlement'
+                bot['awaiting_since'] = time.time()
+                print(f'⏹ APEX MM STOPPED + FLAT: {bot_id} → awaiting_settlement')
+                bot_log('APEX_MM_SMART_STOP_FLAT', bot_id, {})
+                save_state()
+                return
             print(f'🔄 APEX MM STALE LADDER: {bot_id} — flat with no live orders, reposting')
             bot_log('APEX_MM_STALE_REPOST', bot_id, {})
             _apex_mm_repost_ladder(bot_id, bot)

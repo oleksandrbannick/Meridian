@@ -11930,6 +11930,38 @@ def _apex_mm_verify_exit_health(bot_id, bot, exit_side, held_side):
             bot[f'_{exit_side}_exit_oid'] = None
             bot['_exit_ghost_recreate_at'] = _now_v  # cooldown stamp
             _apex_mm_amend_exit(bot_id, bot, held_side)
+            return
+        # Order is alive — SYNC PRICE + QTY against Kalshi truth (catches
+        # dropped amend responses where bot._exit_price diverges from Kalshi).
+        # Per user 2026-05-07: 'it should always know where its exit is'.
+        try:
+            _price_key = f'{exit_side}_price_dollars'
+            _kalshi_price_d = order.get(_price_key)
+            _kalshi_price = int(round(float(_kalshi_price_d) * 100)) if _kalshi_price_d else None
+        except Exception:
+            _kalshi_price = None
+        if _kalshi_price and _kalshi_price != bot.get('_exit_price'):
+            _old_price = bot.get('_exit_price')
+            bot['_exit_price'] = _kalshi_price
+            print(f'🔄 APEX MM EXIT PRICE SYNC: {bot_id} {_old_price}c → {_kalshi_price}c (Kalshi truth)')
+            bot_log('APEX_MM_EXIT_PRICE_SYNC', bot_id, {
+                'old': _old_price, 'new': _kalshi_price, 'oid': oid[:12],
+            })
+        # Sync remaining qty: if Kalshi shows fewer remaining than bot's
+        # (_exit_total_qty - _exit_fill_qty), some fills were missed.
+        try:
+            _initial = float(order.get('initial_count_fp', order.get('initial_count', 0)) or 0)
+            _kalshi_filled = max(0, _initial - (remaining or 0))
+        except Exception:
+            _kalshi_filled = None
+        _bot_filled = bot.get('_exit_fill_qty', 0) or 0
+        if _kalshi_filled is not None and _kalshi_filled > _bot_filled + 0.5:
+            # Kalshi has more fills than bot tracked — flag for full reconcile
+            bot['_last_reconcile'] = 0  # force reconcile next tick
+            print(f'⚠ APEX MM EXIT FILL DRIFT: {bot_id} kalshi_filled={_kalshi_filled} > bot_filled={_bot_filled} — forcing reconcile')
+            bot_log('APEX_MM_EXIT_FILL_DRIFT', bot_id, {
+                'kalshi_filled': _kalshi_filled, 'bot_filled': _bot_filled, 'oid': oid[:12],
+            }, level='WARN')
     except Exception as e:
         if '404' in str(e) or 'not found' in str(e).lower():
             print(f'🚨 APEX MM EXIT GHOST 404: {bot_id} oid={oid[:12]} — RECREATING')

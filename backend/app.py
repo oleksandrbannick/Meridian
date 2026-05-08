@@ -18378,6 +18378,13 @@ def _handle_phantom(bot_id, bot, actions):
                 bot['_last_raw_hedge_ms'] = bot['raw_hedge_ms']
             bot['raw_hedge_ms'] = None
             bot['hedge_latency_ms'] = None
+            # Per user 2026-05-08: clear sub-contract stranded flag + prior-cycle
+            # fav-fill residue. _sub_contract_stranded persisted across cycles so
+            # the card lied about a fresh cycle still being stranded; _fav_fully_filled
+            # / _ws_fav_filled_at were also stale from the previous run.
+            bot['_sub_contract_stranded'] = False
+            bot['_fav_fully_filled'] = False
+            bot['_ws_fav_filled_at'] = None
             _was_flip = bot.get('_flip_pending', False)
             bot['status'] = 'dog_anchor_posted'
             bot['posted_at'] = now
@@ -18835,9 +18842,12 @@ def _handle_apex(bot_id, bot, actions):
     # Includes waiting_repeat: bot can get stranded there if fresh_ladder
     # repeatedly fails on drift_guard while market settles in the background.
     # Without this, no settlement check fires and bot zombies until manual cancel.
-    if status in ('mm_depth_pulled', 'market_making_active', 'waiting_repeat') and \
-       bot.get('net_yes', 0) == 0 and bot.get('net_no', 0) == 0:
-        # Settlement poll (30s cadence) — transition when Kalshi confirms settled
+    # Settlement check fires for flat OR held-inventory bots in pulled/active/repeat
+    # states. Previously only flat bots were checked — held-inventory bots in
+    # mm_depth_pulled would zombie when the game finalled because the settle
+    # check inside the market_making_active handler doesn't run for them. Per
+    # user 2026-05-08: bots on final games stay in mm_depth_pulled forever.
+    if status in ('mm_depth_pulled', 'market_making_active', 'waiting_repeat'):
         if now - bot.get('_last_settle_check_global', 0) >= 30:
             bot['_last_settle_check_global'] = now
             try:
@@ -18845,26 +18855,58 @@ def _handle_apex(bot_id, bot, actions):
                 _fp_mkt = kalshi_client.get_market(ticker)
                 _fp_data = _fp_mkt.get('market', _fp_mkt) if isinstance(_fp_mkt, dict) else {}
                 _fp_status = _fp_data.get('status', '').lower()
-                if _fp_status in ('settled', 'finalized') or (
-                    _fp_status == 'closed' and _fp_data.get('result', '') in ('yes', 'no')
-                ):
+                _fp_result = _fp_data.get('result', '')
+                _fp_settled = _fp_status in ('settled', 'finalized') or (
+                    _fp_status == 'closed' and _fp_result in ('yes', 'no')
+                )
+                if _fp_settled:
                     # Cancel any live orders before settling
                     for _sk in ('yes_orders', 'no_orders'):
                         for _lvl in bot.get(_sk, {}).values():
                             _oid = _lvl.get('oid')
                             if _oid:
-                                try: _safe_cancel(_oid, f'apex_mm_flat_settle_{bot_id}')
+                                try: _safe_cancel(_oid, f'apex_mm_settle_{bot_id}')
                                 except Exception: pass
                                 _lvl['oid'] = None
-                    # Flat bot — go straight to completed. awaiting_settlement is for
-                    # bots with held inventory waiting for payout; flat has nothing to
-                    # wait for, and the intermediate state gets stuck because the
-                    # global settle loop skips bots that already have _market_settled_at.
+                    # Cancel exit oids too — held inventory just settles via market
+                    for _ex_side in ('yes', 'no'):
+                        _ex_oid = bot.get(f'_{_ex_side}_exit_oid')
+                        if _ex_oid:
+                            try: _safe_cancel(_ex_oid, f'apex_mm_settle_exit_{bot_id}')
+                            except Exception: pass
+                            bot[f'_{_ex_side}_exit_oid'] = None
+                    # Held inventory: calculate settlement P&L (winner pays 100c, loser 0).
+                    # Mirrors the market_making_active handler at ~line 19407.
+                    _ny = bot.get('net_yes', 0)
+                    _nn = bot.get('net_no', 0)
+                    if _fp_result and (_ny > 0 or _nn > 0):
+                        for _side, _qty, _avg in [('yes', _ny, bot.get('avg_yes_cost', 0)),
+                                                  ('no',  _nn, bot.get('avg_no_cost', 0))]:
+                            if _qty <= 0:
+                                continue
+                            _pnl = ((100 - _avg) * _qty) if _fp_result == _side else (-_avg * _qty)
+                            bot['realized_pnl_cents'] = bot.get('realized_pnl_cents', 0) + _pnl
+                            _record_trade({
+                                'bot_id': bot_id, 'ticker': ticker, 'bot_category': 'ladder_arb',
+                                'result': f'mm_settlement_{_fp_result}',
+                                f'{_side}_price': _avg, 'quantity': _qty, 'net_pnl': _pnl,
+                                'profit_cents': max(0, _pnl), 'loss_cents': abs(min(0, _pnl)),
+                                'timestamp': now, 'fill_source': 'apex_mm_settlement',
+                                'game_phase': bot.get('game_phase', ''),
+                            })
+                            bot[f'net_{_side}'] = 0
+                            bot[f'avg_{_side}_cost'] = 0
+                            bot[f'total_{_side}_cost'] = 0
                     bot['status'] = 'completed'
                     bot['completed_at'] = now
                     bot['_market_settled_at'] = now
                     bot['_smart_stop_reason'] = 'final'
-                    print(f'🏁 APEX MM FLAT→SETTLED: {bot_id} market {_fp_status} — completed (5-min purge)')
+                    bot_log('APEX_MM_SETTLED', bot_id, {
+                        'mkt_status': _fp_status, 'result': _fp_result,
+                        'pnl': bot.get('realized_pnl_cents', 0),
+                        'had_inventory': bool(_ny > 0 or _nn > 0),
+                    })
+                    print(f'🏁 APEX MM SETTLED: {bot_id} market={_fp_status} result={_fp_result or "—"} → completed (5-min purge)')
                     save_state()
                     return
             except Exception:

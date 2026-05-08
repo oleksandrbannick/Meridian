@@ -10169,16 +10169,16 @@ def _apex_should_pull(ticker, depth_levels=3, obi_threshold=None, depth_min=None
     if age_s > 10:
         return False, ''  # stale data — don't act on old book
 
-    # Wide-room override: if BBO arb space is >= room_override, the spread itself
-    # is the protection. Skip all the thin/obi/vanish gates so the bot can quote
-    # in markets where it would otherwise be the only maker.
+    # Apex MM kill-switch: when room_override > 0 is passed, the caller is in
+    # pure-MM mode (bot IS the depth). Skip thin/obi/vanish gates unconditionally.
+    # Old semantic required room >= override AND both sides external-bid > 0,
+    # but lob.get_best_bid INCLUDES our own orders, so a bot providing the only
+    # liquidity computed room as negative (our YES at 18 + our NO at 85 = "room"
+    # of -3 < 1) → gate fired despite the override. Per user 2026-05-08:
+    # "I thought we got rid of [OBI]" — gates off means off.
+    # room_guard handles the room-too-tight pull separately.
     if room_override > 0:
-        _yb_check = lob.get_best_bid('yes') or 0
-        _nb_check = lob.get_best_bid('no') or 0
-        if _yb_check > 0 and _nb_check > 0:
-            _room_check = 100 - _yb_check - _nb_check
-            if _room_check >= room_override:
-                return False, ''
+        return False, ''
 
     yes_depth = lob.get_total_depth('yes', depth_levels)
     no_depth = lob.get_total_depth('no', depth_levels)

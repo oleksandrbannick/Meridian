@@ -17122,33 +17122,50 @@ def _handle_phantom(bot_id, bot, actions):
                                 'reason': 'count_already_covers',
                             })
                         elif fav_order_id:
-                            try:
-                                _amend_kwargs = {'yes_price': bot.get('fav_price')} if fav_side == 'yes' else {'no_price': bot.get('fav_price')}
-                                api_rate_limiter.wait()
-                                _recon_resp = kalshi_client.amend_order(
-                                    fav_order_id, ticker=hedge_ticker, side=fav_side,
-                                    count=_new_count, **_amend_kwargs
-                                )
-                                _recon_ord = _recon_resp.get('order', _recon_resp) if isinstance(_recon_resp, dict) else {}
-                                _recon_new_oid = _recon_ord.get('order_id', '')
-                                if _recon_new_oid and _recon_new_oid != fav_order_id:
-                                    bot['fav_order_id'] = _recon_new_oid
-                                    bot.setdefault('_all_hedge_order_ids', []).append(fav_order_id)
-                                    if fav_side == 'yes':
-                                        bot['yes_order_id'] = _recon_new_oid
-                                    else:
-                                        bot['no_order_id'] = _recon_new_oid
-                                    fav_order_id = _recon_new_oid
-                                bot['_active_fav_qty'] = _new_count
-                                bot['_partial_hedge_qty'] = _new_count
-                                print(f'✅ PHANTOM RECONCILE AMEND: {bot_id} fav qty {_live_fav_count}→{_new_count} (gap={_hedge_gap})')
-                                bot_log('PHANTOM_RECONCILE_AMEND', bot_id, {
-                                    'old_qty': _live_fav_count, 'new_qty': _new_count,
-                                    'fav_order_id': fav_order_id[:12], 'hedge_gap': _hedge_gap,
+                            # Subtract fills already booked. _new_count is the absolute
+                            # target for total fav fills; the amend count param sent to
+                            # Kalshi is the unfilled remainder (so a cancel-replace new
+                            # oid won't re-arm the full target on top of prior fills).
+                            # _active_fav_qty/_partial_hedge_qty stay at the absolute
+                            # target so future walks/snaps compute remaining correctly.
+                            _recon_filled = bot.get('fav_fill_qty', 0) or 0
+                            _recon_remaining = _new_count - _recon_filled
+                            if _recon_remaining < 1:
+                                bot['_dog_reconciled'] = True
+                                print(f'✅ PHANTOM RECONCILE COVERED (filled≥target): {bot_id} target={_new_count} filled={_recon_filled}')
+                                bot_log('PHANTOM_RECONCILE_COVERED', bot_id, {
+                                    'recon_total': _recon_total, 'fav_filled': _recon_filled,
+                                    'reason': 'fills_already_at_target',
                                 })
-                            except Exception as _amend_err:
-                                print(f'⚠ PHANTOM RECONCILE AMEND FAILED: {bot_id} {_amend_err}')
-                                bot_log('PHANTOM_RECONCILE_AMEND_FAIL', bot_id, {'error': str(_amend_err)[:200]}, level='ERROR')
+                            else:
+                                try:
+                                    _amend_kwargs = {'yes_price': bot.get('fav_price')} if fav_side == 'yes' else {'no_price': bot.get('fav_price')}
+                                    api_rate_limiter.wait()
+                                    _recon_resp = kalshi_client.amend_order(
+                                        fav_order_id, ticker=hedge_ticker, side=fav_side,
+                                        count=_recon_remaining, **_amend_kwargs
+                                    )
+                                    _recon_ord = _recon_resp.get('order', _recon_resp) if isinstance(_recon_resp, dict) else {}
+                                    _recon_new_oid = _recon_ord.get('order_id', '')
+                                    if _recon_new_oid and _recon_new_oid != fav_order_id:
+                                        bot['fav_order_id'] = _recon_new_oid
+                                        bot.setdefault('_all_hedge_order_ids', []).append(fav_order_id)
+                                        if fav_side == 'yes':
+                                            bot['yes_order_id'] = _recon_new_oid
+                                        else:
+                                            bot['no_order_id'] = _recon_new_oid
+                                        fav_order_id = _recon_new_oid
+                                    bot['_active_fav_qty'] = _new_count
+                                    bot['_partial_hedge_qty'] = _new_count
+                                    print(f'✅ PHANTOM RECONCILE AMEND: {bot_id} fav qty {_live_fav_count}→{_new_count} amend_count={_recon_remaining} (gap={_hedge_gap})')
+                                    bot_log('PHANTOM_RECONCILE_AMEND', bot_id, {
+                                        'old_qty': _live_fav_count, 'new_qty': _new_count,
+                                        'amend_count': _recon_remaining, 'fav_filled': _recon_filled,
+                                        'fav_order_id': fav_order_id[:12], 'hedge_gap': _hedge_gap,
+                                    })
+                                except Exception as _amend_err:
+                                    print(f'⚠ PHANTOM RECONCILE AMEND FAILED: {bot_id} {_amend_err}')
+                                    bot_log('PHANTOM_RECONCILE_AMEND_FAIL', bot_id, {'error': str(_amend_err)[:200]}, level='ERROR')
                     else:
                         # Need to add a new supplemental order for the true gap
                         _supp_qty = _hedge_gap
@@ -17926,10 +17943,19 @@ def _handle_phantom(bot_id, bot, actions):
                     return  # WS snap already handled it or order gone
                 amend_kwargs = {'yes_price': new_fav_price} if fav_side == 'yes' else {'no_price': new_fav_price}
                 _walk_qty = bot.get('_active_fav_qty') or qty
+                # Subtract fills already booked on this hedge cycle. Kalshi amend
+                # can cancel-replace under the hood (new oid, fresh count). Without
+                # this, repeated walks re-arm full qty across the chain and over-hedge.
+                # CHAYAS-YAS 2026-05-08: walk @06:42:57 fired with fav_filled=8.99,
+                # passed _walk_qty=40 → new oid filled 40 more → 48.99 vs dog 40.
+                _walk_filled = bot.get('fav_fill_qty', 0) or 0
+                _walk_remaining = _walk_qty - _walk_filled
+                if _walk_remaining < 1:
+                    return  # fav already fully filled — completion path will run
                 api_rate_limiter.wait()
                 _walk_resp = kalshi_client.amend_order(
                     fav_order_id, ticker=hedge_ticker, side=fav_side,
-                    count=_walk_qty, **amend_kwargs
+                    count=_walk_remaining, **amend_kwargs
                 )
                 # Capture new order ID if Kalshi reassigned
                 _walk_order = _walk_resp.get('order', _walk_resp) if isinstance(_walk_resp, dict) else {}

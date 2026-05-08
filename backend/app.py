@@ -10439,7 +10439,15 @@ def _apex_mm_cancel_close_side_orders(bot_id, bot):
     """Cancel any live orders on the close side when holding inventory.
     Leftover rungs from flat-state posting must be cleaned up — they can't
     fill (price-priority blocked by exit) and eat order slots.
-    Safe to call every tick; no-op when nothing to cancel."""
+    Safe to call every tick; no-op when nothing to cancel.
+
+    ALSO triggers an orphan sweep on the ticker (throttled to 60s) when
+    holding inventory: covers cases where bot dict cleared a level['oid']
+    but the cancel actually failed silently — those orders persist on
+    Kalshi but the bot never re-attempts cancel. The sweep finds them
+    via REST and cancels anything not in any active bot's protected set.
+    Per user 2026-05-08: stale 35/34c YES rungs sat live on Kalshi for
+    the MANLOP bot when held NO + exit on YES@95."""
     held = _apex_mm_held_side(bot)
     if not held:
         return 0
@@ -10469,6 +10477,22 @@ def _apex_mm_cancel_close_side_orders(bot_id, bot):
                     print(f'🚨 CLOSE-SIDE CLEAN LATE FILL: {bot_id} {close_side.upper()} +{_nf}x @{_pr}c')
             level['oid'] = None
             cancelled += 1
+        except Exception:
+            pass
+    # Purge stale dict entries (oid=null + zero fills) — they're vestigial
+    # from cleared OIDs and just clutter the card / dict.
+    for _stale_p in [p for p, l in bot.get(close_dict_key, {}).items()
+                     if not l.get('oid') and not l.get('fill_qty', 0)]:
+        bot[close_dict_key].pop(_stale_p, None)
+    # Throttled orphan sweep — catches close-side orders we lost track of
+    # (oid cleared but cancel actually failed). Only when holding inventory.
+    _now_sweep = time.time()
+    if _now_sweep - bot.get('_last_close_sweep_at', 0) >= 60:
+        bot['_last_close_sweep_at'] = _now_sweep
+        try:
+            _swept = _apex_mm_sweep_orphans(bot_id, bot)
+            if _swept:
+                print(f'🧹 APEX MM HELD-INV SWEEP: {bot_id} held={held} — cancelled {_swept} orphan resting orders')
         except Exception:
             pass
     if cancelled > 0:

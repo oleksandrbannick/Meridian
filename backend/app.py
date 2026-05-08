@@ -10072,7 +10072,7 @@ APEX_MM_DRIFT_DORMANT_RECOVER_S = 30
 # 2026-05-06: bumped 80→90 per user — VISDEN bots were profitable in 80-89c
 # range (4 RTs +17c, 2 RTs +4c) but kept getting pulled. Last 10c (90-99) is
 # the truly toxic zone where hits lock in near-certain wins for the taker.
-APEX_MM_DRIFT_GUARD_BID = 80
+APEX_MM_DRIFT_GUARD_BID = 85
 APEX_MM_DRIFT_GUARD_RECOVERY = 85
 APEX_MM_WS_DRIFT_GUARD_COOLDOWN_S = 1.0
 
@@ -18997,7 +18997,7 @@ def _handle_apex(bot_id, bot, actions):
 
         # Drift guard: don't restart if market decided
         _drift_max = max(bot.get('live_yes_bid', 0), bot.get('live_no_bid', 0))
-        if _drift_max >= 80:
+        if _drift_max >= APEX_MM_DRIFT_GUARD_BID:
             print(f'📊 APEX MM WAITING: {bot_id} drift {_drift_max}c — not safe to restart')
             return
 

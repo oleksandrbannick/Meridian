@@ -8245,30 +8245,55 @@ async function loadBots() {
             const s = b.status || '';
             if (_isBotPulled(b)) return '#aa77ff';
             if ((s === 'completed' || s === 'stopped') && b._death_zone_stopped) return '#ff3366';
+            // Apex MM: dot color follows the same Anchored/Hedging split as the label.
+            if (b && b.bot_category === 'ladder_arb' && s === 'market_making_active') {
+                const ny = b.net_yes || 0;
+                const nn = b.net_no || 0;
+                return (ny >= 1 || nn >= 1) ? '#ff7043' : '#00d4ff';
+            }
             return _stateColorMap[s] || '#556';
         }
         const _stateNameMap = {
             'dog_anchor_posted': 'Anchor', 'fav_hedge_posted': 'Hedging', 'dog_filled': 'Hedging',
             'ladder_filled_no_fav': 'Hedging', 'waiting_repeat': 'Repeating', 'completed': 'Done',
             'stopped': 'Stopped', 'awaiting_settlement': 'Settling',
-            'market_making_active': 'Active', 'mm_depth_pulled': 'Pulled', 'mm_exiting': 'Exiting',
+            // Apex MM mapping below is dynamic — see _getBotDotLabel inventory check.
+            // 'mm_exiting' was a transient marker pre-2026-05; collapses to Hedging now
+            // since exit IS the hedge in the current MM model.
+            'mm_exiting': 'Hedging',
         };
         function _getBotDotLabel(b) {
             const s = b.status || '';
             if (_isBotPulled(b)) return 'Pulled';
             if ((s === 'completed' || s === 'stopped') && b._death_zone_stopped) return 'Death';
+            // Apex MM: split active state by inventory.
+            //   flat (net=0)        → Anchored (entries posted, hunting fills)
+            //   inventory (net>0)   → Hedging  (exit posted, walking to fill)
+            //   mm_depth_pulled     → Pulled regardless of inventory (room_guard /
+            //                         drift_guard active; exit still walks if held)
+            if (b && b.bot_category === 'ladder_arb') {
+                if (s === 'mm_depth_pulled') return 'Pulled';
+                if (s === 'awaiting_settlement') return 'Settling';
+                if (s === 'completed') return 'Done';
+                if (s === 'stopped') return 'Stopped';
+                if (s === 'market_making_active') {
+                    const ny = b.net_yes || 0;
+                    const nn = b.net_no || 0;
+                    return (ny >= 1 || nn >= 1) ? 'Hedging' : 'Anchored';
+                }
+            }
             return _stateNameMap[s] || s;
         }
         // Within-group sort priority: lower = more urgent (floats to top)
         // Tier 1: hedge-in-flight. Tier 2: live posting. Tier 3: paused. Tier 4: terminal.
         function _getStatePriority(b) {
-            // Apex MM cycles between Active/Exiting on every fill — urgency-tier
+            // Apex MM cycles between Anchored/Hedging on every fill — urgency-tier
             // sort caused cards to rotate constantly. Collapse to one tier so Apex
             // cards sort by created_at only and stay in stable order.
             if (b && b.bot_category === 'ladder_arb') return 2;
             const l = _getBotDotLabel(b);
-            if (l === 'Hedging' || l === 'Exiting') return 1;
-            if (l === 'Anchor'  || l === 'Active')  return 2;
+            if (l === 'Hedging') return 1;
+            if (l === 'Anchor'  || l === 'Anchored')  return 2;
             if (l === 'Repeating' || l === 'Pulled' || l === 'Settling') return 3;
             if (l === 'Death' || l === 'Done' || l === 'Stopped') return 4;
             return 5;
@@ -8284,12 +8309,15 @@ async function loadBots() {
             { label: 'Stopped',   color: '#ff4444' },
         ];
         const _APEX_BADGE_ORDER = [
-            { label: 'Exiting',  color: '#ff7043' },
-            { label: 'Active',   color: '#00d4ff' },
+            // Per user 2026-05-08: post-bid+1-revert, exit IS the hedge, so
+            // there's no separate "exiting" state. Active splits by inventory:
+            //   flat → Anchored, inventory → Hedging.
+            { label: 'Anchored', color: '#00d4ff' },
+            { label: 'Hedging',  color: '#ff7043' },
             { label: 'Pulled',   color: '#aa77ff' },
+            { label: 'Stopped',  color: '#ff4444' },
             { label: 'Settling', color: '#ffd740' },
             { label: 'Done',     color: '#00ff88' },
-            { label: 'Stopped',  color: '#ff4444' },
         ];
         function _renderStatusBadgeBar(counts, order) {
             const bar = document.createElement('div');

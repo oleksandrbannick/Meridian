@@ -12821,6 +12821,17 @@ def _apex_mm_cycle_refill_inner(bot_id, bot):
         )
         yes_levels, no_levels = _apex_mm_filter_close_side(bot, yes_levels, no_levels)
         yes_levels, no_levels = _apex_mm_filter_dca_above_avg(bot, yes_levels, no_levels)
+        # Honor inventory cap on the refill path. _apex_mm_post_ladder checks
+        # _yes_side_paused / _no_side_paused, but refill bypasses post_ladder
+        # and goes straight to create_orders_batch — without this guard, a
+        # bot at net_yes=cap would still repost YES rungs on rung consumption,
+        # ending up over cap when those fill.
+        _il = bot.get('inventory_limit', 0)
+        if _il > 0:
+            if bot.get('net_yes', 0) >= _il:
+                yes_levels = []
+            if bot.get('net_no', 0) >= _il:
+                no_levels = []
 
         _refilled = 0
         for side, expected_levels in [('yes', yes_levels), ('no', no_levels)]:

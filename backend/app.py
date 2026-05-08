@@ -6356,6 +6356,87 @@ def _phantom_tape_worker():
 
 threading.Thread(target=_phantom_tape_worker, daemon=True, name='phantom-tape-writer').start()
 
+# ─── Fill-time orderbook snapshots ───────────────────────────────────────
+# At each phantom dog fill, capture the full book on both sides for offline
+# analysis. Goal: correlate "alone at depth floor" vs "stacked with others"
+# with eventual P&L. Lets us tune PPI to reward profitable solo-sits and
+# down-weight unprofitable ones. Writer is async — never blocks the hedge
+# worker. Schema: see _capture_fill_book().
+_phantom_fill_book_path = '/root/meridian/backend/phantom_fill_book.jsonl'
+_phantom_fill_book_queue = _queue_mod.Queue(maxsize=10000)
+
+def _phantom_fill_book_worker():
+    while True:
+        try:
+            entry = _phantom_fill_book_queue.get()
+            if entry is None:
+                break
+            with open(_phantom_fill_book_path, 'a') as f:
+                f.write(json.dumps(entry, default=str) + '\n')
+        except Exception as e:
+            print(f'⚠ FILL-BOOK WRITER ERROR: {e}')
+
+threading.Thread(target=_phantom_fill_book_worker, daemon=True, name='phantom-fill-book-writer').start()
+
+
+def _capture_fill_book(bot_id, event='dog_fill'):
+    """Snapshot the full LocalOrderbook for both sides at fill time.
+    Cheap: copies the price→qty dicts and enqueues. Disk I/O is async.
+    Captures dog/fav prices, book depth on both sides, and a derived
+    'alone_at_floor' flag (was bot the only resting qty at its dog_price?)."""
+    try:
+        bot = active_bots.get(bot_id)
+        if not bot:
+            return
+        ticker = bot.get('ticker')
+        if not ticker:
+            return
+        lob = _local_orderbooks.get(ticker)
+        if not lob:
+            return
+        # Snapshot under lock — copy dicts so we never serialize a moving target
+        with lob._lock:
+            yes_book = sorted(lob.yes.items(), key=lambda x: -x[0])
+            no_book = sorted(lob.no.items(), key=lambda x: -x[0])
+            book_age_ms = round((time.time() - lob.last_update_ts) * 1000) if lob.last_update_ts else None
+        dog_side = bot.get('dog_side', 'no')
+        dog_price = bot.get('dog_price') or 0
+        bot_qty = bot.get('quantity') or 0
+        # qty at our dog_price level INCLUDES our own order on Kalshi.
+        # Compare to bot_qty to infer whether anyone else is at this level.
+        side_book = dict(yes_book) if dog_side == 'yes' else dict(no_book)
+        qty_at_dog = side_book.get(dog_price, 0)
+        others_at_dog = max(0, qty_at_dog - bot_qty)
+        try:
+            _phantom_fill_book_queue.put_nowait({
+                'ts': time.time(),
+                'event': event,
+                'bot_id': bot_id,
+                'ticker': ticker,
+                'dog_side': dog_side,
+                'fav_side': bot.get('fav_side'),
+                'dog_price': dog_price,
+                'fav_price': bot.get('fav_price') or 0,
+                'bot_qty': bot_qty,
+                'dog_fill_qty': bot.get('dog_fill_qty', 0),
+                'fav_fill_qty': bot.get('fav_fill_qty', 0),
+                'ppi_score': bot.get('_ppi_at_fill') or bot.get('_ppi_launch_score'),
+                'ppi_tier_launch': bot.get('_ppi_tier_launch'),
+                'anchor_depth': bot.get('_anchor_depth_at_fill') or bot.get('anchor_depth'),
+                'target_width': bot.get('target_width'),
+                'yes_book': yes_book,
+                'no_book': no_book,
+                'qty_at_dog_price': qty_at_dog,
+                'others_at_dog_price': others_at_dog,
+                'alone_at_floor': others_at_dog == 0,
+                'book_age_ms': book_age_ms,
+            })
+        except _queue_mod.Full:
+            pass  # disk slow — drop entry rather than block
+    except Exception as _e:
+        print(f'⚠ FILL-BOOK CAPTURE: {bot_id} {_e}')
+
+
 # ─── Pending WS actions: queued by WS handler, drained by monitor into response ─
 # This ensures the frontend sees 'completed' / 'timeout_exit' actions even when
 # the WS handler wins the race against the REST monitor loop.
@@ -7403,6 +7484,11 @@ def _execute_phantom_hedge(bot_id):
                 except Exception:
                     pass
             threading.Thread(target=_snapshot_ppi_at_fill, daemon=True).start()
+
+        # Fill-time orderbook snapshot — analytics only, off hot path. Captures
+        # full book depth on both sides so we can later analyze "alone at depth
+        # floor" patterns vs P&L outcome (PPI tuning research).
+        threading.Thread(target=_capture_fill_book, args=(bot_id, 'dog_fill'), daemon=True).start()
 
         print(f'👻 PHANTOM HEDGE: {bot_id} {fav_side.upper()} @{actual_fav_price}¢ | raw={round(_raw_ms, 1) if _raw_fill_at else "?"}ms rt={round(_rt_ms, 1) if _rt_ms else "?"}ms')
         _obi_at_hedge = _obi_snapshot(bot)

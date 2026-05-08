@@ -27788,6 +27788,48 @@ def watch_position():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/admin/remove-watch-bot/<bot_id>', methods=['DELETE'])
+def admin_remove_watch_bot(bot_id):
+    """Remove a watch bot record without selling positions or cancelling
+    the underlying Kalshi orders. For cleaning up duplicate scouts that got
+    created from a double-tap (e.g. user clicked Assign Scout twice → two
+    bots created on same ticker, same qty). Surgical: only pops the dict
+    entry and saves state. The remaining scout (and any underlying
+    positions) are untouched.
+
+    Cancels only the bot's own tp_order_id if present (would be stranded
+    otherwise). Anything else on Kalshi stays put.
+    """
+    if bot_id not in active_bots:
+        return jsonify({'error': 'Bot not found'}), 404
+    bot = active_bots[bot_id]
+    if bot.get('type') != 'watch':
+        return jsonify({'error': 'Endpoint is watch-bot only'}), 400
+
+    cancelled = []
+    tp_oid = bot.get('tp_order_id')
+    if tp_oid:
+        try:
+            api_rate_limiter.wait()
+            kalshi_client.cancel_order(tp_oid)
+            cancelled.append(f'tp_order_id={tp_oid}')
+        except Exception as _e:
+            print(f'⚠ admin_remove_watch_bot({bot_id}): tp cancel failed: {_e}')
+
+    summary = {
+        'ticker': bot.get('ticker'),
+        'side': bot.get('side'),
+        'quantity': bot.get('quantity'),
+        'entry_price': bot.get('entry_price'),
+        'cancelled_orders': cancelled,
+    }
+    del active_bots[bot_id]
+    save_state()
+    bot_log('ADMIN_REMOVE_WATCH_BOT', bot_id, summary, level='WARN')
+    print(f'🗑 ADMIN REMOVE WATCH: {bot_id} (positions kept on Kalshi)')
+    return jsonify({'success': True, 'removed': bot_id, **summary})
+
+
 _startup_done = False
 
 def _run_startup():

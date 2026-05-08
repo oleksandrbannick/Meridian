@@ -18957,21 +18957,16 @@ def _handle_apex(bot_id, bot, actions):
                 return  # room too tight — stay pulled
             _apex_mm_repost_ladder(bot_id, bot)
         else:
-            # Update pull reason to show what's actually blocking recovery
-            _lob = _local_orderbooks.get(ticker)
-            if _lob and _lob.last_update_ts > 0 and (time.time() - _lob.last_update_ts) < 10:
-                _yd = _lob.get_total_depth('yes', 3)
-                _nd = _lob.get_total_depth('no', 3)
-                _obi = _lob.get_weighted_obi()
-                _parts = []
-                if _yd < _rec_min:
-                    _parts.append(f'thin_yes ({_yd:.0f}<{_rec_min})')
-                if _nd < _rec_min:
-                    _parts.append(f'thin_no ({_nd:.0f}<{_rec_min})')
-                if abs(_obi) > APEX_MM_RECOVER_OBI:
-                    _parts.append(f'obi ({_obi:.2f}>{APEX_MM_RECOVER_OBI:.2f})')
-                if _parts:
-                    bot['_last_pull_reason'] = ' + '.join(_parts) + ' (entry only)'
+            # Recovery blocked. _apex_depth_recovered only checks two things:
+            # bids on both sides AND max_bid < drift_recovery. Display the
+            # actual blocker — was previously stamping thin/obi cosmetically
+            # which lied (those gates were already dead via room_override).
+            _yb_rec = bot.get('live_yes_bid', 0) or 0
+            _nb_rec = bot.get('live_no_bid', 0) or 0
+            if _yb_rec <= 0 or _nb_rec <= 0:
+                bot['_last_pull_reason'] = f'no bids (yes={_yb_rec}c, no={_nb_rec}c) (entry only)'
+            elif max(_yb_rec, _nb_rec) >= APEX_MM_DRIFT_GUARD_RECOVERY:
+                bot['_last_pull_reason'] = f'drift_guard (max_bid={max(_yb_rec, _nb_rec)}c >= {APEX_MM_DRIFT_GUARD_RECOVERY}c) (entry only)'
         return
 
     # ── STATUS: mm_exiting — monitor exit orders ──

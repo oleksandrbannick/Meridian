@@ -5142,6 +5142,14 @@ def _ws_maker_sell_follow(ticker, yes_ask, no_ask):
             _posted = _sv.get('posted_price', 0)
             if _current_ask == _posted:
                 continue  # already at ask, nothing to do
+            # Compute remaining count: original qty minus fills already booked on
+            # prior (replaced) oids in the chain, minus most recent fills observed
+            # on the CURRENT oid by the monitor poll. Cap at >=1 to avoid sending
+            # a zero-count amend; if remaining is 0 we have nothing left to sell.
+            _orig_qty = _sv.get('qty', 1)
+            _remaining = _orig_qty - _sv.get('_chain_filled', 0) - _sv.get('_last_oid_fills', 0)
+            if _remaining < 1:
+                continue  # already filled — monitor will detect and clean up
             # Ask changed — shadow it (follow up or down to stay at ask)
             try:
                 _amend_kw = {f'{_side}_price': _current_ask}
@@ -5149,15 +5157,19 @@ def _ws_maker_sell_follow(ticker, yes_ask, no_ask):
                 # action='sell' required — amend_order defaults to 'buy' which Kalshi rejects
                 # for sell orders, leaving posted_price stuck at the original ask forever.
                 _sell_resp = kalshi_client.amend_order(_sv['oid'], ticker=ticker, side=_side,
-                                         count=_sv.get('qty', 1), action='sell', **_amend_kw)
-                # Kalshi amend can return a new order ID — track it
+                                         count=_remaining, action='sell', **_amend_kw)
+                # Kalshi amend can return a new order ID — track it. When it does,
+                # the OLD oid's fills become "settled in the chain" — fold them into
+                # _chain_filled and reset _last_oid_fills (new oid starts at 0 fills).
                 _sell_ord = _sell_resp.get('order', _sell_resp) if isinstance(_sell_resp, dict) else {}
                 _sell_new_oid = _sell_ord.get('order_id', '')
                 if _sell_new_oid and _sell_new_oid != _sv['oid']:
+                    _sv['_chain_filled'] = _sv.get('_chain_filled', 0) + _sv.get('_last_oid_fills', 0)
+                    _sv['_last_oid_fills'] = 0
                     _sv['oid'] = _sell_new_oid
                 _dir = '↓' if _current_ask < _posted else '↑'
                 _sv['posted_price'] = _current_ask
-                print(f'⚡ WS MAKER SELL SNAP: {_sv["reason"]} {_side} {ticker} {_posted}→{_current_ask}¢ {_dir}')
+                print(f'⚡ WS MAKER SELL SNAP: {_sv["reason"]} {_side} {ticker} {_posted}→{_current_ask}¢ {_dir} (remaining={_remaining})')
             except Exception as _e:
                 if '404' in str(_e) or 'not found' in str(_e).lower():
                     print(f'⚠ WS MAKER SELL SNAP: order gone for {_sv["reason"]} — will repost on next monitor tick')
@@ -14993,6 +15005,16 @@ def execute_maker_sell(ticker, side, count, reason='maker_exit'):
             _pending_maker_sells[_sell_key] = {
                 'oid': oid, 'ticker': ticker, 'side': side, 'qty': count,
                 'posted_price': ask, 'posted_at': time.time(), 'reason': reason,
+                # Track cumulative fills across the amend chain. Each cancel-replace
+                # creates a new oid with FRESH count on Kalshi; without tracking the
+                # old oid's fills, we re-arm the full count on every walk-down and
+                # over-sell (TSUSAI-SAI 2026-05-08: 50 NO orphan, walk 35→19c
+                # produced 100 fills total → went short 50 NO = synthetic +50 YES @81c).
+                # _chain_filled = sum of fills on PRIOR (replaced) oids in the chain.
+                # _last_oid_fills = most recent observed fill count on the CURRENT oid.
+                # Updated by the monitor loop's get_order; consumed by both amend paths.
+                '_chain_filled': 0,
+                '_last_oid_fills': 0,
             }
             return oid, ask
         else:
@@ -19738,7 +19760,14 @@ def _run_monitor():
                 _s_ord = _s_resp.get('order', _s_resp) if isinstance(_s_resp, dict) else {}
                 _s_fills = _parse_fill_count(_s_ord)
                 _s_status = _s_ord.get('status', '')
-                if _s_fills >= _s_qty or _s_status in ('filled', 'executed'):
+                # Cache current oid's fill count for the WS amend path (which
+                # avoids its own get_order to keep the WS handler fast).
+                _sv['_last_oid_fills'] = _s_fills
+                # Total sold across the entire amend chain (prior replaced oids
+                # + current oid). Used for fill detection, repost qty, and the
+                # WS amend path's remaining-qty calc.
+                _s_chain_total = _sv.get('_chain_filled', 0) + _s_fills
+                if _s_chain_total >= _s_qty or _s_status in ('filled', 'executed'):
                     print(f'✅ MAKER SELL FILLED: {_sv["reason"]} {_s_side} {_s_qty}x {_s_ticker} — confirmed')
                     bot_log('MAKER_SELL_CONFIRMED', f'sell_{_s_ticker}', {
                         'side': _s_side, 'qty': _s_qty, 'price': _sv['posted_price'],
@@ -19747,13 +19776,14 @@ def _run_monitor():
                     del _pending_maker_sells[_sk]
                     continue
                 if _s_status in ('cancelled', 'canceled'):
-                    # Order was cancelled externally — repost at current ask.
-                    # Only delete the old entry if the repost SUCCEEDS — otherwise
-                    # the orphan position is left dangling forever (e.g., 400 from
-                    # Kalshi, no ask available, etc). Leaving the entry means the
-                    # next monitor cycle re-tries until success.
+                    # Order was cancelled externally — repost at current ask for
+                    # whatever's left across the WHOLE chain (not just current oid).
                     print(f'⚠ MAKER SELL CANCELLED: {_sv["reason"]} — reposting')
-                    _new_oid, _ = execute_maker_sell(_s_ticker, _s_side, _s_qty - _s_fills, reason=_sv['reason'])
+                    _repost_qty = _s_qty - _s_chain_total
+                    if _repost_qty < 1:
+                        del _pending_maker_sells[_sk]
+                        continue
+                    _new_oid, _ = execute_maker_sell(_s_ticker, _s_side, _repost_qty, reason=_sv['reason'])
                     if _new_oid:
                         del _pending_maker_sells[_sk]
                     else:
@@ -19786,36 +19816,53 @@ def _run_monitor():
                             _dir = '↓' if _new_price < _sv['posted_price'] else '↑'
                             print(f'📤 MAKER SELL SHADOW: {_sv["reason"]} {_s_side} {_s_ticker} {_sv["posted_price"]}→{_new_price}c {_dir} (bid={_s_bid} ask={_s_ask} age={int(_s_age)}s)')
                     if _new_price != _sv['posted_price'] and _new_price > 0:
+                        # Pass the REMAINING count (qty - chain fills - current
+                        # oid fills), not the original qty. Without this, every
+                        # cancel-replace re-arms a fresh full-count sell and
+                        # over-sells the user's holdings.
+                        _amend_remaining = _s_qty - _s_chain_total
+                        if _amend_remaining < 1:
+                            # Already filled across chain — let the next cycle
+                            # detect via _s_chain_total >= _s_qty and clean up.
+                            continue
                         try:
                             _amend_kw = {f'{_s_side}_price': _new_price}
                             api_rate_limiter.wait()
                             # action='sell' required — amend_order defaults to 'buy'.
-                            _amend_resp = kalshi_client.amend_order(_s_oid, ticker=_s_ticker, side=_s_side, count=_s_qty, action='sell', **_amend_kw)
-                            # Capture new order ID from amend
+                            _amend_resp = kalshi_client.amend_order(_s_oid, ticker=_s_ticker, side=_s_side, count=_amend_remaining, action='sell', **_amend_kw)
+                            # Capture new order ID from amend. When oid changes,
+                            # fold the old oid's fills into _chain_filled — the
+                            # new oid starts fresh at 0 fills.
                             _amend_ord = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
                             _amend_new_oid = _amend_ord.get('order_id', '')
                             if _amend_new_oid and _amend_new_oid != _s_oid:
+                                _sv['_chain_filled'] = _sv.get('_chain_filled', 0) + _s_fills
+                                _sv['_last_oid_fills'] = 0
                                 _sv['oid'] = _amend_new_oid
                                 _s_oid = _amend_new_oid
                             _sv['posted_price'] = _new_price
-                            print(f'📤 MAKER SELL AMEND: {_sv["reason"]} {_s_side} {_s_ticker} → {_new_price}¢ (ask={_s_ask} bid={_s_bid})')
+                            print(f'📤 MAKER SELL AMEND: {_sv["reason"]} {_s_side} {_s_ticker} → {_new_price}¢ (remaining={_amend_remaining} ask={_s_ask} bid={_s_bid})')
                         except Exception as _ae:
                             if '404' in str(_ae) or 'not found' in str(_ae).lower():
-                                # Order gone — repost
+                                # Order gone — repost remaining
+                                _repost_qty = _s_qty - _s_chain_total
                                 del _pending_maker_sells[_sk]
-                                execute_maker_sell(_s_ticker, _s_side, _s_qty - _s_fills, reason=_sv['reason'])
+                                if _repost_qty >= 1:
+                                    execute_maker_sell(_s_ticker, _s_side, _repost_qty, reason=_sv['reason'])
                             else:
                                 print(f'⚠ MAKER SELL AMEND failed: {_sv["reason"]} {_s_side} {_s_ticker} {_sv["posted_price"]}→{_new_price}¢: {_ae}')
-                # Timeout: after 5 min, cancel and repost fresh
+                # Timeout: after 5 min, cancel and repost fresh for whatever's
+                # left across the WHOLE chain (not just current oid's deficit).
                 if _s_age > 300:
                     try:
                         api_rate_limiter.wait()
                         kalshi_client.cancel_order(_s_oid)
                     except Exception:
                         pass
+                    _repost_qty = _s_qty - _s_chain_total
                     del _pending_maker_sells[_sk]
-                    if _s_fills < _s_qty:
-                        execute_maker_sell(_s_ticker, _s_side, _s_qty - _s_fills, reason=_sv['reason'])
+                    if _repost_qty >= 1:
+                        execute_maker_sell(_s_ticker, _s_side, _repost_qty, reason=_sv['reason'])
             except Exception as _se:
                 # Don't let one bad sell break the whole monitor
                 if time.time() - _sv['posted_at'] > 600:

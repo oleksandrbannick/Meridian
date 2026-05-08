@@ -7248,36 +7248,23 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     }
 
     // ── SECTION 3: Ladder grid ──
-    // Only render the N=bot.levels expected rungs (mirrors backend _apex_mm_levels).
-    // Stale yes_orders/no_orders entries from walked/reposted prices are filtered out.
+    // Render ONLY what's actually live on Kalshi — iterate yes_orders / no_orders
+    // dicts directly. Per user 2026-05-08: "frontend should only be rendering
+    // what's live". Previous expected-vs-actual approach diverged from reality
+    // when auto-width gap shifted between cycles — orders sat live on Kalshi
+    // but the formula-predicted prices didn't match, hiding them as OFF
+    // placeholders. Now the card always shows the truth: every entry with an
+    // OID renders LIVE at its real price; consumed (fully-filled) entries with
+    // OIDs render FILLED. Empty slots are blank, not synthetic placeholders.
     const yesOrders = bot.yes_orders || {};
     const noOrders = bot.no_orders || {};
     const baseQty = bot.base_qty || bot.qty_per_level || 10;
-    const _cfgLevels = bot.levels || 4;
-    const _cfgGap = bot.start_gap || 4;
-    const _cfgSpacing = bot.spacing || 1;
-    const _cfgMid = bot.midpoint || 50;
-    // Expected ladder prices — mirror backend _apex_mm_levels:
-    //   YES top = mid - gap, NO top = (100-mid) - gap (inside spread, full edge).
-    //   Sub-rungs ladder down by `spacing`.
-    // Frontend mirrors to look up the right dict keys; otherwise it shows
-    // stale entries from prior posts at wrong prices.
-    const _expectedYes = [];
-    const _expectedNo = [];
-    const _effLevels = _cfgLevels;
-    const _yesTop = _cfgMid - _cfgGap;
-    const _noTop  = (100 - _cfgMid) - _cfgGap;
-    for (let i = 0; i < _effLevels; i++) {
-        const yp = _yesTop - (i * _cfgSpacing);
-        const np = _noTop - (i * _cfgSpacing);
-        if (yp >= 1) _expectedYes.push(yp);
-        if (np >= 1) _expectedNo.push(np);
-    }
-    // Build sorted lists limited to expected prices. If a live order exists at that price,
-    // use its state; otherwise show a shaded placeholder.
-    const _emptyLevel = { oid: null, qty: baseQty, fill_qty: 0 };
-    const sortedYes = _expectedYes.map(p => [String(p), yesOrders[String(p)] || _emptyLevel]);
-    const sortedNo = _expectedNo.map(p => [String(p), noOrders[String(p)] || _emptyLevel]);
+    const _liveEntries = (orders) => Object.entries(orders)
+        .filter(([_, l]) => l && l.oid)  // OID set = order exists on Kalshi
+        .map(([p, l]) => [p, l])
+        .sort((a, b) => parseInt(b[0]) - parseInt(a[0]));  // highest price first
+    const sortedYes = _liveEntries(yesOrders);
+    const sortedNo = _liveEntries(noOrders);
 
     const _rungHtml = (price, level, sideCol, isExitSide) => {
         const filled = level.fill_qty || 0;

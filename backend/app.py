@@ -10292,10 +10292,10 @@ def _apex_mm_exit_width(bot):
 
 def _apex_mm_target_start_gap(bot):
     """Compute target start_gap based on current room (excluding our own orders).
-    Target width = room/2 → target gap = room/2 (per side, so top rung lands at bid).
-    Auto mode (_auto_width=True): gap = room/2 unbounded (was capped at 20, which
-    pinned us 10c+ above bid in wide rooms = adverse selection). Sport floor still
-    applies as lower bound.
+    Target width = (room - 4) capped at 40 → target gap = (room - 4) // 2 capped at 20.
+    Per user 2026-05-08: start 4c inside the spread (above bid by 2c per side) so
+    the bot becomes the new best bid (BBO+2). Cap at gap=20 prevents wide rooms
+    from posting at the bid (adverse selection). Sport floor still applies.
     Manual mode: user's start_gap acts as floor; cap at start_gap + 6."""
     user_min = bot.get('start_gap', 2)
     yes_bid = _apex_mm_market_best_bid(bot, 'yes')
@@ -10307,11 +10307,9 @@ def _apex_mm_target_start_gap(bot):
     if room <= 0:
         return max(user_min, floor)
     if bot.get('_auto_width'):
-        # Match the BBO — top rungs land at market_yes_bid / market_no_bid.
-        # Cap removed 2026-05-08: with cap=20 in a room=60 market, gap stayed
-        # 20 → top = mid-20 = 10c above bid → adverse fills. Uncapped lets the
-        # formula reach bid in wide rooms.
-        return max(floor, room // 2)
+        # User spec: room=30 → width=26 (gap=13, BBO+2 each side); room>=44 →
+        # width=40 (gap=20 cap, sits 20c inside spread per side, walks in over time).
+        return max(floor, min(20, (room - 4) // 2))
     target = max(user_min, int(room / 4))
     cap = bot.get('max_start_gap', user_min + 6)
     return max(floor, min(target, cap))
@@ -10441,7 +10439,7 @@ def _apex_mm_sync_auto_width(bot_id, bot):
     # BBO, which on a pure-BBO maker meant top rungs at bid+1/+2 and got
     # silently disabled, leaving only deeper rungs live and the bot
     # self-cannibalizing its own bid.
-    new_gap = max(floor, room // 2)
+    new_gap = max(floor, min(20, (room - 4) // 2))
     old_gap = bot.get('start_gap', 2)
     if new_gap != old_gap:
         bot['start_gap'] = new_gap
@@ -11909,13 +11907,14 @@ def _apex_mm_walk_up(bot_id, bot):
     current_price = bot.get('_exit_price', 0)
     net_held = abs(net_yes - net_no)
 
-    # Read from ticker channel (bot.live_<side>_bid) — reliable per
-    # feedback_ws_ticker_not_delta.md. Fall back to delta orderbook only when
-    # ticker hasn't populated. The delta channel was returning 0/stale, leaving
-    # exits stranded for 14+ minutes (KRO bot: exit=85c, bid=92c, walk_age=849s).
-    _market_best_bid = bot.get(f'live_{exit_side}_bid', 0) or 0
-    if _market_best_bid <= 0:
-        _market_best_bid = _apex_mm_market_best_bid(bot, exit_side)
+    # External best bid (EXCLUDES our own resting exit order). Critical: the
+    # local orderbook's live_<side>_bid includes our exit, so when we're alone
+    # at the top, live_bid == our_price, which would falsely trigger the "tied"
+    # branch and flip _bbo_state to 'queue' (frontend shows JOINED, countdown
+    # disappears). _apex_mm_market_best_bid returns 0 when we're the only
+    # participant — that's exactly when we should treat as ALONE and skip the
+    # match/follow branches, NOT fall back to live_bid (which still includes us).
+    _market_best_bid = _apex_mm_market_best_bid(bot, exit_side)
     # Walk cap = combined 95c. Voluntary creep stops at 5c profit floor (not 1c).
     # Per design memo project_apex_mm_maker_model_2026_05_02: "95c walk cap".
     # Prior 99-avg_held let the creep eat all the way to 1c profit, burning the
@@ -14090,7 +14089,7 @@ def create_ladder_arb_bot():
                 return jsonify({'error': f'Room {_room}c — need >= 2c (no spread to capture)'}), 400
             # Unified with _apex_mm_target_start_gap and _apex_mm_sync_auto_width:
             # all three paths use room // 2 (BBO match). Below 6c → BBO-tight.
-            start_gap = max(1, _room // 2) if _room >= 6 else 1
+            start_gap = max(1, min(20, (_room - 4) // 2)) if _room >= 6 else 1
         yes_levels, no_levels = _apex_mm_levels(midpoint, start_gap, levels, spacing, base_qty=qty_per_level, inv_limit=0)
         # Auto-compute inventory limit from ladder total (max contracts per side)
         inventory_limit = max(sum(q for _, q in yes_levels), sum(q for _, q in no_levels)) if yes_levels or no_levels else 50

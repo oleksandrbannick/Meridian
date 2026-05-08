@@ -6661,43 +6661,9 @@ def _ws_realtime_fill_handler(ticker, order_id, side, count):
                         # "orphan" hedges (CHEROD-CHE 2026-04-28).
                         def _cancel_and_reconcile(oid, bot_id_ref=bot_id, partial_q=_partial_q_snap):
                             _result = _safe_cancel(oid, f'sweep_cancel_{bot_id_ref}')
-                            # Three return shapes from _safe_cancel:
-                            #   ('filled', N)  — 404 path detected fills via get_order
-                            #   True           — cancel succeeded with 200 OK (Kalshi may
-                            #                    have accepted MORE fills before processing
-                            #                    the cancel; or the order was already fully
-                            #                    filled and Kalshi returned 200 instead of 404)
-                            #   '404' / False  — order gone w/ 0 fills, or cancel failed
-                            #
-                            # The True case is the gap that produced PRAGAD-PRA 2026-05-06:
-                            # bot saw 12 fills via WS, sent cancel, by the time cancel
-                            # landed Kalshi had 30 fills; cancel returned 200 OK, so we
-                            # never knew about the extra 18. Verify-rehedge caught it
-                            # ~60-90s later, but by then fav bid had walked from 66c→82c.
-                            # Fix: when cancel returns True, do our own get_order to read
-                            # the final fill count. If higher than partial_q, route through
-                            # the same amend/supp logic as the 404 path.
-                            _actual = None
-                            if isinstance(_result, tuple) and _result[0] == 'filled':
-                                _actual = _result[1]
-                            elif _result is True:
-                                # Cancel succeeded — but check if Kalshi accepted any extra
-                                # fills between our WS event and the cancel landing.
-                                try:
-                                    api_read_limiter.wait()
-                                    _ord_resp = kalshi_client.get_order(oid)
-                                    _ord_data = _ord_resp.get('order', _ord_resp) if isinstance(_ord_resp, dict) else {}
-                                    _post_cancel_fills = _parse_fill_count(_ord_data)
-                                    if _post_cancel_fills > partial_q:
-                                        _actual = _post_cancel_fills
-                                        print(f'🛡 sweep_cancel_{bot_id_ref}: post-cancel fills detected ({_post_cancel_fills} on Kalshi vs {partial_q} hedged)')
-                                        bot_log('SAFE_CANCEL_200_FILLS', f'sweep_cancel_{bot_id_ref}', {
-                                            'order_id': oid, 'partial_hedged': partial_q, 'kalshi_fills': _post_cancel_fills,
-                                        }, level='WARN')
-                                except Exception as _gc_err:
-                                    print(f'⚠ sweep_cancel_{bot_id_ref}: post-cancel get_order failed: {_gc_err}')
-                            if _actual is None:
+                            if not (isinstance(_result, tuple) and _result[0] == 'filled'):
                                 return
+                            _actual = _result[1]
                             _extra = _actual - partial_q
                             if _extra <= 0:
                                 return

@@ -5268,6 +5268,14 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask, _ws_event
             fav_oid = bot.get('fav_order_id')
             if not fav_oid:
                 continue
+            # Subtract fills already booked on this hedge cycle (mirror snap-up).
+            # Each amend can cancel-replace under the hood; without this, the new
+            # oid starts at FRESH count and over-hedges across the chain.
+            _drop_qty_orig = bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1))
+            _drop_fav_filled = bot.get('fav_fill_qty', 0) or 0
+            _drop_remaining = _drop_qty_orig - _drop_fav_filled
+            if _drop_remaining < 1:
+                continue
             amend_kwargs = {f'{fav_side}_price': drop_target}
             # Priority: fav drop is WS tick-driven — same justification as dog retreat.
             api_rate_limiter.wait(priority=True)
@@ -5280,7 +5288,7 @@ def _ws_phantom_instant_drop(ticker, yes_bid, no_bid, yes_ask, no_ask, _ws_event
                 try: _record_latency('raw_snap_phantom', _snap_ms, {'kind': 'drop', 'ticker': ticker})
                 except Exception: pass
             _amend_resp = kalshi_client.amend_order(fav_oid, ticker=hedge_ticker, side=fav_side,
-                                      count=bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1)),
+                                      count=_drop_remaining,
                                       **amend_kwargs)
             # Capture new order ID if Kalshi reassigned (amend = cancel+repost internally)
             _amend_order = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
@@ -5747,6 +5755,17 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask, _ws_ev
             if not fav_oid:
                 continue
             qty = bot.get('_active_fav_qty') or bot.get('_partial_hedge_qty') or bot.get('hedge_qty', bot.get('quantity', 1))
+            # Subtract fills already booked on this hedge cycle. Each amend can
+            # cancel-replace under the hood (Kalshi returns new oid), and the
+            # new oid starts at FRESH count=qty regardless of prior fills. Without
+            # this subtraction, walking the bid 4-5c re-arms 4-5x the original qty
+            # and over-hedges. BOUYAM-YAM 2026-05-08: ~75 NO orphans on a 75-qty
+            # cycle. bot.fav_fill_qty is the canonical cumulative fav fill counter
+            # (incremented by the WS fill handler on every fav fill event).
+            _fav_filled = bot.get('fav_fill_qty', 0) or 0
+            _remaining_qty = qty - _fav_filled
+            if _remaining_qty < 1:
+                continue  # nothing left to amend — fav fully filled this cycle
             amend_kwargs = {f'{fav_side}_price': snap_target}
             # Priority: fav snap-up is WS tick-driven — jump the queue when fav bid rises.
             api_rate_limiter.wait(priority=True)
@@ -5757,7 +5776,7 @@ def _ws_phantom_instant_snap_up(ticker, yes_bid, no_bid, yes_ask, no_ask, _ws_ev
                 try: _record_latency('raw_snap_phantom', _snap_ms, {'kind': 'snap_up', 'ticker': ticker})
                 except Exception: pass
             _amend_resp = kalshi_client.amend_order(fav_oid, ticker=hedge_ticker, side=fav_side,
-                                        count=qty, **amend_kwargs)
+                                        count=_remaining_qty, **amend_kwargs)
             _amend_order = _amend_resp.get('order', _amend_resp) if isinstance(_amend_resp, dict) else {}
             _new_oid = _amend_order.get('order_id', '')
             if _new_oid and _new_oid != fav_oid:

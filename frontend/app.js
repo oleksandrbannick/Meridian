@@ -6340,8 +6340,6 @@ async function deployMarketMaker() {
     showNotification(`Deploying Apex MM on ${ticker}...`);
 
     try {
-        // queue_join_mode now auto-flipped by backend on detected undercut spiral
-        // (see _apex_mm_record_undercut_and_maybe_flip). Always create as default.
         const resp = await fetch(`${API_BASE}/bot/ladder-arb`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -6352,7 +6350,6 @@ async function deployMarketMaker() {
                 loss_limit_cents: lossLimitCents,
                 smart_mode: lossLimitCents > 0 ? true : false,
                 auto_width: _mmAutoWidth,
-                queue_join_mode: false,
             }),
         });
         const data = await resp.json();
@@ -7260,29 +7257,16 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
     const _cfgGap = bot.start_gap || 4;
     const _cfgSpacing = bot.spacing || 1;
     const _cfgMid = bot.midpoint || 50;
-    // Expected ladder prices — backend uses TWO formulas:
-    //   queue_join_mode: YES top = live_yes_bid, NO top = live_no_bid (anchor at BBO)
-    //   default:         YES top = mid - gap, NO top = (100-mid) - gap (inside spread)
-    // Frontend must mirror to look up the right dict keys; otherwise it shows
+    // Expected ladder prices — mirror backend _apex_mm_levels:
+    //   YES top = mid - gap, NO top = (100-mid) - gap (inside spread, full edge).
+    //   Sub-rungs ladder down by `spacing`.
+    // Frontend mirrors to look up the right dict keys; otherwise it shows
     // stale entries from prior posts at wrong prices.
     const _expectedYes = [];
     const _expectedNo = [];
-    const _qj = !!bot.queue_join_mode;
-    const _qjYesTop = bot.live_yes_bid || 0;
-    const _qjNoTop = bot.live_no_bid || 0;
-    // Tight-room override removed (2026-05-07): always honor configured levels.
     const _effLevels = _cfgLevels;
-    // Top-rung calc (mirrors backend _apex_mm_levels).
-    // Normal: top = bid+1, sub-rungs ladder DOWN through bid.
-    // Join:   top = bid,   sub-rungs ladder DOWN from there.
-    let _yesTop, _noTop;
-    if (_qj && _qjYesTop > 0 && _qjNoTop > 0) {
-        _yesTop = _qjYesTop;
-        _noTop = _qjNoTop;
-    } else {
-        _yesTop = _qjYesTop > 0 ? (_qjYesTop + 1) : (_cfgMid - _cfgGap);
-        _noTop  = _qjNoTop  > 0 ? (_qjNoTop  + 1) : ((100 - _cfgMid) - _cfgGap);
-    }
+    const _yesTop = _cfgMid - _cfgGap;
+    const _noTop  = (100 - _cfgMid) - _cfgGap;
     for (let i = 0; i < _effLevels; i++) {
         const yp = _yesTop - (i * _cfgSpacing);
         const np = _noTop - (i * _cfgSpacing);
@@ -7480,7 +7464,7 @@ function _renderLadderArbCard(bot, botId, container, gameScores, gameKey) {
         ${historyHtml}
 
         <div style="display:flex;gap:6px;flex-wrap:wrap;padding-top:4px;font-size:9px;color:#334;">
-            <span style="color:#00d4ff;">W:${bot._auto_width ? `<span style="color:#00ff88;">auto</span> ${width}` : width}${bot.queue_join_mode ? ` <span style="color:${bot._auto_join_at ? '#ff7043' : '#00d4ff'};background:${bot._auto_join_at ? '#ff704322' : '#00d4ff22'};padding:0 4px;border-radius:3px;font-weight:700;font-size:8px;letter-spacing:.04em;" title="${bot._auto_join_at ? 'Auto-flipped to Join after a confirmed undercut. Snapped to AT bid (matches market). Manual revert via Edit modal.' : 'Join Room Mode — posting AT live bid'}">📌 ${bot._auto_join_at ? 'AUTO-JOIN' : 'JOIN'}</span>` : ''}</span>
+            <span style="color:#00d4ff;">W:${bot._auto_width ? `<span style="color:#00ff88;">auto</span> ${width}` : width}</span>
             <span style="color:#e0e0e0;">Mid:${midpoint}</span>
             <span style="color:#ff7043;">${bot.base_qty || bot.qty_per_level || '?'}x${bot.levels || '?'}</span>
             ${room >= 0 ? `<span style="color:${roomCol};font-weight:${room < width ? 700 : 400};">Room:${room}${roomTag}</span>` : ''}
@@ -10647,8 +10631,6 @@ async function apexMmModifySave(botId, restartMode = false) {
     const qty = Math.max(1, Math.min(100, parseInt(document.getElementById('apex-edit-qty')?.value) || 10));
     const lossLimit = Math.max(0, parseInt(document.getElementById('apex-edit-loss-limit')?.value) || 0);
     const autoWidth = document.getElementById('apex-edit-auto-width')?.value === '1';
-    // queue_join_mode removed from edit modal — backend auto-flips on
-    // confirmed undercut. Manual override no longer exposed in UI.
     try {
         const resp = await fetch(`${API_BASE}/bot/apex-mm/edit/${botId}`, {
             method: 'POST',

@@ -11907,14 +11907,20 @@ def _apex_mm_walk_up(bot_id, bot):
     current_price = bot.get('_exit_price', 0)
     net_held = abs(net_yes - net_no)
 
-    # External best bid (EXCLUDES our own resting exit order). Critical: the
-    # local orderbook's live_<side>_bid includes our exit, so when we're alone
-    # at the top, live_bid == our_price, which would falsely trigger the "tied"
-    # branch and flip _bbo_state to 'queue' (frontend shows JOINED, countdown
-    # disappears). _apex_mm_market_best_bid returns 0 when we're the only
-    # participant — that's exactly when we should treat as ALONE and skip the
-    # match/follow branches, NOT fall back to live_bid (which still includes us).
-    _market_best_bid = _apex_mm_market_best_bid(bot, exit_side)
+    # Outbidder detection uses the TICKER channel (reliable per
+    # feedback_ws_ticker_not_delta.md). When the real bid moves up, ticker
+    # updates instantly while the delta orderbook lags by seconds — using
+    # delta alone left us stuck at 51c while ticker said 52c.
+    #
+    # Tie-vs-alone disambiguation uses the DELTA channel via
+    # _apex_mm_market_best_bid (which subtracts our contribution). This is the
+    # only signal that can distinguish "alone at top" from "tied with peer at
+    # our price" when ticker_bid == our current price.
+    _ticker_bid = bot.get(f'live_{exit_side}_bid', 0) or 0
+    _delta_external_bid = _apex_mm_market_best_bid(bot, exit_side)
+    # Effective comparison bid: prefer ticker for >current detection, fall
+    # back to delta only when ticker is 0 (rare — feed glitch).
+    _market_best_bid = _ticker_bid if _ticker_bid > 0 else _delta_external_bid
     # Walk cap = combined 95c. Voluntary creep stops at 5c profit floor (not 1c).
     # Per design memo project_apex_mm_maker_model_2026_05_02: "95c walk cap".
     # Prior 99-avg_held let the creep eat all the way to 1c profit, burning the
@@ -11938,7 +11944,14 @@ def _apex_mm_walk_up(bot_id, bot):
         _bbo_state = 'queue'
         _mode = f'match@bid (outbidder {_market_best_bid}c, ask_cap={_ask_cap}c)'
     elif _market_best_bid > 0 and _market_best_bid == current_price:
-        _bbo_state = 'queue'
+        # Ticker says bid == our price. Could be tied (peer at our price) or
+        # alone (we ARE the top, ticker reflects us). Delta is authoritative
+        # for tie detection — it excludes our orders. If delta also reports
+        # >= our price, peer is real → JOINED. Otherwise we're alone (ticker
+        # is just echoing our exit's contribution to top-of-book).
+        if _delta_external_bid > 0 and _delta_external_bid >= current_price:
+            _bbo_state = 'queue'
+        # else: stays 'alone' (initialized at line 11938)
 
     # Branch B: alone (we are BBO) → time-decay creep +1c per phase-aware interval.
     # Caps at min(95-avg, ask-1) so we never volunteer below the 5c profit floor
@@ -11953,25 +11966,25 @@ def _apex_mm_walk_up(bot_id, bot):
             _mode = f'creep +1c (alone, age={now - _last_walk:.0f}s, iv={_walk_iv}s, cap={_walk_cap}c)'
 
     # Branch C: drop to track the real BBO when above target.
+    # Uses DELTA external bid (excludes our orders) — when we're top of book,
+    # ticker echoes us and would never trigger a drop. Delta sees the actual
+    # next-best price the market is willing to pay.
     # Combined-based rule (per user spec):
     #   - combined ≥ 95c at target → match bid exactly (danger zone)
     #   - combined < 95c at target → bid+1 (safe zone, queue priority)
-    # Compute target FIRST, then drop if current > target. (Previous trigger
-    # was current > bid+1 which missed the case where current=bid+1 but the
-    # rule says match exactly — bot would sit at bid+1 in danger zone forever.)
-    if _new_price == 0 and _market_best_bid > 0:
-        _bid_match_combined = avg_held + _market_best_bid
+    if _new_price == 0 and _delta_external_bid > 0:
+        _bid_match_combined = avg_held + _delta_external_bid
         if _bid_match_combined >= 95:
-            _candidate_drop = _market_best_bid          # match exactly in danger zone
+            _candidate_drop = _delta_external_bid          # match exactly in danger zone
             _drop_mode_label = 'match@bid'
         else:
-            _candidate_drop = _market_best_bid + 1      # bid+1 in safe zone
+            _candidate_drop = _delta_external_bid + 1      # bid+1 in safe zone
             _drop_mode_label = 'bid+1'
         _candidate_drop = max(1, min(_candidate_drop, _ask_cap))
         if _candidate_drop < current_price:
             _new_price = _candidate_drop
             _bbo_state = 'alone'
-            _mode = f'follow-down → {_drop_mode_label} ({_candidate_drop}c, real top {_market_best_bid}c, combined→{avg_held + _candidate_drop}c)'
+            _mode = f'follow-down → {_drop_mode_label} ({_candidate_drop}c, real top {_delta_external_bid}c, combined→{avg_held + _candidate_drop}c)'
 
     bot['_bbo_state'] = _bbo_state
     bot['_bbo_market_best'] = _market_best_bid

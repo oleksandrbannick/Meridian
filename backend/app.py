@@ -17084,13 +17084,29 @@ def _handle_phantom(bot_id, bot, actions):
                     if _fav_fills_total > fav_filled:
                         fav_filled = _fav_fills_total
                         bot['fav_fill_qty'] = fav_filled
-                    _live_fav_unfilled = max(0, _live_fav_count - _live_fav_fills) if _live_fav_status in ('resting', 'partially_filled') else 0
+                    # Outstanding-qty calculation. Default to (count − fills); only
+                    # zero out on EXPLICIT terminal status. Prior code gated on
+                    # status ∈ {resting, partially_filled} and treated everything
+                    # else as 0 outstanding — so a transient/empty status during
+                    # an amend cancel-replace made reconcile think there was 0
+                    # left to fill, fired a premature supplemental, and the
+                    # original order then filled its real outstanding qty →
+                    # over-hedge. CHAYAS-YAS 2026-05-08: live oid had 8 outstanding,
+                    # status read as non-resting transient, supp fired for 8 →
+                    # 8 YES over-hedge.
+                    _terminal_statuses = ('canceled', 'closed', 'expired', 'rejected')
+                    if _live_fav_status in _terminal_statuses:
+                        _live_fav_unfilled = 0
+                    else:
+                        _live_fav_unfilled = max(0, _live_fav_count - _live_fav_fills)
                     # True hedge gap = dog fills − (all historical fav fills + whatever the live order still has room to fill)
                     _hedge_gap = _recon_total - fav_filled - _live_fav_unfilled
-                    print(f'🔍 PHANTOM RECONCILE: {bot_id} dog={_recon_total} fav_filled={fav_filled} live_unfilled={_live_fav_unfilled} → gap={_hedge_gap} (was_partial_q={_partial_q})')
+                    print(f'🔍 PHANTOM RECONCILE: {bot_id} dog={_recon_total} fav_filled={fav_filled} live_unfilled={_live_fav_unfilled} (status={_live_fav_status!r}) → gap={_hedge_gap} (was_partial_q={_partial_q})')
                     bot_log('PHANTOM_DOG_RECONCILE', bot_id, {
                         'actual_dog_fills': _recon_total, 'hedge_qty': _partial_q,
                         'extra': _extra, 'fav_filled': fav_filled,
+                        'live_fav_count': _live_fav_count, 'live_fav_fills': _live_fav_fills,
+                        'live_fav_status': _live_fav_status,
                         'live_fav_unfilled': _live_fav_unfilled, 'hedge_gap': _hedge_gap,
                     })
                     # Mark dog fill counts so downstream accounting is correct
